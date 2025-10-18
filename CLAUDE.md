@@ -67,6 +67,47 @@ c3c test --test-filter "test_name"
 - `--test-nocapture` - Show test stdout in real-time
 - `--test-breakpoint` - Trigger debugger on test failure
 
+## Memory Debugging with Valgrind
+
+Valgrind is a powerful memory debugging tool that detects memory leaks, use-after-free, and other memory errors.
+
+**Install Valgrind (Arch Linux):**
+```bash
+sudo pacman -S valgrind
+```
+
+**Run tests with memory checking:**
+```bash
+# Basic leak check
+valgrind ./testrun
+
+# Full leak check with details
+valgrind --leak-check=full ./testrun
+
+# Detailed report with origins
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./testrun
+```
+
+**Expected output for clean code:**
+```
+==12345== HEAP SUMMARY:
+==12345==     in use at exit: 0 bytes in 0 blocks
+==12345==   total heap usage: 347 allocs, 347 frees, 308,678 bytes allocated
+==12345==
+==12345== All heap blocks were freed -- no leaks are possible
+==12345==
+==12345== ERROR SUMMARY: 0 errors from 0 contexts
+```
+
+**What Valgrind catches:**
+- Memory leaks (allocated but not freed)
+- Use-after-free (accessing freed memory)
+- Invalid reads/writes (buffer overflows)
+- Uninitialized memory usage
+- Double frees
+
+**Note:** Programs run 10-50x slower under Valgrind, so only use during development/testing.
+
 ## C3 Version: 0.7.6
 
 **This project uses C3 0.7.6.** Claude's training data only covered C3 0.6.x, so there are significant breaking changes to be aware of:
