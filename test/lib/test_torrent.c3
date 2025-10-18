@@ -395,6 +395,42 @@ fn void test_parse_real_torrent_sintel() @test
     io::printn("");
 }
 
+fn void test_parse_leaves() @test
+{
+    String data = load_torrent_file("test/fixtures/leaves.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    // Verify basic fields
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.info.length > 0, "Expected file length");
+    assert(torrent.info.piece_length > 0, "Expected piece length");
+    assert(torrent.info.pieces.len > 0, "Expected pieces");
+    assert(torrent.info.pieces.len % 20 == 0, "Expected pieces to be multiple of 20");
+
+    io::printfn("=== leaves.torrent (WebTorrent) ===");
+    if (torrent.announce.len > 0)
+    {
+        io::printfn("  announce: %s", torrent.announce);
+    }
+    else
+    {
+        io::printn("  announce: (not specified)");
+    }
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  is_multi_file: %s", torrent.info.is_multi_file ? "true" : "false");
+    io::printfn("  length: %d bytes", torrent.info.length);
+    io::printfn("  piece length: %d bytes", torrent.info.piece_length);
+    io::printfn("  pieces: %d hashes", torrent.info.pieces.len / 20);
+
+    if (torrent.info.is_multi_file && torrent.info.files.len > 0)
+    {
+        io::printfn("  files: %d", torrent.info.files.len);
+    }
+}
+
 fn void test_parse_libtorrent_base() @test
 {
     String data = load_torrent_file("test/fixtures/base.torrent");
@@ -523,6 +559,123 @@ fn void test_parse_url_seed() @test
     for (usz i = 0; i < torrent.url_list.len; i++)
     {
         io::printfn("    [%d]: %s", i, torrent.url_list[i]);
+    }
+}
+
+fn void test_inspect_announce_list() @test
+{
+    // Check if any of our torrents have announce-list
+    String data = load_torrent_file("test/fixtures/zero2.torrent");
+    defer free(data);
+
+    BencodeValue* root = bencode::decode(data)!!;
+    defer bencode::free_bencode_value(root);
+
+    io::printfn("=== Checking for announce-list in zero2.torrent ===");
+
+    // Check for announce-list
+    BencodeValue* announce_list = bencode::dict_get(root, "announce-list");
+    if (announce_list)
+    {
+        io::printfn("announce-list found! Type: %d", announce_list.type.ordinal);
+        if (announce_list.type == bencode::BencodeType.LIST)
+        {
+            io::printfn("Tiers: %d", announce_list.list.len);
+            for (usz i = 0; i < announce_list.list.len; i++)
+            {
+                BencodeValue* tier = announce_list.list[i];
+                if (tier.type == bencode::BencodeType.LIST)
+                {
+                    io::printfn("  Tier %d (%d trackers):", i, tier.list.len);
+                    for (usz j = 0; j < tier.list.len; j++)
+                    {
+                        if (tier.list[j].type == bencode::BencodeType.STRING)
+                        {
+                            io::printfn("    - %s", (String)tier.list[j].string);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        io::printn("No announce-list found");
+
+        // Check for single announce
+        BencodeValue* announce = bencode::dict_get(root, "announce");
+        if (announce && announce.type == bencode::BencodeType.STRING)
+        {
+            io::printfn("Single announce: %s", (String)announce.string);
+        }
+    }
+
+    // Inspect info dict
+    io::printn("\n=== Info dictionary structure ===");
+    BencodeValue* info = bencode::dict_get(root, "info");
+    if (info && info.type == bencode::BencodeType.DICT)
+    {
+        io::printfn("Info dict keys (%d):", info.dict.len);
+        for (usz i = 0; i < info.dict.len; i++)
+        {
+            String key = (String)info.dict.keys[i];
+            BencodeValue* val = info.dict.values[i];
+            io::printfn("  - %s (type: %d)", key, val.type.ordinal);
+
+            if (key == "files" && val.type == bencode::BencodeType.LIST)
+            {
+                io::printfn("    Files list: %d files", val.list.len);
+                for (usz j = 0; j < val.list.len; j++)
+                {
+                    BencodeValue* file = val.list[j];
+                    if (file.type == bencode::BencodeType.DICT)
+                    {
+                        io::printfn("    File %d keys:", j);
+                        for (usz k = 0; k < file.dict.len; k++)
+                        {
+                            io::printfn("      - %s", (String)file.dict.keys[k]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn void test_multitracker_numbers_torrent() @test
+{
+    String data = load_torrent_file("test/fixtures/zero2.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    // Verify announce-list is parsed
+    assert(torrent.announce_list.len > 0, "Expected announce-list to be present");
+    assert(torrent.announce_list.len == 2, "Expected 2 tiers in announce-list");
+
+    io::printfn("=== zero2.torrent (multi-tracker) ===");
+    io::printfn("  announce: %s", torrent.announce);
+    io::printfn("  announce-list tiers: %d", torrent.announce_list.len);
+
+    // Verify tier 0
+    assert(torrent.announce_list[0].len == 1, "Expected 1 tracker in tier 0");
+    assert(torrent.announce_list[0][0] == "udp://tracker.opentracker.com:80/announce",
+           "Expected correct tier 0 tracker");
+    io::printfn("  Tier 0 (%d trackers):", torrent.announce_list[0].len);
+    for (usz j = 0; j < torrent.announce_list[0].len; j++)
+    {
+        io::printfn("    - %s", torrent.announce_list[0][j]);
+    }
+
+    // Verify tier 1
+    assert(torrent.announce_list[1].len == 1, "Expected 1 tracker in tier 1");
+    assert(torrent.announce_list[1][0] == "tracker.publicbt.com:80/announce",
+           "Expected correct tier 1 tracker");
+    io::printfn("  Tier 1 (%d trackers):", torrent.announce_list[1].len);
+    for (usz j = 0; j < torrent.announce_list[1].len; j++)
+    {
+        io::printfn("    - %s", torrent.announce_list[1][j]);
     }
 }
 

@@ -54,6 +54,7 @@ struct TorrentInfo
 struct TorrentFile
 {
     String announce;        // Tracker URL
+    String[][] announce_list; // Optional: Multi-tracker tiers (BEP 12)
     String created_by;      // Optional: creator info
     long creation_date;     // Optional: Unix timestamp
     String encoding;        // Optional: character encoding
@@ -97,6 +98,41 @@ fn TorrentFile*? parse(String data) @public => @pool()
     if (announce_val && announce_val.type == bencode::BencodeType.STRING)
     {
         torrent.announce = copy_string(announce_val.string);
+    }
+
+    // Extract 'announce-list' (optional - BEP 12 multi-tracker)
+    BencodeValue* announce_list_val = bencode::dict_get(root, "announce-list");
+    if (announce_list_val && announce_list_val.type == bencode::BencodeType.LIST)
+    {
+        usz num_tiers = announce_list_val.list.len;
+        if (num_tiers > 0)
+        {
+            // Allocate array of tiers
+            torrent.announce_list = mem::new_array(String[], num_tiers);
+
+            for (usz i = 0; i < num_tiers; i++)
+            {
+                BencodeValue* tier = announce_list_val.list[i];
+                if (tier.type == bencode::BencodeType.LIST)
+                {
+                    usz num_trackers = tier.list.len;
+                    if (num_trackers > 0)
+                    {
+                        // Allocate array of tracker URLs for this tier
+                        torrent.announce_list[i] = mem::new_array(String, num_trackers);
+
+                        for (usz j = 0; j < num_trackers; j++)
+                        {
+                            BencodeValue* tracker = tier.list[j];
+                            if (tracker.type == bencode::BencodeType.STRING)
+                            {
+                                torrent.announce_list[i][j] = copy_string(tracker.string);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Extract 'created by' (optional)
@@ -219,7 +255,7 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
         info.length = length_val.integer;
         info.is_multi_file = false;
 
-        // Validate length is positive
+        // Validate length is positive (single-file torrents must have content)
         if (info.length <= 0)
         {
             return TORRENT_INVALID_INFO?;
@@ -315,8 +351,8 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
 
         file.length = length.integer;
 
-        // Validate length is positive
-        if (file.length <= 0)
+        // Validate length is non-negative (zero-length files are allowed)
+        if (file.length < 0)
         {
             return TORRENT_INVALID_INFO?;
         }
@@ -390,6 +426,28 @@ fn void free_torrent_file(TorrentFile* torrent) @public
     if (!torrent) return;
 
     if (torrent.announce.len > 0) free(torrent.announce);
+
+    // Free announce-list (multi-tracker)
+    if (torrent.announce_list.len > 0)
+    {
+        for (usz i = 0; i < torrent.announce_list.len; i++)
+        {
+            if (torrent.announce_list[i].len > 0)
+            {
+                // Free each tracker URL in this tier
+                for (usz j = 0; j < torrent.announce_list[i].len; j++)
+                {
+                    if (torrent.announce_list[i][j].len > 0)
+                    {
+                        free(torrent.announce_list[i][j]);
+                    }
+                }
+                free(torrent.announce_list[i]);
+            }
+        }
+        free(torrent.announce_list);
+    }
+
     if (torrent.created_by.len > 0) free(torrent.created_by);
     if (torrent.encoding.len > 0) free(torrent.encoding);
 
