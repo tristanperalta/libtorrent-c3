@@ -2,6 +2,7 @@ module libtorrent::torrent;
 
 import std::io;
 import std::hash::sha1;
+import std::net::url;
 import libtorrent::bencode;
 
 /**
@@ -110,7 +111,8 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* announce_val = bencode::dict_get(root, "announce");
     if (announce_val && announce_val.type == bencode::BencodeType.STRING)
     {
-        torrent.announce = copy_string(announce_val.string);
+        // Trim whitespace from announce URL
+        torrent.announce = trim_whitespace((String)announce_val.string);
     }
 
     // Extract 'announce-list' (optional - BEP 12 multi-tracker)
@@ -139,7 +141,8 @@ fn TorrentFile*? parse(String data) @public => @pool()
                             BencodeValue* tracker = tier.list[j];
                             if (tracker.type == bencode::BencodeType.STRING)
                             {
-                                torrent.announce_list[i][j] = copy_string(tracker.string);
+                                // Trim whitespace from tracker URLs
+                                torrent.announce_list[i][j] = trim_whitespace((String)tracker.string);
                             }
                         }
                     }
@@ -267,11 +270,21 @@ fn TorrentFile*? parse(String data) @public => @pool()
                     if (url.type == bencode::BencodeType.STRING)
                     {
                         String url_str = (String)url.string;
-                        // Only add if not already in list
-                        if (!is_url_in_list(temp_urls, unique_count, url_str))
+                        // Skip empty strings
+                        if (url_str.len == 0) continue;
+
+                        // Percent-encode spaces for BEP 19 compliance
+                        String encoded_url = percent_encode_url(url_str);
+                        // Only add if not already in list and not empty
+                        if (encoded_url.len > 0 && !is_url_in_list(temp_urls, unique_count, encoded_url))
                         {
-                            temp_urls[unique_count] = copy_string(url_str);
+                            temp_urls[unique_count] = encoded_url;
                             unique_count++;
+                        }
+                        else
+                        {
+                            // Free the encoded URL if it's a duplicate or empty
+                            free(encoded_url);
                         }
                     }
                 }
@@ -290,9 +303,21 @@ fn TorrentFile*? parse(String data) @public => @pool()
         }
         else if (url_list_val.type == bencode::BencodeType.STRING)
         {
-            // Single URL seed
-            torrent.url_list = mem::new_array(String, 1);
-            torrent.url_list[0] = copy_string(url_list_val.string);
+            // Single URL seed - percent-encode spaces
+            String url_str = (String)url_list_val.string;
+            if (url_str.len > 0)
+            {
+                String encoded_url = percent_encode_url(url_str);
+                if (encoded_url.len > 0)
+                {
+                    torrent.url_list = mem::new_array(String, 1);
+                    torrent.url_list[0] = encoded_url;
+                }
+                else
+                {
+                    free(encoded_url);
+                }
+            }
         }
     }
 
@@ -314,12 +339,23 @@ fn TorrentFile*? parse(String data) @public => @pool()
                 if (seed.type == bencode::BencodeType.STRING)
                 {
                     String seed_str = (String)seed.string;
+                    // Skip empty strings
+                    if (seed_str.len == 0) continue;
+
+                    // Percent-encode spaces for BEP 17 compliance
+                    String encoded_seed = percent_encode_url(seed_str);
                     // Check against both httpseeds and url_list for duplicates
-                    if (!is_url_in_list(temp_seeds, unique_count, seed_str) &&
-                        !is_url_in_list(torrent.url_list, torrent.url_list.len, seed_str))
+                    if (encoded_seed.len > 0 &&
+                        !is_url_in_list(temp_seeds, unique_count, encoded_seed) &&
+                        !is_url_in_list(torrent.url_list, torrent.url_list.len, encoded_seed))
                     {
-                        temp_seeds[unique_count] = copy_string(seed_str);
+                        temp_seeds[unique_count] = encoded_seed;
                         unique_count++;
+                    }
+                    else
+                    {
+                        // Free the encoded URL if it's a duplicate or empty
+                        free(encoded_seed);
                     }
                 }
             }
@@ -356,6 +392,17 @@ fn TorrentFile*? parse(String data) @public => @pool()
     String info_encoded = bencode::encode(info_val);
     defer free(info_encoded);
     torrent.info_hash = sha1::hash(info_encoded);
+
+    // Validate torrent name (BEP 3 compliance)
+    // If name is empty or only contains dots, use info-hash as name
+    if (torrent.info.name.len == 0 ||
+        torrent.info.name == "." ||
+        torrent.info.name == "..")
+    {
+        // Free invalid name and replace with info-hash hex
+        if (torrent.info.name.len > 0) free(torrent.info.name);
+        torrent.info.name = hash_to_hex(torrent.info_hash[..]);
+    }
 
     return torrent;
 }
@@ -534,6 +581,89 @@ fn bool is_url_in_list(String[] list, usz count, String url)
         if (list[i] == url) return true;
     }
     return false;
+}
+
+/**
+ * Helper: Percent-encode URLs for BEP 17/19 compliance.
+ * Uses standard library URL encoding for proper RFC 3986 compliance.
+ */
+fn String percent_encode_url(String url_str)
+{
+    // Use PATH encoding mode which allows most URL characters
+    // but encodes spaces and other special characters
+    return url::encode(mem, url_str, url::UrlEncodingMode.PATH);
+}
+
+/**
+ * Helper: Trim leading and trailing whitespace from URLs.
+ * This handles tabs, spaces, newlines, and carriage returns.
+ */
+fn String trim_whitespace(String url)
+{
+    if (url.len == 0) return copy_string((char[])url);
+
+    // Find first non-whitespace character
+    usz start = 0;
+    while (start < url.len)
+    {
+        char c = url[start];
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
+        {
+            break;
+        }
+        start++;
+    }
+
+    // If all whitespace, return empty string
+    if (start >= url.len)
+    {
+        return (String)mem::new_array(char, 0);
+    }
+
+    // Find last non-whitespace character
+    usz end = url.len - 1;
+    while (end > start)
+    {
+        char c = url[end];
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
+        {
+            break;
+        }
+        end--;
+    }
+
+    // Calculate trimmed length
+    usz trimmed_len = end - start + 1;
+    char[] trimmed = mem::new_array(char, trimmed_len);
+
+    // Copy trimmed portion
+    for (usz i = 0; i < trimmed_len; i++)
+    {
+        trimmed[i] = url[start + i];
+    }
+
+    return (String)trimmed;
+}
+
+/**
+ * Helper: Convert SHA1 hash (20 bytes) to hex string (40 chars).
+ * Used for generating torrent name from info-hash when name is invalid.
+ */
+fn String hash_to_hex(char[] hash)
+{
+    assert(hash.len == 20, "Hash must be 20 bytes");
+
+    char[] hex = mem::new_array(char, 40);
+    char[] hex_chars = "0123456789abcdef";
+
+    for (usz i = 0; i < 20; i++)
+    {
+        char byte = hash[i];
+        hex[i * 2] = hex_chars[(byte >> 4) & 0x0F];
+        hex[i * 2 + 1] = hex_chars[byte & 0x0F];
+    }
+
+    return (String)hex;
 }
 
 /**
