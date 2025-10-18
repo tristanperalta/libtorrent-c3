@@ -595,10 +595,15 @@ fn void test_parse_duplicate_web_seeds() @test
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
-    // Note: Currently we don't deduplicate, so we'll just verify parsing works
-    io::printfn("=== duplicate_web_seeds.torrent ===");
+    // Verify deduplication: 8 URLs in file → 3 unique URLs
+    assert(torrent.url_list.len == 3, "Expected 3 unique URLs after deduplication");
+    assert(torrent.url_list[0] == "http://foobar.com/foo", "Expected first unique URL");
+    assert(torrent.url_list[1] == "http://foobar.com/foobar", "Expected second unique URL");
+    assert(torrent.url_list[2] == "http://foobar.com/bar", "Expected third unique URL");
+
+    io::printfn("=== duplicate_web_seeds.torrent (deduplication test) ===");
     io::printfn("  name: %s", torrent.info.name);
-    io::printfn("  url-list count: %d", torrent.url_list.len);
+    io::printfn("  url-list count: %d (8 total, 5 duplicates filtered)", torrent.url_list.len);
     for (usz i = 0; i < torrent.url_list.len; i++)
     {
         io::printfn("    [%d]: %s", i, torrent.url_list[i]);
@@ -608,7 +613,6 @@ fn void test_parse_duplicate_web_seeds() @test
     {
         io::printfn("    [%d]: %s", i, torrent.httpseeds[i]);
     }
-    // TODO: Implement deduplication - should have 3 total unique seeds
 }
 
 fn void test_parse_pad_file() @test

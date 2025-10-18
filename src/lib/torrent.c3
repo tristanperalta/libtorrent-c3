@@ -247,24 +247,45 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
     // Extract 'url-list' (optional - BEP 19)
     // Can be either a single string or a list of strings
+    // Deduplicates URLs to avoid redundant requests
     BencodeValue* url_list_val = bencode::dict_get(root, "url-list");
     if (url_list_val)
     {
         if (url_list_val.type == bencode::BencodeType.LIST)
         {
-            // List of URL seeds
+            // List of URL seeds - deduplicate
             usz count = url_list_val.list.len;
             if (count > 0)
             {
-                torrent.url_list = mem::new_array(String, count);
+                // Allocate maximum possible size
+                String[] temp_urls = mem::new_array(String, count);
+                usz unique_count = 0;
+
                 for (usz i = 0; i < count; i++)
                 {
                     BencodeValue* url = url_list_val.list[i];
                     if (url.type == bencode::BencodeType.STRING)
                     {
-                        torrent.url_list[i] = copy_string(url.string);
+                        String url_str = (String)url.string;
+                        // Only add if not already in list
+                        if (!is_url_in_list(temp_urls, unique_count, url_str))
+                        {
+                            temp_urls[unique_count] = copy_string(url_str);
+                            unique_count++;
+                        }
                     }
                 }
+
+                // Allocate final array with actual size
+                if (unique_count > 0)
+                {
+                    torrent.url_list = mem::new_array(String, unique_count);
+                    for (usz i = 0; i < unique_count; i++)
+                    {
+                        torrent.url_list[i] = temp_urls[i];
+                    }
+                }
+                free(temp_urls);
             }
         }
         else if (url_list_val.type == bencode::BencodeType.STRING)
@@ -276,21 +297,43 @@ fn TorrentFile*? parse(String data) @public => @pool()
     }
 
     // Extract 'httpseeds' (optional - BEP 17)
+    // Deduplicates URLs and checks against url_list to avoid cross-list duplicates
     BencodeValue* httpseeds_val = bencode::dict_get(root, "httpseeds");
     if (httpseeds_val && httpseeds_val.type == bencode::BencodeType.LIST)
     {
         usz count = httpseeds_val.list.len;
         if (count > 0)
         {
-            torrent.httpseeds = mem::new_array(String, count);
+            // Allocate maximum possible size
+            String[] temp_seeds = mem::new_array(String, count);
+            usz unique_count = 0;
+
             for (usz i = 0; i < count; i++)
             {
                 BencodeValue* seed = httpseeds_val.list[i];
                 if (seed.type == bencode::BencodeType.STRING)
                 {
-                    torrent.httpseeds[i] = copy_string(seed.string);
+                    String seed_str = (String)seed.string;
+                    // Check against both httpseeds and url_list for duplicates
+                    if (!is_url_in_list(temp_seeds, unique_count, seed_str) &&
+                        !is_url_in_list(torrent.url_list, torrent.url_list.len, seed_str))
+                    {
+                        temp_seeds[unique_count] = copy_string(seed_str);
+                        unique_count++;
+                    }
                 }
             }
+
+            // Allocate final array with actual size
+            if (unique_count > 0)
+            {
+                torrent.httpseeds = mem::new_array(String, unique_count);
+                for (usz i = 0; i < unique_count; i++)
+                {
+                    torrent.httpseeds[i] = temp_seeds[i];
+                }
+            }
+            free(temp_seeds);
         }
     }
 
@@ -479,6 +522,18 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
     }
 
     return {};  // Success
+}
+
+/**
+ * Helper: Check if a URL already exists in a list (for deduplication).
+ */
+fn bool is_url_in_list(String[] list, usz count, String url)
+{
+    for (usz i = 0; i < count; i++)
+    {
+        if (list[i] == url) return true;
+    }
+    return false;
 }
 
 /**
