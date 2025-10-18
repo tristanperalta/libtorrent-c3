@@ -562,6 +562,164 @@ fn void test_parse_url_seed() @test
     }
 }
 
+fn void test_parse_url_seed_multi() @test
+{
+    String data = load_torrent_file("test/fixtures/url_seed_multi.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+
+    // Verify multiple URL seeds
+    assert(torrent.url_list.len > 0, "Expected at least one URL seed");
+
+    io::printfn("=== url_seed_multi.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  length: %d bytes", torrent.info.length);
+    io::printfn("  url-list count: %d", torrent.url_list.len);
+    for (usz i = 0; i < torrent.url_list.len; i++)
+    {
+        io::printfn("    [%d]: %s", i, torrent.url_list[i]);
+    }
+}
+
+fn void test_parse_duplicate_web_seeds() @test
+{
+    String data = load_torrent_file("test/fixtures/duplicate_web_seeds.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+
+    // Note: Currently we don't deduplicate, so we'll just verify parsing works
+    io::printfn("=== duplicate_web_seeds.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  url-list count: %d", torrent.url_list.len);
+    for (usz i = 0; i < torrent.url_list.len; i++)
+    {
+        io::printfn("    [%d]: %s", i, torrent.url_list[i]);
+    }
+    io::printfn("  httpseeds count: %d", torrent.httpseeds.len);
+    for (usz i = 0; i < torrent.httpseeds.len; i++)
+    {
+        io::printfn("    [%d]: %s", i, torrent.httpseeds[i]);
+    }
+    // TODO: Implement deduplication - should have 3 total unique seeds
+}
+
+fn void test_parse_pad_file() @test
+{
+    String data = load_torrent_file("test/fixtures/pad_file.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.info.is_multi_file, "Expected multi-file torrent");
+
+    io::printfn("=== pad_file.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  total length: %d bytes", torrent.info.length);
+    io::printfn("  files: %d", torrent.info.files.len);
+    for (usz i = 0; i < torrent.info.files.len; i++)
+    {
+        FileEntry* file = &torrent.info.files[i];
+        io::printf("    File %d: ", i);
+        for (usz j = 0; j < file.path.len; j++)
+        {
+            if (j > 0) io::printf("/");
+            io::printf("%s", file.path[j]);
+        }
+        io::printfn(" (%d bytes, offset %d)", file.length, file.offset);
+    }
+}
+
+fn void test_parse_collection() @test
+{
+    String data = load_torrent_file("test/fixtures/collection.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.collections.len > 0, "Expected collections");
+    assert(torrent.collections.len == 2, "Expected 2 collections");
+    assert(torrent.collections[0] == "bar", "Expected first collection 'bar'");
+    assert(torrent.collections[1] == "foo", "Expected second collection 'foo'");
+
+    io::printfn("=== collection.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  length: %d bytes", torrent.info.length);
+    io::printfn("  collections: %d", torrent.collections.len);
+    for (usz i = 0; i < torrent.collections.len; i++)
+    {
+        io::printfn("    [%d]: %s", i, torrent.collections[i]);
+    }
+}
+
+fn void test_parse_similar() @test
+{
+    String data = load_torrent_file("test/fixtures/similar.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.similar_count > 0, "Expected similar torrents");
+    assert(torrent.similar_count == 1, "Expected 1 similar torrent");
+
+    io::printfn("=== similar.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  length: %d bytes", torrent.info.length);
+    io::printfn("  similar torrents: %d", torrent.similar_count);
+    for (usz i = 0; i < torrent.similar_count; i++)
+    {
+        io::printf("    [%d]: ", i);
+        usz offset = i * 20;
+        for (usz j = 0; j < 20; j++)
+        {
+            io::printf("%02x", (char)torrent.similar[offset + j]);
+        }
+        io::printn("");
+    }
+}
+
+fn void test_parse_dht_nodes() @test
+{
+    String data = load_torrent_file("test/fixtures/dht_nodes.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.nodes.len > 0, "Expected DHT nodes");
+    assert(torrent.nodes.len == 2, "Expected 2 DHT nodes");
+
+    // Verify first node: 127.0.0.1:6881
+    assert(torrent.nodes[0].host == "127.0.0.1", "Expected first node host");
+    assert(torrent.nodes[0].port == 6881, "Expected first node port");
+
+    // Verify second node: 192.168.1.1:6881
+    assert(torrent.nodes[1].host == "192.168.1.1", "Expected second node host");
+    assert(torrent.nodes[1].port == 6881, "Expected second node port");
+
+    io::printfn("=== dht_nodes.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  DHT nodes: %d", torrent.nodes.len);
+    for (usz i = 0; i < torrent.nodes.len; i++)
+    {
+        io::printfn("    [%d]: %s:%d", i, torrent.nodes[i].host, torrent.nodes[i].port);
+    }
+}
+
 fn void test_inspect_announce_list() @test
 {
     // Check if any of our torrents have announce-list

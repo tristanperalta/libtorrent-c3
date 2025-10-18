@@ -14,6 +14,15 @@ import libtorrent::bencode;
  */
 
 /**
+ * DhtNode represents a DHT bootstrap node (BEP 5).
+ */
+struct DhtNode
+{
+    String host;    // Hostname or IP address
+    ushort port;    // Port number
+}
+
+/**
  * FileEntry represents a single file in a multi-file torrent.
  */
 struct FileEntry
@@ -55,6 +64,10 @@ struct TorrentFile
 {
     String announce;        // Tracker URL
     String[][] announce_list; // Optional: Multi-tracker tiers (BEP 12)
+    DhtNode[] nodes;        // Optional: DHT bootstrap nodes (BEP 5)
+    String[] collections;   // Optional: Collection names (BEP 38)
+    char[] similar;         // Optional: Similar torrent info-hashes (20 bytes each, BEP 38)
+    usz similar_count;      // Number of similar torrents
     String created_by;      // Optional: creator info
     long creation_date;     // Optional: Unix timestamp
     String encoding;        // Optional: character encoding
@@ -129,6 +142,82 @@ fn TorrentFile*? parse(String data) @public => @pool()
                                 torrent.announce_list[i][j] = copy_string(tracker.string);
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract 'nodes' (optional - BEP 5 DHT bootstrap nodes)
+    BencodeValue* nodes_val = bencode::dict_get(root, "nodes");
+    if (nodes_val && nodes_val.type == bencode::BencodeType.LIST)
+    {
+        usz num_nodes = nodes_val.list.len;
+        if (num_nodes > 0)
+        {
+            torrent.nodes = mem::new_array(DhtNode, num_nodes);
+
+            for (usz i = 0; i < num_nodes; i++)
+            {
+                BencodeValue* node = nodes_val.list[i];
+                if (node.type == bencode::BencodeType.LIST && node.list.len == 2)
+                {
+                    // Each node is [host_string, port_integer]
+                    BencodeValue* host = node.list[0];
+                    BencodeValue* port = node.list[1];
+
+                    if (host.type == bencode::BencodeType.STRING &&
+                        port.type == bencode::BencodeType.INTEGER)
+                    {
+                        torrent.nodes[i].host = copy_string(host.string);
+                        torrent.nodes[i].port = (ushort)port.integer;
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract 'collections' (optional - BEP 38)
+    // Can be in root dictionary or info dictionary (merge both)
+    BencodeValue* collections_val = bencode::dict_get(root, "collections");
+    if (collections_val && collections_val.type == bencode::BencodeType.LIST)
+    {
+        usz count = collections_val.list.len;
+        if (count > 0)
+        {
+            torrent.collections = mem::new_array(String, count);
+            for (usz i = 0; i < count; i++)
+            {
+                BencodeValue* collection = collections_val.list[i];
+                if (collection.type == bencode::BencodeType.STRING)
+                {
+                    torrent.collections[i] = copy_string(collection.string);
+                }
+            }
+        }
+    }
+
+    // Extract 'similar' (optional - BEP 38)
+    // List of info-hashes (20-byte binary strings)
+    BencodeValue* similar_val = bencode::dict_get(root, "similar");
+    if (similar_val && similar_val.type == bencode::BencodeType.LIST)
+    {
+        usz count = similar_val.list.len;
+        if (count > 0)
+        {
+            torrent.similar_count = count;
+            torrent.similar = mem::new_array(char, count * 20);
+            for (usz i = 0; i < count; i++)
+            {
+                BencodeValue* info_hash = similar_val.list[i];
+                if (info_hash.type == bencode::BencodeType.STRING &&
+                    info_hash.string.len == 20)
+                {
+                    // Copy 20-byte info-hash to flat array
+                    usz offset = i * 20;
+                    for (usz j = 0; j < 20; j++)
+                    {
+                        torrent.similar[offset + j] = info_hash.string[j];
                     }
                 }
             }
@@ -446,6 +535,38 @@ fn void free_torrent_file(TorrentFile* torrent) @public
             }
         }
         free(torrent.announce_list);
+    }
+
+    // Free DHT nodes
+    if (torrent.nodes.len > 0)
+    {
+        for (usz i = 0; i < torrent.nodes.len; i++)
+        {
+            if (torrent.nodes[i].host.len > 0)
+            {
+                free(torrent.nodes[i].host);
+            }
+        }
+        free(torrent.nodes);
+    }
+
+    // Free collections (BEP 38)
+    if (torrent.collections.len > 0)
+    {
+        for (usz i = 0; i < torrent.collections.len; i++)
+        {
+            if (torrent.collections[i].len > 0)
+            {
+                free(torrent.collections[i]);
+            }
+        }
+        free(torrent.collections);
+    }
+
+    // Free similar info-hashes (BEP 38)
+    if (torrent.similar.len > 0)
+    {
+        free(torrent.similar);
     }
 
     if (torrent.created_by.len > 0) free(torrent.created_by);
