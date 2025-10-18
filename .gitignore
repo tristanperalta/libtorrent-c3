@@ -1,0 +1,29 @@
+# C3 build outputs
+build/
+*.so
+*.a
+*.o
+*.ll
+*.s
+*.dylib
+*.dll
+
+# C3 executables
+torrent-client
+testrun
+benchrun
+
+# C3 generated headers
+headers/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debug files
+*.dSYM/
+*.pdb

@@ -1,0 +1,53 @@
+{
+  "langrev": "1",
+  "warnings": [
+    "no-unused"
+  ],
+  "dependency-search-paths": [
+    "lib"
+  ],
+  "dependencies": [],
+  "authors": [
+    "Tristan Peralta <tristan@peralta.ph>",
+    "Claude Code <noreply@anthropic.com>"
+  ],
+  "version": "0.1.0",
+  "sources": [
+    "src/**"
+  ],
+  "test-sources": [
+    "test/**"
+  ],
+  "output": ".",
+  "targets": {
+    "libtorrent": {
+      "type": "dynamic-lib",
+      "sources": ["src/lib/**"],
+      "reloc": "pic"
+    },
+    "torrent-client": {
+      "type": "executable",
+      "sources": ["src/main.c3"]
+    }
+  },
+  "cc": "cc",
+  "cpu": "generic",
+  "debug-info": "full",
+  "fp-math": "strict",
+  "link-libc": true,
+  "memory-env": "normal",
+  "opt": "O0",
+  "optlevel": "none",
+  "optsize": "none",
+  "reloc": "none",
+  "trap-on-wrap": false,
+  "safe": true,
+  "single-module": true,
+  "soft-float": false,
+  "strip-unused": true,
+  "symtab": 1048576,
+  "linker": "cc",
+  "use-stdlib": true,
+  "x86cpu": "native",
+  "x86vec": "sse"
+}
