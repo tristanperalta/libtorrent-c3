@@ -67,6 +67,90 @@ c3c test --test-filter "test_name"
 - `--test-nocapture` - Show test stdout in real-time
 - `--test-breakpoint` - Trigger debugger on test failure
 
+## C3 Version: 0.7.6
+
+**This project uses C3 0.7.6.** Claude's training data only covered C3 0.6.x, so there are significant breaking changes to be aware of:
+
+### Critical Breaking Changes from 0.6.x to 0.7.x
+
+**1. Fault System (0.7.0)**
+```c3
+// 0.6.x (OLD - no longer works):
+fault MyError { FOO, BAR }
+fn int! my_function() { ... }
+
+// 0.7.x (NEW - current syntax):
+fault my_error, another_error;
+fn int? my_function() { ... }
+```
+
+**2. Type Aliases and Typedefs (0.7.0)**
+```c3
+// 0.6.x: def, distinct
+// 0.7.x: alias, typedef
+alias MyInt = int;
+typedef MyDistinct = int;
+```
+
+**3. Generic Syntax (0.7.0)**
+```c3
+// 0.6.x: Foo(<int>)
+// 0.7.x: Foo{int}
+List{int} my_list;
+```
+
+**4. Allocators (0.7.4)**
+```c3
+// 0.6.x: allocator::heap(), allocator::temp()
+// 0.7.x: Use 'mem' instead (allocator functions are deprecated)
+String s = buf.copy_str(mem);  // Correct
+```
+
+**5. Enum Changes (0.7.0, 0.7.4)**
+```c3
+// Enums no longer cast to/from int automatically
+// Use .ordinal and .from_ordinal, or cast explicitly (0.7.4+)
+MyEnum val = (MyEnum)5;  // Explicit cast (0.7.4+)
+int num = (int)val;      // Explicit cast (0.7.4+)
+```
+
+**6. Main/Test Functions (0.7.0)**
+```c3
+// 0.6.x: fn void! main()
+// 0.7.x: fn void main() or fn int main()
+fn void main() { ... }
+fn void my_test() @test { ... }
+```
+
+**7. Compile-Time Operators (0.7.0, 0.7.2)**
+```c3
+// Deprecated: $or, $and, $concat
+// Use instead: |||, &&&, +++
+// Also: $foreach/$for/$switch now use ':' instead of '()'
+$foreach item : items:
+    // ...
+```
+
+**8. Stdlib Naming (0.7.0)**
+```c3
+// Many "new_*" functions renamed
+// 0.6.x: string::new_from_*, mem::temp_new
+// 0.7.x: string::from_*, mem::tnew
+// anyfault -> fault
+```
+
+**9. Expression Blocks Removed (0.7.0)**
+```c3
+// 0.6.x: {| ... |} expression blocks
+// 0.7.x: Removed, use regular blocks or other constructs
+```
+
+**10. Named Arguments (0.6.3)**
+```c3
+// 0.6.x: func(.arg = value)
+// 0.7.x: func(arg: value)  (old style deprecated)
+```
+
 ## C3-Specific Patterns
 
 ### Public Functions in Libraries
@@ -92,6 +176,148 @@ fn void test_something() @test
 }
 ```
 
+### Error Handling with Faults (C3 0.7+)
+
+**IMPORTANT:** This project uses C3 0.7.6. The fault syntax changed significantly from 0.6.x to 0.7.x.
+
+**Declaring Faults:**
+```c3
+// Fault names must be lowercase (like variables, not types)
+fault bencode_invalid_format,
+      bencode_unexpected_end,
+      bencode_invalid_integer;
+```
+
+**Optional Return Types:**
+```c3
+// Use `?` after the type for optional returns (NOT `!`)
+fn BencodeValue*? decode(String data) @public
+{
+    // Return a fault with `?` suffix
+    return bencode_invalid_format?;
+
+    // Or return success value
+    return value;
+}
+```
+
+**Using the Rethrow Operator `!`:**
+```c3
+// The `!` operator unwraps or auto-returns the fault
+int value = might_fail()!;
+```
+
+**Handling Optionals:**
+```c3
+// Check if optional is empty and get the fault
+if (catch excuse = decode(data))
+{
+    io::printfn("Error: %s", excuse);
+    return excuse?;  // Rethrow the fault
+}
+
+// Auto-unwrap after handling empty case
+value = decode(data);  // No longer optional here
+```
+
+**Key Changes from C3 0.6.x:**
+- 0.6.x used `fault MyError { FOO, BAR }` - **This no longer works in 0.7**
+- 0.7.x uses `fault foo_error, bar_error;` (lowercase names)
+- Optional type syntax: Use `Type?` not `Type!`
+- The `!` is the rethrow operator, not part of type declarations
+
+### Memory Management and Allocators (C3 0.7+)
+
+**IMPORTANT ALLOCATOR CHANGES (0.7.4):**
+- `allocator::heap()` and `allocator::temp()` are **deprecated**
+- Use `mem` as the allocator instead
+
+**Working with DString:**
+```c3
+// DString can be declared without initialization (uses temp allocator by default)
+DString buf;
+buf.append("Hello");
+buf.appendf("%d", 42);
+
+// To return a string that persists, copy to the mem allocator
+String result = buf.copy_str(mem);  // Caller must free()
+defer free(result);
+```
+
+**Memory Allocation:**
+```c3
+// Heap allocation
+BencodeValue* val = mem::new(BencodeValue);
+defer free(val);  // Auto-cleanup when scope exits
+
+char[] buffer = mem::new_array(char, 100);
+defer free(buffer);  // Defers execute in reverse order (LIFO)
+
+// Use val and buffer...
+// They are automatically freed when function exits
+```
+
+**Important DString Notes:**
+- DString without initialization uses temp allocator (auto-freed at scope exit)
+- `str_view()` returns a view (no copy, valid only within current scope)
+- `copy_str(mem)` creates a heap copy that persists (caller must free)
+- **Format specifiers**: Use `%d` for integers (not `%lld`)
+
+**The `defer` Statement:**
+```c3
+fn void example()
+{
+    File f = file::open("file.txt", "r")!;
+    defer (void)f.close();  // Auto-close on any exit
+
+    BencodeValue* val = mem::new(BencodeValue);
+    defer free(val);  // Auto-free on any exit
+
+    if (error) return;  // Defers execute here!
+
+    // ... use f and val ...
+
+}  // Defers execute here too (in reverse order: free, close)
+```
+
+- `defer` executes when leaving scope (return, break, continue, scope end)
+- Multiple defers execute in **reverse order** (LIFO)
+- Use `defer` instead of manual cleanup for better safety
+
+### String Types in C3
+
+**C3 has multiple string types for different use cases:**
+
+1. **`String`** (typedef for `char[]`) - UTF-8 text, immutable slice
+2. **`char[]`** - Raw byte array (slice), may contain non-UTF-8 data
+3. **`ZString`** (typedef for `char*`) - C-style null-terminated string
+4. **`DString`** - Dynamic string builder
+
+**When to use `char[]` vs `String`:**
+- Use `String` for UTF-8 text
+- Use `char[]` for raw bytes that may not be valid UTF-8 (e.g., binary data, hashes)
+- In this project, bencode strings use `char[]` because they can contain binary data
+
+### Tagged Unions
+
+C3 supports C-style unions with manual tagging:
+```c3
+enum ValueType { INTEGER, STRING }
+
+struct Value {
+    ValueType type;  // Tag
+    union {
+        long integer;
+        char[] string;
+    }
+}
+
+// Usage: Always check type before accessing union
+if (value.type == ValueType.INTEGER) {
+    io::printfn("%d", value.integer);
+}
+```
+
 ## Multi-Target Configuration Notes
 
 The `project.json` configuration has important target-specific settings:
@@ -101,3 +327,80 @@ The `project.json` configuration has important target-specific settings:
 - Both targets have their own `sources` arrays that override the global `"sources": ["src/**"]` for precise control over what goes into each build.
 
 The test sources (`test/**`) are globally configured and automatically associated with their respective targets based on module namespaces.
+
+## Useful New Features in C3 0.7.x
+
+### Operator Overloading (0.7.1)
+```c3
+// Arithmetic: + - * / % & | ^ << >>
+// Comparison: == !=
+// Assignment: += -= *= /= %= &= |= ^= <<= >>=
+fn MyType MyType.@operator(+)(MyType other) { ... }
+fn bool MyType.@operator(==)(MyType other) { ... }
+```
+
+### Const Enums (0.7.4)
+```c3
+// Behaves like C enums but may be any type
+enum Status : const { OK, ERROR, PENDING }
+```
+
+### defer (catch err) (0.7.0)
+```c3
+fn void example()
+{
+    File f = file::open("file.txt")!;
+    defer (catch err) {
+        io::printfn("Cleanup error: %s", err);
+    }
+    defer (void)f.close();
+    // ...
+}
+```
+
+### Compile-Time Format Validation (0.7.0)
+```c3
+fn void my_printf(String fmt, args...) @format
+{
+    // Format string is validated at compile time
+}
+```
+
+### Array Macros (0.7.5)
+```c3
+// New array manipulation macros
+int[] arr = { 1, 2, 3, 4, 5 };
+int sum = arr.@sum();      // Sum all elements
+int max = arr.@max();      // Find maximum
+bool any = arr.@any(&is_even);  // Check if any match predicate
+```
+
+### Module Aliasing (0.7.5)
+```c3
+alias io = module std::io;
+io::printfn("Hello!");
+```
+
+### Compile-Time Ternary (0.7.5)
+```c3
+// Use ??? for compile-time ternary (replaces deprecated @select)
+$Type MyType = $IS_DEBUG ??? DebugImpl : ReleaseImpl;
+```
+
+### String Methods (0.7.2, 0.7.3)
+```c3
+String s = "hello world";
+int count = s.count("l");           // Count occurrences
+String replaced = s.replace(mem, "world", "C3");
+String escaped = s.escape();         // Escape special chars
+```
+
+### Additional Useful Features
+- **@tag and tagof** (0.6.2) - User-defined type and member tags
+- **defer (catch err)** - Catch errors during defer cleanup
+- **Operator overloading** - Full arithmetic and comparison operators
+- **Named arguments** - `func(param: value)` syntax
+- **Const enums** - C-like enums with any type
+- **Virtual memory library** (0.7.4) - Low-level VM operations
+- **Cryptographic functions** - AES, Ed25519, SHA256, SHA512, HMAC, PBKDF2
+- **Better error messages** - Significantly improved throughout 0.7.x
