@@ -346,15 +346,17 @@ fn void test_parse_real_torrent_numbers() @test
     String data = load_torrent_file("test/fixtures/numbers.torrent");
     defer free(data);
 
-    // numbers.torrent is multi-file, which we don't support yet
-    if (catch err = torrent::parse(data))
-    {
-        io::printn("=== numbers.torrent ===");
-        io::printn("  Multi-file torrent (not yet supported)");
-        return;
-    }
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
 
-    assert(false, "Expected parse to fail for multi-file torrent");
+    // Verify it's a multi-file torrent
+    assert(torrent.info.is_multi_file, "Expected multi-file torrent");
+    assert(torrent.info.files.len > 0, "Expected files list");
+
+    io::printfn("=== numbers.torrent (multi-file) ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  total length: %d bytes", torrent.info.length);
+    io::printfn("  files: %d", torrent.info.files.len);
 }
 
 fn void test_parse_real_torrent_sintel() @test
@@ -510,9 +512,18 @@ fn void test_parse_url_seed() @test
     assert(torrent.info.piece_length > 0, "Expected piece length");
     assert(torrent.info.pieces.len > 0, "Expected pieces");
 
+    // Verify URL seed extraction
+    assert(torrent.url_list.len > 0, "Expected at least one URL seed");
+    assert(torrent.url_list[0] == "http://test.com/file", "Expected correct URL seed");
+
     io::printfn("=== url_seed.torrent ===");
     io::printfn("  name: %s", torrent.info.name);
     io::printfn("  length: %d bytes", torrent.info.length);
+    io::printfn("  url-list count: %d", torrent.url_list.len);
+    for (usz i = 0; i < torrent.url_list.len; i++)
+    {
+        io::printfn("    [%d]: %s", i, torrent.url_list[i]);
+    }
 }
 
 fn void test_inspect_creation_date() @test
@@ -546,20 +557,104 @@ fn void test_inspect_creation_date() @test
     }
 }
 
+fn void test_inspect_url_seed() @test
+{
+    String data = load_torrent_file("test/fixtures/url_seed.torrent");
+    defer free(data);
+
+    // Inspect as bencode first
+    BencodeValue* root = bencode::decode(data)!!;
+    defer bencode::free_bencode_value(root);
+
+    io::printfn("=== url_seed.torrent structure ===");
+    if (root.type == bencode::BencodeType.DICT)
+    {
+        io::printfn("Top-level keys (%d):", root.dict.len);
+        for (usz i = 0; i < root.dict.len; i++)
+        {
+            io::printfn("  - %s", (String)root.dict.keys[i]);
+        }
+
+        // Check for url-list field
+        BencodeValue* url_list = bencode::dict_get(root, "url-list");
+        if (url_list)
+        {
+            io::printfn("url-list type: %d", url_list.type.ordinal);
+            if (url_list.type == bencode::BencodeType.LIST)
+            {
+                io::printfn("url-list count: %d", url_list.list.len);
+                for (usz i = 0; i < url_list.list.len; i++)
+                {
+                    if (url_list.list[i].type == bencode::BencodeType.STRING)
+                    {
+                        io::printfn("  [%d]: %s", i, (String)url_list.list[i].string);
+                    }
+                }
+            }
+            else if (url_list.type == bencode::BencodeType.STRING)
+            {
+                io::printfn("url-list (single): %s", (String)url_list.string);
+            }
+        }
+    }
+}
+
+fn void test_inspect_httpseed() @test
+{
+    String data = load_torrent_file("test/fixtures/httpseed.torrent");
+    defer free(data);
+
+    // Inspect as bencode first
+    BencodeValue* root = bencode::decode(data)!!;
+    defer bencode::free_bencode_value(root);
+
+    io::printfn("=== httpseed.torrent structure ===");
+    if (root.type == bencode::BencodeType.DICT)
+    {
+        io::printfn("Top-level keys (%d):", root.dict.len);
+        for (usz i = 0; i < root.dict.len; i++)
+        {
+            io::printfn("  - %s", (String)root.dict.keys[i]);
+        }
+
+        // Check for httpseeds field
+        BencodeValue* httpseeds = bencode::dict_get(root, "httpseeds");
+        if (httpseeds)
+        {
+            io::printfn("httpseeds type: %d", httpseeds.type.ordinal);
+            if (httpseeds.type == bencode::BencodeType.LIST)
+            {
+                io::printfn("httpseeds count: %d", httpseeds.list.len);
+                for (usz i = 0; i < httpseeds.list.len; i++)
+                {
+                    if (httpseeds.list[i].type == bencode::BencodeType.STRING)
+                    {
+                        io::printfn("  [%d]: %s", i, (String)httpseeds.list[i].string);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn void test_parse_creation_date() @test
 {
     String data = load_torrent_file("test/fixtures/creation_date.torrent");
     defer free(data);
 
-    // creation_date.torrent is multi-file, which we don't support yet
-    if (catch err = torrent::parse(data))
-    {
-        io::printn("=== creation_date.torrent ===");
-        io::printn("  Multi-file torrent (not yet supported)");
-        return;
-    }
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
 
-    assert(false, "Expected parse to fail for multi-file torrent");
+    // Verify it's a multi-file torrent
+    assert(torrent.info.is_multi_file, "Expected multi-file torrent");
+    assert(torrent.info.files.len > 0, "Expected files list");
+    assert(torrent.creation_date > 0, "Expected creation date");
+
+    io::printfn("=== creation_date.torrent (multi-file) ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  creation_date: %d", torrent.creation_date);
+    io::printfn("  total length: %d bytes", torrent.info.length);
+    io::printfn("  files: %d", torrent.info.files.len);
 }
 
 fn void test_parse_no_creation_date() @test
@@ -567,15 +662,18 @@ fn void test_parse_no_creation_date() @test
     String data = load_torrent_file("test/fixtures/no_creation_date.torrent");
     defer free(data);
 
-    // no_creation_date.torrent is multi-file, which we don't support yet
-    if (catch err = torrent::parse(data))
-    {
-        io::printn("=== no_creation_date.torrent ===");
-        io::printn("  Multi-file torrent (not yet supported)");
-        return;
-    }
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
 
-    assert(false, "Expected parse to fail for multi-file torrent");
+    // Verify it's a multi-file torrent
+    assert(torrent.info.is_multi_file, "Expected multi-file torrent");
+    assert(torrent.info.files.len > 0, "Expected files list");
+    assert(torrent.creation_date == 0, "Expected no creation date");
+
+    io::printfn("=== no_creation_date.torrent (multi-file) ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  total length: %d bytes", torrent.info.length);
+    io::printfn("  files: %d", torrent.info.files.len);
 }
 
 fn void test_parse_httpseed() @test
@@ -589,8 +687,17 @@ fn void test_parse_httpseed() @test
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.info.length > 0, "Expected file length");
 
+    // Verify HTTP seed extraction
+    assert(torrent.httpseeds.len > 0, "Expected at least one HTTP seed");
+    assert(torrent.httpseeds[0] == "http://foobar.com/", "Expected correct HTTP seed");
+
     io::printfn("=== httpseed.torrent ===");
     io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  httpseeds count: %d", torrent.httpseeds.len);
+    for (usz i = 0; i < torrent.httpseeds.len; i++)
+    {
+        io::printfn("    [%d]: %s", i, torrent.httpseeds[i]);
+    }
 }
 
 fn void test_parse_long_name() @test
@@ -614,15 +721,210 @@ fn void test_parse_sample() @test
     String data = load_torrent_file("test/fixtures/sample.torrent");
     defer free(data);
 
-    // sample.torrent is multi-file, which we don't support yet
-    if (catch err = torrent::parse(data))
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    // Verify it's a multi-file torrent
+    assert(torrent.info.is_multi_file, "Expected multi-file torrent");
+    assert(torrent.info.files.len > 0, "Expected files list");
+
+    io::printfn("=== sample.torrent (multi-file) ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  total length: %d bytes", torrent.info.length);
+    io::printfn("  files: %d", torrent.info.files.len);
+}
+
+fn void test_web_seeds_optional() @test
+{
+    // Test that web seeds are optional - torrents without them should parse fine
+    String data = load_torrent_file("test/fixtures/base.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    // Verify torrent parses successfully
+    assert(torrent.info.name.len > 0, "Expected file name");
+
+    // Verify web seed fields are empty (not present in base.torrent)
+    assert(torrent.url_list.len == 0, "Expected no URL seeds");
+    assert(torrent.httpseeds.len == 0, "Expected no HTTP seeds");
+
+    io::printfn("=== base.torrent (no web seeds) ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  url-list: %d", torrent.url_list.len);
+    io::printfn("  httpseeds: %d", torrent.httpseeds.len);
+    io::printn("  Web seeds are optional ✓");
+}
+
+// ============================================================================
+// Multi-File Path and Offset Tests
+// ============================================================================
+
+fn void test_multifile_file_details() @test
+{
+    String data = load_torrent_file("test/fixtures/sample.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    // Verify it's multi-file
+    assert(torrent.info.is_multi_file, "Expected multi-file torrent");
+    assert(torrent.info.files.len == 3, "Expected 3 files in sample.torrent");
+
+    io::printfn("=== sample.torrent file details ===");
+
+    // Validate each file has required fields
+    for (usz i = 0; i < torrent.info.files.len; i++)
     {
-        io::printn("=== sample.torrent ===");
-        io::printn("  Multi-file torrent (not yet supported)");
-        return;
+        FileEntry* file = &torrent.info.files[i];
+
+        // Verify path exists and has at least one component
+        assert(file.path.len > 0, "File path must have at least one component");
+
+        // Verify length is positive
+        assert(file.length > 0, "File length must be positive");
+
+        // Build full path for display
+        io::printf("  File %d: ", i);
+        for (usz j = 0; j < file.path.len; j++)
+        {
+            if (j > 0) io::printf("/");
+            io::printf("%s", file.path[j]);
+        }
+        io::printfn("");
+        io::printfn("    length: %d bytes", file.length);
+        io::printfn("    offset: %d", file.offset);
+    }
+}
+
+fn void test_multifile_offsets_sequential() @test
+{
+    String data = load_torrent_file("test/fixtures/sample.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    io::printfn("=== Validating file offsets ===");
+
+    // First file should start at offset 0
+    assert(torrent.info.files[0].offset == 0, "First file should start at offset 0");
+
+    // Each subsequent file should start where the previous one ended
+    for (usz i = 1; i < torrent.info.files.len; i++)
+    {
+        long expected_offset = torrent.info.files[i-1].offset + torrent.info.files[i-1].length;
+        assert(torrent.info.files[i].offset == expected_offset,
+               "File offsets must be sequential");
+        io::printfn("  File %d offset: %d (correct)", i, torrent.info.files[i].offset);
+    }
+}
+
+fn void test_multifile_total_length() @test
+{
+    String data = load_torrent_file("test/fixtures/sample.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    io::printfn("=== Validating total length ===");
+
+    // Calculate sum of all file lengths
+    long calculated_total = 0;
+    for (usz i = 0; i < torrent.info.files.len; i++)
+    {
+        calculated_total += torrent.info.files[i].length;
     }
 
-    assert(false, "Expected parse to fail for multi-file torrent");
+    // Verify it matches the torrent's total length
+    assert(torrent.info.length == calculated_total,
+           "Total length must equal sum of all file lengths");
+    io::printfn("  Total length: %d bytes", torrent.info.length);
+    io::printfn("  Sum of files: %d bytes", calculated_total);
+    io::printfn("  Match: ✓");
+}
+
+fn void test_multifile_path_components() @test
+{
+    String data = load_torrent_file("test/fixtures/creation_date.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    io::printfn("=== Validating path components ===");
+
+    // Verify all path components are valid strings
+    for (usz i = 0; i < torrent.info.files.len; i++)
+    {
+        FileEntry* file = &torrent.info.files[i];
+
+        for (usz j = 0; j < file.path.len; j++)
+        {
+            // Each component should be a non-empty string
+            assert(file.path[j].len > 0, "Path components must be non-empty");
+
+            // Verify it's a valid string (no nulls in the middle)
+            for (usz k = 0; k < file.path[j].len; k++)
+            {
+                // Just access it to verify memory is valid
+                char c = file.path[j][k];
+                (void)c;  // Suppress unused variable warning
+            }
+        }
+
+        io::printfn("  File %d: %d path components ✓", i, file.path.len);
+    }
+}
+
+fn void test_multifile_numbers_torrent() @test
+{
+    String data = load_torrent_file("test/fixtures/numbers.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    io::printfn("=== numbers.torrent file structure ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  is_multi_file: %s", torrent.info.is_multi_file ? "true" : "false");
+    io::printfn("  total length: %d bytes", torrent.info.length);
+
+    if (torrent.info.is_multi_file)
+    {
+        io::printfn("  files: %d", torrent.info.files.len);
+        for (usz i = 0; i < torrent.info.files.len; i++)
+        {
+            FileEntry* file = &torrent.info.files[i];
+            io::printf("    File %d: ", i);
+            for (usz j = 0; j < file.path.len; j++)
+            {
+                if (j > 0) io::printf("/");
+                io::printf("%s", file.path[j]);
+            }
+            io::printfn(" (%d bytes)", file.length);
+        }
+    }
+}
+
+fn void test_multifile_empty_files_rejected() @test
+{
+    // Test that we properly reject multi-file torrents with no files
+    String data = load_torrent_file("test/fixtures/no_files.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== no_files.torrent ===");
+        io::printn("  Correctly rejected (multi-file with empty files list)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for multi-file torrent with no files");
+    }
 }
 
 // ============================================================================

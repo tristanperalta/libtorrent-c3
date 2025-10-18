@@ -14,6 +14,16 @@ import libtorrent::bencode;
  */
 
 /**
+ * FileEntry represents a single file in a multi-file torrent.
+ */
+struct FileEntry
+{
+    String[] path;          // Path components (e.g., ["dir", "subdir", "file.txt"])
+    long length;            // File size in bytes
+    long offset;            // Byte offset in the overall torrent data
+}
+
+/**
  * TorrentInfo represents the 'info' dictionary in a torrent file.
  * This contains the actual file metadata.
  *
@@ -23,17 +33,19 @@ import libtorrent::bencode;
  * - piece_length: number of bytes in each piece
  * - pieces: concatenated SHA1 hashes (20 bytes each)
  *
- * For multi-file torrents (not yet supported):
+ * For multi-file torrents:
  * - name: directory name
- * - files: list of file info dictionaries
+ * - files: list of FileEntry structs
+ * - length: total size (calculated from files)
  */
 struct TorrentInfo
 {
     String name;            // File or directory name
-    long length;            // File length (single-file mode)
+    long length;            // Total length (single-file or sum of multi-file)
     long piece_length;      // Bytes per piece
     char[] pieces;          // SHA1 hashes (20 bytes each)
-    bool is_multi_file;     // TODO: multi-file support
+    bool is_multi_file;     // true if multi-file torrent
+    FileEntry[] files;      // Files list (multi-file mode only)
 }
 
 /**
@@ -45,6 +57,8 @@ struct TorrentFile
     String created_by;      // Optional: creator info
     long creation_date;     // Optional: Unix timestamp
     String encoding;        // Optional: character encoding
+    String[] url_list;      // Optional: URL seeds (BEP 19)
+    String[] httpseeds;     // Optional: HTTP seeds (BEP 17)
     TorrentInfo info;       // File metadata
     char[20] info_hash;     // SHA1 hash of bencoded info dict
 }
@@ -106,6 +120,55 @@ fn TorrentFile*? parse(String data) @public => @pool()
         torrent.encoding = copy_string(encoding_val.string);
     }
 
+    // Extract 'url-list' (optional - BEP 19)
+    // Can be either a single string or a list of strings
+    BencodeValue* url_list_val = bencode::dict_get(root, "url-list");
+    if (url_list_val)
+    {
+        if (url_list_val.type == bencode::BencodeType.LIST)
+        {
+            // List of URL seeds
+            usz count = url_list_val.list.len;
+            if (count > 0)
+            {
+                torrent.url_list = mem::new_array(String, count);
+                for (usz i = 0; i < count; i++)
+                {
+                    BencodeValue* url = url_list_val.list[i];
+                    if (url.type == bencode::BencodeType.STRING)
+                    {
+                        torrent.url_list[i] = copy_string(url.string);
+                    }
+                }
+            }
+        }
+        else if (url_list_val.type == bencode::BencodeType.STRING)
+        {
+            // Single URL seed
+            torrent.url_list = mem::new_array(String, 1);
+            torrent.url_list[0] = copy_string(url_list_val.string);
+        }
+    }
+
+    // Extract 'httpseeds' (optional - BEP 17)
+    BencodeValue* httpseeds_val = bencode::dict_get(root, "httpseeds");
+    if (httpseeds_val && httpseeds_val.type == bencode::BencodeType.LIST)
+    {
+        usz count = httpseeds_val.list.len;
+        if (count > 0)
+        {
+            torrent.httpseeds = mem::new_array(String, count);
+            for (usz i = 0; i < count; i++)
+            {
+                BencodeValue* seed = httpseeds_val.list[i];
+                if (seed.type == bencode::BencodeType.STRING)
+                {
+                    torrent.httpseeds[i] = copy_string(seed.string);
+                }
+            }
+        }
+    }
+
     // Extract 'info' dictionary (required)
     BencodeValue* info_val = bencode::dict_get(root, "info");
     if (!info_val || info_val.type != bencode::BencodeType.DICT)
@@ -146,10 +209,13 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     }
     info.name = copy_string(name_val.string);
 
-    // Extract 'length' (required for single-file)
+    // Check for single-file vs multi-file mode
     BencodeValue* length_val = bencode::dict_get(info_val, "length");
+    BencodeValue* files_val = bencode::dict_get(info_val, "files");
+
     if (length_val && length_val.type == bencode::BencodeType.INTEGER)
     {
+        // Single-file mode
         info.length = length_val.integer;
         info.is_multi_file = false;
 
@@ -159,11 +225,21 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
             return TORRENT_INVALID_INFO?;
         }
     }
+    else if (files_val && files_val.type == bencode::BencodeType.LIST)
+    {
+        // Multi-file mode
+        info.is_multi_file = true;
+
+        // Parse files list
+        if (catch err = parse_files_list(info, files_val))
+        {
+            return err?;
+        }
+    }
     else
     {
-        // Multi-file mode (not yet supported)
-        info.is_multi_file = true;
-        return TORRENT_INVALID_INFO?;
+        // Neither length nor files found
+        return TORRENT_MISSING_FIELD?;
     }
 
     // Extract 'piece length' (required)
@@ -194,6 +270,88 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     }
 
     info.pieces = copy_bytes(pieces_val.string);
+
+    return {};  // Success
+}
+
+/**
+ * Parse the 'files' list from a multi-file torrent.
+ *
+ * @param info Pointer to TorrentInfo to fill
+ * @param files_val The 'files' BencodeValue list
+ * @return Fault if parsing fails
+ */
+fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
+{
+    usz num_files = files_val.list.len;
+
+    // Validate: must have at least one file
+    if (num_files == 0)
+    {
+        return TORRENT_INVALID_INFO?;
+    }
+
+    // Allocate files array
+    info.files = mem::new_array(FileEntry, num_files);
+    info.length = 0;  // Will accumulate total length
+
+    // Parse each file
+    for (usz i = 0; i < num_files; i++)
+    {
+        BencodeValue* file_dict = files_val.list[i];
+        if (file_dict.type != bencode::BencodeType.DICT)
+        {
+            return TORRENT_INVALID_INFO?;
+        }
+
+        FileEntry* file = &info.files[i];
+
+        // Extract 'length' (required)
+        BencodeValue* length = bencode::dict_get(file_dict, "length");
+        if (!length || length.type != bencode::BencodeType.INTEGER)
+        {
+            return TORRENT_MISSING_FIELD?;
+        }
+
+        file.length = length.integer;
+
+        // Validate length is positive
+        if (file.length <= 0)
+        {
+            return TORRENT_INVALID_INFO?;
+        }
+
+        // Set offset and accumulate total length
+        file.offset = info.length;
+        info.length += file.length;
+
+        // Extract 'path' (required)
+        BencodeValue* path = bencode::dict_get(file_dict, "path");
+        if (!path || path.type != bencode::BencodeType.LIST)
+        {
+            return TORRENT_MISSING_FIELD?;
+        }
+
+        // Validate path has at least one component
+        if (path.list.len == 0)
+        {
+            return TORRENT_INVALID_INFO?;
+        }
+
+        // Allocate path array
+        file.path = mem::new_array(String, path.list.len);
+
+        // Copy path components
+        for (usz j = 0; j < path.list.len; j++)
+        {
+            BencodeValue* component = path.list[j];
+            if (component.type != bencode::BencodeType.STRING)
+            {
+                return TORRENT_INVALID_INFO?;
+            }
+            file.path[j] = copy_string(component.string);
+        }
+    }
 
     return {};  // Success
 }
@@ -235,8 +393,46 @@ fn void free_torrent_file(TorrentFile* torrent) @public
     if (torrent.created_by.len > 0) free(torrent.created_by);
     if (torrent.encoding.len > 0) free(torrent.encoding);
 
+    // Free web seeds
+    if (torrent.url_list.len > 0)
+    {
+        for (usz i = 0; i < torrent.url_list.len; i++)
+        {
+            if (torrent.url_list[i].len > 0) free(torrent.url_list[i]);
+        }
+        free(torrent.url_list);
+    }
+
+    if (torrent.httpseeds.len > 0)
+    {
+        for (usz i = 0; i < torrent.httpseeds.len; i++)
+        {
+            if (torrent.httpseeds[i].len > 0) free(torrent.httpseeds[i]);
+        }
+        free(torrent.httpseeds);
+    }
+
     if (torrent.info.name.len > 0) free(torrent.info.name);
     if (torrent.info.pieces.len > 0) free(torrent.info.pieces);
+
+    // Free multi-file data
+    if (torrent.info.is_multi_file && torrent.info.files.len > 0)
+    {
+        for (usz i = 0; i < torrent.info.files.len; i++)
+        {
+            FileEntry* file = &torrent.info.files[i];
+            if (file.path.len > 0)
+            {
+                // Free each path component
+                for (usz j = 0; j < file.path.len; j++)
+                {
+                    if (file.path[j].len > 0) free(file.path[j]);
+                }
+                free(file.path);
+            }
+        }
+        free(torrent.info.files);
+    }
 
     free(torrent);
 }
