@@ -393,6 +393,48 @@ fn void test_parse_real_torrent_sintel() @test
     io::printn("");
 }
 
+fn void test_parse_libtorrent_base() @test
+{
+    String data = load_torrent_file("test/fixtures/base.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    // Verify basic fields
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.info.length > 0, "Expected file length");
+    assert(torrent.info.piece_length > 0, "Expected piece length");
+    assert(torrent.info.pieces.len > 0, "Expected pieces");
+
+    io::printfn("=== base.torrent (libtorrent test) ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  length: %d bytes", torrent.info.length);
+    io::printfn("  piece length: %d bytes", torrent.info.piece_length);
+    io::printfn("  pieces: %d hashes", torrent.info.pieces.len / 20);
+}
+
+fn void test_parse_libtorrent_test1_single() @test
+{
+    String data = load_torrent_file("test/fixtures/test1_single.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    // Verify basic fields
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.info.length > 0, "Expected file length");
+    assert(torrent.info.piece_length > 0, "Expected piece length");
+    assert(torrent.info.pieces.len > 0, "Expected pieces");
+
+    io::printfn("=== test1_single.torrent (libtorrent test) ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  length: %d bytes", torrent.info.length);
+    io::printfn("  piece length: %d bytes", torrent.info.piece_length);
+    io::printfn("  pieces: %d hashes", torrent.info.pieces.len / 20);
+}
+
 // ============================================================================
 // Info Hash Tests
 // ============================================================================
@@ -449,4 +491,348 @@ fn void test_info_hash_deterministic() @test
     }
 
     io::printn("Info hash is deterministic ✓");
+}
+
+// ============================================================================
+// Additional libtorrent Test Files
+// ============================================================================
+
+fn void test_parse_url_seed() @test
+{
+    String data = load_torrent_file("test/fixtures/url_seed.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.info.length > 0, "Expected file length");
+    assert(torrent.info.piece_length > 0, "Expected piece length");
+    assert(torrent.info.pieces.len > 0, "Expected pieces");
+
+    io::printfn("=== url_seed.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+    io::printfn("  length: %d bytes", torrent.info.length);
+}
+
+fn void test_inspect_creation_date() @test
+{
+    String data = load_torrent_file("test/fixtures/creation_date.torrent");
+    defer free(data);
+
+    // Inspect as bencode first
+    BencodeValue* root = bencode::decode(data)!!;
+    defer bencode::free_bencode_value(root);
+
+    io::printfn("=== creation_date.torrent structure ===");
+    if (root.type == bencode::BencodeType.DICT)
+    {
+        io::printfn("Top-level keys (%d):", root.dict.len);
+        for (usz i = 0; i < root.dict.len; i++)
+        {
+            io::printfn("  - %s", (String)root.dict.keys[i]);
+        }
+
+        // Check info dict
+        BencodeValue* info = bencode::dict_get(root, "info");
+        if (info && info.type == bencode::BencodeType.DICT)
+        {
+            io::printfn("Info dict keys (%d):", info.dict.len);
+            for (usz i = 0; i < info.dict.len; i++)
+            {
+                io::printfn("  - %s", (String)info.dict.keys[i]);
+            }
+        }
+    }
+}
+
+fn void test_parse_creation_date() @test
+{
+    String data = load_torrent_file("test/fixtures/creation_date.torrent");
+    defer free(data);
+
+    // creation_date.torrent is multi-file, which we don't support yet
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== creation_date.torrent ===");
+        io::printn("  Multi-file torrent (not yet supported)");
+        return;
+    }
+
+    assert(false, "Expected parse to fail for multi-file torrent");
+}
+
+fn void test_parse_no_creation_date() @test
+{
+    String data = load_torrent_file("test/fixtures/no_creation_date.torrent");
+    defer free(data);
+
+    // no_creation_date.torrent is multi-file, which we don't support yet
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== no_creation_date.torrent ===");
+        io::printn("  Multi-file torrent (not yet supported)");
+        return;
+    }
+
+    assert(false, "Expected parse to fail for multi-file torrent");
+}
+
+fn void test_parse_httpseed() @test
+{
+    String data = load_torrent_file("test/fixtures/httpseed.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+    assert(torrent.info.length > 0, "Expected file length");
+
+    io::printfn("=== httpseed.torrent ===");
+    io::printfn("  name: %s", torrent.info.name);
+}
+
+fn void test_parse_long_name() @test
+{
+    String data = load_torrent_file("test/fixtures/long_name.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected file name");
+    // long_name.torrent should have a very long filename
+    assert(torrent.info.name.len > 100, "Expected long filename");
+
+    io::printfn("=== long_name.torrent ===");
+    io::printfn("  name length: %d chars", torrent.info.name.len);
+}
+
+fn void test_parse_sample() @test
+{
+    String data = load_torrent_file("test/fixtures/sample.torrent");
+    defer free(data);
+
+    // sample.torrent is multi-file, which we don't support yet
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== sample.torrent ===");
+        io::printn("  Multi-file torrent (not yet supported)");
+        return;
+    }
+
+    assert(false, "Expected parse to fail for multi-file torrent");
+}
+
+// ============================================================================
+// Error Case Tests
+// ============================================================================
+
+fn void test_error_missing_piece_len() @test
+{
+    String data = load_torrent_file("test/fixtures/missing_piece_len.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== missing_piece_len.torrent ===");
+        io::printn("  Correctly rejected (missing piece length)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for missing piece length");
+    }
+}
+
+fn void test_error_no_name() @test
+{
+    String data = load_torrent_file("test/fixtures/no_name.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== no_name.torrent ===");
+        io::printn("  Correctly rejected (missing name)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for missing name");
+    }
+}
+
+fn void test_error_invalid_pieces() @test
+{
+    String data = load_torrent_file("test/fixtures/invalid_pieces.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== invalid_pieces.torrent ===");
+        io::printn("  Correctly rejected (invalid pieces)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for invalid pieces");
+    }
+}
+
+fn void test_error_invalid_piece_len() @test
+{
+    String data = load_torrent_file("test/fixtures/invalid_piece_len.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== invalid_piece_len.torrent ===");
+        io::printn("  Correctly rejected (invalid piece length)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for invalid piece length");
+    }
+}
+
+fn void test_error_invalid_info() @test
+{
+    String data = load_torrent_file("test/fixtures/invalid_info.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== invalid_info.torrent ===");
+        io::printn("  Correctly rejected (invalid info)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for invalid info");
+    }
+}
+
+fn void test_error_negative_piece_len() @test
+{
+    String data = load_torrent_file("test/fixtures/negative_piece_len.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== negative_piece_len.torrent ===");
+        io::printn("  Correctly rejected (negative piece length)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for negative piece length");
+    }
+}
+
+fn void test_error_negative_size() @test
+{
+    String data = load_torrent_file("test/fixtures/negative_size.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== negative_size.torrent ===");
+        io::printn("  Correctly rejected (negative total size)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for negative total size");
+    }
+}
+
+fn void test_error_negative_file_size() @test
+{
+    String data = load_torrent_file("test/fixtures/negative_file_size.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== negative_file_size.torrent ===");
+        io::printn("  Correctly rejected (negative file size)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for negative file size");
+    }
+}
+
+fn void test_error_invalid_file_size() @test
+{
+    String data = load_torrent_file("test/fixtures/invalid_file_size.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== invalid_file_size.torrent ===");
+        io::printn("  Correctly rejected (invalid file size)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for invalid file size");
+    }
+}
+
+fn void test_error_unaligned_pieces() @test
+{
+    String data = load_torrent_file("test/fixtures/unaligned_pieces.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== unaligned_pieces.torrent ===");
+        io::printn("  Correctly rejected (pieces not aligned to 20 bytes)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for unaligned pieces");
+    }
+}
+
+fn void test_error_string_root() @test
+{
+    String data = load_torrent_file("test/fixtures/string.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== string.torrent ===");
+        io::printn("  Correctly rejected (root is string, not dict)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for string root");
+    }
+}
+
+fn void test_error_no_files() @test
+{
+    String data = load_torrent_file("test/fixtures/no_files.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== no_files.torrent ===");
+        io::printn("  Correctly rejected (multi-file with no files)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for torrent with no files");
+    }
+}
+
+fn void test_error_zero_length() @test
+{
+    String data = load_torrent_file("test/fixtures/zero.torrent");
+    defer free(data);
+
+    if (catch err = torrent::parse(data))
+    {
+        io::printn("=== zero.torrent ===");
+        io::printn("  Correctly rejected (zero-length torrent)");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for zero-length torrent");
+    }
 }

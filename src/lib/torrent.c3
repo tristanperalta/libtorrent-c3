@@ -152,6 +152,12 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     {
         info.length = length_val.integer;
         info.is_multi_file = false;
+
+        // Validate length is positive
+        if (info.length <= 0)
+        {
+            return TORRENT_INVALID_INFO?;
+        }
     }
     else
     {
@@ -167,6 +173,12 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
         return TORRENT_MISSING_FIELD?;
     }
     info.piece_length = piece_length_val.integer;
+
+    // Validate piece_length is positive
+    if (info.piece_length <= 0)
+    {
+        return TORRENT_INVALID_INFO?;
+    }
 
     // Extract 'pieces' (required)
     BencodeValue* pieces_val = bencode::dict_get(info_val, "pieces");
