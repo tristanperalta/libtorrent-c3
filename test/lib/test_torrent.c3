@@ -1006,16 +1006,19 @@ fn void test_bad_name() @test
     String data = load_torrent_file("test/fixtures/bad_name.torrent");
     defer free(data);
 
-    // TODO: This torrent should fail to parse due to name containing null bytes
-    // libtorrent rejects it, but we currently accept it
-    // For now, just verify it parses
-
     TorrentFile* torrent = torrent::parse(data)!!;
     defer torrent::free_torrent_file(torrent);
 
-    io::printfn("=== bad_name.torrent (name has null bytes) ===");
-    io::printfn("  name length: %d (TODO: should reject names with null bytes)", torrent.info.name.len);
-    io::printfn("  total length: %d bytes", torrent.info.length);
+    // BEP 3: Name with null bytes should be replaced with info-hash hex
+    assert(torrent.info.name.len == 40, "Invalid name with null bytes should be replaced with 40-char info-hash");
+    // Verify it's a valid hex string (all chars are 0-9a-f)
+    for (usz i = 0; i < torrent.info.name.len; i++)
+    {
+        char c = torrent.info.name[i];
+        assert((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'),
+               "Info-hash should be lowercase hex");
+    }
+    assert(torrent.info.length == 425, "Should parse file length");
 }
 
 fn void test_inspect_announce_list() @test

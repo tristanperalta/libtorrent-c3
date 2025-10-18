@@ -394,10 +394,11 @@ fn TorrentFile*? parse(String data) @public => @pool()
     torrent.info_hash = sha1::hash(info_encoded);
 
     // Validate torrent name (BEP 3 compliance)
-    // If name is empty or only contains dots, use info-hash as name
+    // If name is empty, only contains dots, or has null bytes, use info-hash as name
     if (torrent.info.name.len == 0 ||
         torrent.info.name == "." ||
-        torrent.info.name == "..")
+        torrent.info.name == ".." ||
+        contains_null_bytes(torrent.info.name))
     {
         // Free invalid name and replace with info-hash hex
         if (torrent.info.name.len > 0) free(torrent.info.name);
@@ -643,6 +644,19 @@ fn String trim_whitespace(String url)
     }
 
     return (String)trimmed;
+}
+
+/**
+ * Helper: Check if a string contains null bytes.
+ * Returns true if any null byte is found, false otherwise.
+ */
+fn bool contains_null_bytes(String str)
+{
+    for (usz i = 0; i < str.len; i++)
+    {
+        if (str[i] == 0) return true;
+    }
+    return false;
 }
 
 /**
