@@ -196,12 +196,11 @@ fn char? consume(DecodeState* state)
  * Read characters until delimiter is found and return as a byte array.
  * The delimiter is consumed but not included in the result.
  * Returns fault if delimiter not found.
- * Note: Uses DString to build result, allocates with mem allocator.
+ * Note: Uses temp allocator for temporary buffer.
  */
 fn String? read_until(DecodeState* state, char delimiter)
 {
-    DString buf = dstring::new(mem);
-    defer buf.free();
+    DString buf;  // Uses temp allocator by default
 
     while (true)
     {
@@ -280,8 +279,7 @@ fn BencodeValue*? decode_value(DecodeState* state)
         }
 
         // Parse the integer - create properly formatted string
-        DString buf = dstring::new(mem);
-        defer buf.free();
+        DString buf;  // Uses temp allocator
         buf.append(num_str);
         long value = buf.str_view().to_long()!;
 
@@ -296,8 +294,7 @@ fn BencodeValue*? decode_value(DecodeState* state)
         defer mem::free(len_str);
 
         // Parse the length - create properly formatted string
-        DString len_buf = dstring::new(mem);
-        defer len_buf.free();
+        DString len_buf;  // Uses temp allocator
         len_buf.append(len_str);
         long len_val = len_buf.str_view().to_long()!;
 
@@ -400,8 +397,11 @@ fn BencodeValue*? decode_value(DecodeState* state)
  *
  * @param data The bencoded data to decode
  * @return The decoded value or a fault if parsing fails
+ *
+ * Note: Uses temp allocator for intermediate buffers during parsing.
+ * The returned BencodeValue is allocated with mem allocator and must be freed.
  */
-fn BencodeValue*? decode(String data) @public
+fn BencodeValue*? decode(String data) @public => @pool()
 {
     io::ByteReader reader;
     reader.init(data);

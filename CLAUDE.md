@@ -182,10 +182,14 @@ fn void test_something() @test
 
 **Declaring Faults:**
 ```c3
-// Fault names must be lowercase (like variables, not types)
-fault bencode_invalid_format,
-      bencode_unexpected_end,
-      bencode_invalid_integer;
+// IMPORTANT: Use 'faultdef' for proper pointer optional support (C3 0.7.6)
+// Using 'fault' (lowercase) has a known bug with pointer optionals (Foo*?)
+faultdef BENCODE_INVALID_FORMAT;
+faultdef BENCODE_UNEXPECTED_END;
+faultdef BENCODE_INVALID_INTEGER;
+
+// Alternative (older style, may have issues with pointer optionals):
+// fault bencode_invalid_format, bencode_unexpected_end;
 ```
 
 **Optional Return Types:**
@@ -232,6 +236,39 @@ value = decode(data);  // No longer optional here
 - `allocator::heap()` and `allocator::temp()` are **deprecated**
 - Use `mem` as the allocator instead
 
+**The Temp Allocator and @pool():**
+
+C3's temp allocator is a region-based allocator that automatically frees memory when leaving scope, preventing memory leaks without garbage collection overhead.
+
+```c3
+// Use @pool() to create a temp allocator scope
+fn int example(int input) => @pool()
+{
+    // Allocate with temp allocator - auto-freed when function exits
+    int* temp_variable = mem::tnew(int);
+    *temp_variable = 56;
+    return input + *temp_variable;
+}  // temp_variable automatically freed here!
+
+// Or use @pool() as a block
+fn void process_data()
+{
+    @pool()
+    {
+        // All temp allocations here are freed when leaving this block
+        String* temp = allocator::new(tmem, String);
+        // ...
+    }  // temp automatically freed
+}
+```
+
+**Key benefits:**
+- No manual `free()` needed for temp allocations
+- Better performance than individual `malloc`/`free` calls
+- Good memory locality (all allocations in one region)
+- Automatic cleanup even on early returns or faults
+- The compiler auto-adds `@pool()` to `main()` if temp allocations are detected
+
 **Working with DString:**
 ```c3
 // DString can be declared without initialization (uses temp allocator by default)
@@ -243,6 +280,10 @@ buf.appendf("%d", 42);
 String result = buf.copy_str(mem);  // Caller must free()
 defer free(result);
 ```
+
+**When to use temp vs persistent allocation:**
+- **Temp allocator (`mem::tnew()`)**: For intermediate/temporary data that doesn't outlive the function
+- **Persistent allocator (`mem::new()`)**: For data that needs to be returned or stored long-term
 
 **Memory Allocation:**
 ```c3
