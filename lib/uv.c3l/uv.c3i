@@ -36,6 +36,12 @@ alias Connect = void;     // uv_connect_t
 alias Write = void;       // uv_write_t
 alias Shutdown = void;    // uv_shutdown_t
 
+// Filesystem request (uv_fs_t) - needs actual storage
+struct Fs
+{
+	char[512] _opaque;  // Opaque storage for uv_fs_t (enough for all platforms)
+}
+
 // ============================================================================
 // Enums
 // ============================================================================
@@ -109,6 +115,34 @@ struct Sockaddr_in6
 	uint sin6_scope_id;
 }
 
+<*
+ File statistics structure (from uv_stat_t).
+ Mirrors POSIX stat structure with cross-platform fields.
+*>
+struct FileStat
+{
+	ulong st_dev;
+	ulong st_mode;
+	ulong st_nlink;
+	ulong st_uid;
+	ulong st_gid;
+	ulong st_rdev;
+	ulong st_ino;
+	ulong st_size;
+	ulong st_blksize;
+	ulong st_blocks;
+	ulong st_flags;
+	ulong st_gen;
+	ulong st_atim_sec;
+	ulong st_atim_nsec;
+	ulong st_mtim_sec;
+	ulong st_mtim_nsec;
+	ulong st_ctim_sec;
+	ulong st_ctim_nsec;
+	ulong st_birthtim_sec;
+	ulong st_birthtim_nsec;
+}
+
 // ============================================================================
 // Callback Types
 // ============================================================================
@@ -130,6 +164,9 @@ alias ConnectionCb = fn void(Stream* server, int status);
 
 // Close callback - called when a handle is closed
 alias CloseCb = fn void(Handle* handle);
+
+// Filesystem callback - called when a filesystem operation completes
+alias FsCb = fn void(Fs* req);
 
 // ============================================================================
 // Event Loop Functions
@@ -489,3 +526,117 @@ const int UV_ECONNREFUSED = -4078;  // Connection refused
 const int UV_ETIMEDOUT = -4039;     // Connection timed out
 const int UV_ENOTCONN = -4053;      // Socket not connected
 const int UV_ECONNRESET = -4077;    // Connection reset by peer
+
+// ============================================================================
+// Filesystem Functions
+// ============================================================================
+
+<*
+ Open a file asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param path : "File path"
+ @param flags : "Open flags (O_RDONLY, O_WRONLY, O_RDWR, etc.)"
+ @param mode : "File permissions (e.g., 0644)"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_open(Loop* loop, Fs* req, char* path, int flags, int mode, FsCb cb) @extern("uv_fs_open");
+
+<*
+ Read from a file asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param file : "File descriptor"
+ @param bufs : "Array of buffers to read into"
+ @param nbufs : "Number of buffers"
+ @param offset : "File offset to read from (-1 for current position)"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_read(Loop* loop, Fs* req, int file, Buf* bufs, uint nbufs, long offset, FsCb cb) @extern("uv_fs_read");
+
+<*
+ Write to a file asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param file : "File descriptor"
+ @param bufs : "Array of buffers to write"
+ @param nbufs : "Number of buffers"
+ @param offset : "File offset to write to (-1 for current position)"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_write(Loop* loop, Fs* req, int file, Buf* bufs, uint nbufs, long offset, FsCb cb) @extern("uv_fs_write");
+
+<*
+ Close a file asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param file : "File descriptor to close"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_close(Loop* loop, Fs* req, int file, FsCb cb) @extern("uv_fs_close");
+
+<*
+ Get file statistics asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param path : "File path"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_stat(Loop* loop, Fs* req, char* path, FsCb cb) @extern("uv_fs_stat");
+
+<*
+ Truncate or extend a file asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param file : "File descriptor"
+ @param offset : "New file size"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_ftruncate(Loop* loop, Fs* req, int file, long offset, FsCb cb) @extern("uv_fs_ftruncate");
+
+<*
+ Create a directory asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param path : "Directory path"
+ @param mode : "Directory permissions (e.g., 0755)"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_mkdir(Loop* loop, Fs* req, char* path, int mode, FsCb cb) @extern("uv_fs_mkdir");
+
+<*
+ Get the result of a filesystem operation.
+
+ @param req : "Filesystem request"
+ @return "Result value (e.g., file descriptor for open, bytes read/written, or negative error code)"
+*>
+fn isz fs_req_result(Fs* req) @extern("uv_fs_get_result");
+
+<*
+ Get the stat buffer from a filesystem request.
+
+ @param req : "Filesystem request (after stat operation)"
+ @return "Pointer to FileStat structure, or null on error"
+*>
+fn FileStat* fs_req_statbuf(Fs* req) @extern("uv_fs_get_statbuf");
+
+<*
+ Clean up filesystem request resources.
+
+ @param req : "Filesystem request to clean up"
+*>
+fn void fs_req_cleanup(Fs* req) @extern("uv_fs_req_cleanup");
