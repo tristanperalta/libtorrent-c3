@@ -3,6 +3,7 @@ module libtorrent::tracker;
 import libtorrent::http;
 import libtorrent::bencode;
 import libtorrent::torrent;
+import libtorrent::udp_tracker;
 import std::net::url;
 import std::time;
 import std::math::random;
@@ -10,9 +11,9 @@ import std::math::random;
 <*
  BitTorrent Tracker Communication Module
  ========================================
- Implements the BitTorrent tracker protocol (BEP 3).
+ Implements the BitTorrent tracker protocol (BEP 3 and BEP 15).
 
- Handles announcing to HTTP trackers and parsing peer lists.
+ Provides a unified interface for HTTP/HTTPS and UDP trackers.
 *>
 
 // Faults
@@ -20,6 +21,17 @@ faultdef TRACKER_CONNECT_FAILED;
 faultdef TRACKER_REQUEST_FAILED;
 faultdef TRACKER_INVALID_RESPONSE;
 faultdef TRACKER_URL_INVALID;
+faultdef TRACKER_UNSUPPORTED_PROTOCOL;
+
+<*
+ Tracker interface - all tracker implementations must implement this.
+ Provides a unified way to announce to different tracker types (HTTP/UDP).
+*>
+interface Tracker
+{
+    fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort port, String event);
+    fn void free();
+}
 
 <*
  Peer structure representing a BitTorrent peer.
@@ -42,6 +54,13 @@ struct TrackerResponse {
     Peer[] peers;          // List of peers
     String failure_reason; // Error message if request failed (empty if none)
     String warning_message; // Optional warning from tracker (empty if none)
+}
+
+<*
+ HTTP/HTTPS tracker implementation.
+*>
+struct HttpTracker (Tracker) {
+    char _dummy;  // C3 doesn't allow zero-sized structs
 }
 
 <*
@@ -246,15 +265,15 @@ fn TrackerResponse? parse_tracker_response(String response_data)
 }
 
 <*
- Announce to tracker and get peer list.
+ HTTP tracker announce implementation.
 
  @param torrent : "The torrent file"
  @param our_port : "Our listening port"
  @param event : "Event type (started/stopped/completed or empty string)"
  @return "Tracker response with peer list or fault"
 *>
-fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort our_port,
-                              String event = "") @public
+fn TrackerResponse? HttpTracker.announce(HttpTracker* self, torrent::TorrentFile* torrent, ushort our_port,
+                                          String event) @dynamic
 {
     // Generate peer ID
     char[20] peer_id = generate_peer_id();
@@ -329,5 +348,54 @@ fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort our_port,
 
     // Parse bencode response
     return parse_tracker_response(http_response.body);
+}
+
+<*
+ Free HTTP tracker instance.
+*>
+fn void HttpTracker.free(HttpTracker* self) @dynamic
+{
+    // HttpTracker has no dynamic allocations
+    free(self);
+}
+
+<*
+ Create a tracker instance based on URL scheme.
+
+ @param url : "Tracker URL (http://, https://, or udp://)"
+ @return "Tracker instance or fault"
+*>
+fn Tracker? create_tracker(String url) @public
+{
+    if (url.starts_with("udp://")) {
+        udp_tracker::UdpTracker* tracker = mem::new(udp_tracker::UdpTracker);
+        return (Tracker)tracker;
+    } else if (url.starts_with("http://") || url.starts_with("https://")) {
+        HttpTracker* tracker = mem::new(HttpTracker);
+        return (Tracker)tracker;
+    } else {
+        return TRACKER_URL_INVALID?;
+    }
+}
+
+<*
+ Announce to tracker and get peer list (convenience function).
+ Creates appropriate tracker based on URL and announces.
+
+ @param torrent : "The torrent file"
+ @param our_port : "Our listening port"
+ @param event : "Event type (started/stopped/completed or empty string)"
+ @return "Tracker response with peer list or fault"
+*>
+fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort our_port,
+                              String event = "") @public
+{
+    Tracker? tracker = create_tracker(torrent.announce);
+    if (catch err = tracker) {
+        return err?;
+    }
+    defer tracker.free();
+
+    return tracker.announce(torrent, our_port, event);
 }
 

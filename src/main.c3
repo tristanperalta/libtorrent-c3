@@ -355,15 +355,7 @@ fn int cmd_announce(String torrent_path)
     io::printfn("Announcing to tracker: %s", tracker_url);
     io::printfn("");
 
-    // Check if tracker is UDP (not supported yet)
-    if (tracker_url.starts_with("udp://"))
-    {
-        io::eprintfn("Error: UDP trackers not yet supported (BEP 15)");
-        io::eprintfn("Only HTTP/HTTPS trackers are supported");
-        return 1;
-    }
-
-    // Announce to tracker
+    // Announce to tracker (supports HTTP/HTTPS and UDP)
     ushort our_port = 6881;  // Default BitTorrent port
     tracker::TrackerResponse? response = tracker::announce(torrent, our_port, "started");
 
