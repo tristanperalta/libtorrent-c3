@@ -578,9 +578,8 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         file.path = mem::new_array(String, path.list.len);
 
         // Copy path components
-        for (usz j = 0; j < path.list.len; j++)
+        foreach (j, component : path.list)
         {
-            BencodeValue* component = path.list[j];
             if (component.type != bencode::BencodeType.STRING)
             {
                 return TORRENT_INVALID_INFO?;

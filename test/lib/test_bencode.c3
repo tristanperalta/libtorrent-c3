@@ -164,14 +164,11 @@ fn void test_encode_list_empty() @test
 
 fn void test_encode_list_simple() @test
 {
-    BencodeValue* list = bencode::make_list();
-    defer bencode::free_bencode_value(list);
-
     BencodeValue* str = bencode::make_string("spam");
     BencodeValue* num = bencode::make_integer(42);
 
-    bencode::list_append(list, str);
-    bencode::list_append(list, num);
+    BencodeValue* list = bencode::@blist(str, num);
+    defer bencode::free_bencode_value(list);
 
     String encoded = bencode::encode(list);
     defer free(encoded);
@@ -247,15 +244,15 @@ fn void test_encode_dict_empty() @test
 
 fn void test_encode_dict_simple() @test
 {
-    BencodeValue* dict = bencode::make_dict();
-    defer bencode::free_bencode_value(dict);
-
     BencodeValue* cow_val = bencode::make_string("moo");
     BencodeValue* spam_val = bencode::make_string("eggs");
 
     // Note: Keys must be in lexicographical order (cow < spam)
-    bencode::dict_set(dict, "cow", cow_val);
-    bencode::dict_set(dict, "spam", spam_val);
+    BencodeValue* dict = bencode::@bdict(
+        "cow", cow_val,
+        "spam", spam_val
+    );
+    defer bencode::free_bencode_value(dict);
 
     String encoded = bencode::encode(dict);
     defer free(encoded);

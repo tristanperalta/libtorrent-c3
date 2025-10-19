@@ -62,6 +62,22 @@ struct BencodeDict
 }
 
 /**
+ * BencodeDictEntry represents a single key-value pair from a dictionary.
+ * Used for iterating over bencode dictionaries.
+ *
+ * Usage:
+ *   foreach (entry : dict.dict_entries())
+ *   {
+ *       io::printfn("%s: %s", entry.key, entry.value);
+ *   }
+ */
+struct BencodeDictEntry
+{
+    String key;
+    BencodeValue* value;
+}
+
+/**
  * BencodeValue is a tagged union representing any bencode value.
  *
  * SAFETY: Always check the 'type' field before accessing union members!
@@ -628,4 +644,105 @@ fn String to_string(BencodeValue* value) @public
 {
     // TODO: Implement pretty-printing
     return "";
+}
+
+/**
+ * Get an array of key-value pairs for iterating over a dictionary.
+ *
+ * This method creates an array of BencodeDictEntry structs containing
+ * all key-value pairs from the dictionary, enabling easy iteration.
+ *
+ * Usage:
+ *   foreach (entry : dict.entries())
+ *   {
+ *       io::printfn("Key: %s", entry.key);
+ *   }
+ *
+ * @param self The BencodeDict to iterate over
+ * @return Array of BencodeDictEntry structs (uses temp allocator)
+ */
+fn BencodeDictEntry[] BencodeDict.entries(&self) @public
+{
+    BencodeDictEntry[] result = mem::temp_array(BencodeDictEntry, self.len);
+    for (usz i = 0; i < self.len; i++)
+    {
+        result[i] = { .key = (String)self.keys[i], .value = self.values[i] };
+    }
+    return result;
+}
+
+/**
+ * Convenience method to get dict entries from a BencodeValue.
+ *
+ * This is a convenience wrapper that asserts the value is a dictionary
+ * and returns its entries for iteration.
+ *
+ * Usage:
+ *   BencodeValue* root = decode(data)!!;
+ *   foreach (entry : root.dict_entries())
+ *   {
+ *       io::printfn("%s: %s", entry.key, entry.value);
+ *   }
+ *
+ * @param self The BencodeValue (must be type DICT)
+ * @return Array of BencodeDictEntry structs (caller must free)
+ */
+fn BencodeDictEntry[] BencodeValue.dict_entries(&self) @public @inline
+{
+    assert(self.type == BencodeType.DICT, "Value must be a DICT");
+    return self.dict.entries();
+}
+
+/**
+ * Macro: Create a bencode list from variable arguments.
+ *
+ * This macro provides a concise way to create bencode lists inline.
+ *
+ * Usage:
+ *   BencodeValue* list = @blist(item1, item2, item3);
+ *   // Equivalent to:
+ *   BencodeValue* list = make_list();
+ *   list_append(list, item1);
+ *   list_append(list, item2);
+ *   list_append(list, item3);
+ *
+ * @param ... Variable number of BencodeValue* items to add to the list
+ * @return A BencodeValue* containing the list
+ */
+macro BencodeValue* @blist(...)
+{
+    BencodeValue* list = make_list();
+    $for var $i = 0; $i < $vacount; $i++:
+        list_append(list, $vaarg[$i]);
+    $endfor
+    return list;
+}
+
+/**
+ * Macro: Create a bencode dictionary from key-value pairs.
+ *
+ * This macro provides a concise way to create bencode dictionaries inline.
+ * Arguments must be provided in key-value pairs (even number of arguments).
+ *
+ * Usage:
+ *   BencodeValue* dict = @bdict(
+ *       "name", make_string("example"),
+ *       "size", make_integer(1024)
+ *   );
+ *   // Equivalent to:
+ *   BencodeValue* dict = make_dict();
+ *   dict_set(dict, "name", make_string("example"));
+ *   dict_set(dict, "size", make_integer(1024));
+ *
+ * @param ... Variable number of arguments as key-value pairs (must be even)
+ * @return A BencodeValue* containing the dictionary
+ */
+macro BencodeValue* @bdict(...)
+{
+    $assert $vacount % 2 == 0;
+    BencodeValue* dict = make_dict();
+    $for var $i = 0; $i < $vacount; $i += 2:
+        dict_set(dict, $vaarg[$i], $vaarg[$i + 1]);
+    $endfor
+    return dict;
 }

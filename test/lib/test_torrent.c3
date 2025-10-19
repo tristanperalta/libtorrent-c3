@@ -31,40 +31,27 @@ fn String load_torrent_file(String path)
 // Create a minimal valid torrent for testing
 fn String create_test_torrent()
 {
-    // Use bencode encoder to build a valid torrent
-    BencodeValue* root = bencode::make_dict();
-    defer bencode::free_bencode_value(root);
-
-    // Add announce
-    BencodeValue* announce = bencode::make_string("http://tracker.example.com:8080/announce");
-    bencode::dict_set(root, "announce", announce);
-
-    // Build info dictionary
-    BencodeValue* info = bencode::make_dict();
-
-    // Add name
-    BencodeValue* name = bencode::make_string("test.txt");
-    bencode::dict_set(info, "name", name);
-
-    // Add length
-    BencodeValue* length = bencode::make_integer(100);
-    bencode::dict_set(info, "length", length);
-
-    // Add piece length
-    BencodeValue* piece_length = bencode::make_integer(16384);
-    bencode::dict_set(info, "piece length", piece_length);
-
     // Add pieces (20 bytes - one SHA1 hash)
     char[20] dummy_hash;
     for (usz i = 0; i < 20; i++)
     {
         dummy_hash[i] = (char)i;
     }
-    BencodeValue* pieces = bencode::make_string((String)dummy_hash[..]);
-    bencode::dict_set(info, "pieces", pieces);
 
-    // Add info to root
-    bencode::dict_set(root, "info", info);
+    // Build info dictionary
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string("test.txt"),
+        "length", bencode::make_integer(100),
+        "piece length", bencode::make_integer(16384),
+        "pieces", bencode::make_string((String)dummy_hash[..])
+    );
+
+    // Use bencode encoder to build a valid torrent
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com:8080/announce"),
+        "info", info
+    );
+    defer bencode::free_bencode_value(root);
 
     // Encode and return
     String encoded = bencode::encode(root);
@@ -556,9 +543,9 @@ fn void test_parse_url_seed() @test
     io::printfn("  name: %s", torrent.info.name);
     io::printfn("  length: %d bytes", torrent.info.length);
     io::printfn("  url-list count: %d", torrent.url_list.len);
-    for (usz i = 0; i < torrent.url_list.len; i++)
+    foreach (i, url : torrent.url_list)
     {
-        io::printfn("    [%d]: %s", i, torrent.url_list[i]);
+        io::printfn("    [%d]: %s", i, url);
     }
 }
 
@@ -579,9 +566,9 @@ fn void test_parse_url_seed_multi() @test
     io::printfn("  name: %s", torrent.info.name);
     io::printfn("  length: %d bytes", torrent.info.length);
     io::printfn("  url-list count: %d", torrent.url_list.len);
-    for (usz i = 0; i < torrent.url_list.len; i++)
+    foreach (i, url : torrent.url_list)
     {
-        io::printfn("    [%d]: %s", i, torrent.url_list[i]);
+        io::printfn("    [%d]: %s", i, url);
     }
 }
 
@@ -604,14 +591,14 @@ fn void test_parse_duplicate_web_seeds() @test
     io::printfn("=== duplicate_web_seeds.torrent (deduplication test) ===");
     io::printfn("  name: %s", torrent.info.name);
     io::printfn("  url-list count: %d (8 total, 5 duplicates filtered)", torrent.url_list.len);
-    for (usz i = 0; i < torrent.url_list.len; i++)
+    foreach (i, url : torrent.url_list)
     {
-        io::printfn("    [%d]: %s", i, torrent.url_list[i]);
+        io::printfn("    [%d]: %s", i, url);
     }
     io::printfn("  httpseeds count: %d", torrent.httpseeds.len);
-    for (usz i = 0; i < torrent.httpseeds.len; i++)
+    foreach (i, httpseed : torrent.httpseeds)
     {
-        io::printfn("    [%d]: %s", i, torrent.httpseeds[i]);
+        io::printfn("    [%d]: %s", i, httpseed);
     }
 }
 
@@ -1043,17 +1030,16 @@ fn void test_inspect_announce_list() @test
         if (announce_list.type == bencode::BencodeType.LIST)
         {
             io::printfn("Tiers: %d", announce_list.list.len);
-            for (usz i = 0; i < announce_list.list.len; i++)
+            foreach (i, tier : announce_list.list)
             {
-                BencodeValue* tier = announce_list.list[i];
                 if (tier.type == bencode::BencodeType.LIST)
                 {
                     io::printfn("  Tier %d (%d trackers):", i, tier.list.len);
-                    for (usz j = 0; j < tier.list.len; j++)
+                    foreach (tracker : tier.list)
                     {
-                        if (tier.list[j].type == bencode::BencodeType.STRING)
+                        if (tracker.type == bencode::BencodeType.STRING)
                         {
-                            io::printfn("    - %s", (String)tier.list[j].string);
+                            io::printfn("    - %s", (String)tracker.string);
                         }
                     }
                 }
@@ -1087,15 +1073,14 @@ fn void test_inspect_announce_list() @test
             if (key == "files" && val.type == bencode::BencodeType.LIST)
             {
                 io::printfn("    Files list: %d files", val.list.len);
-                for (usz j = 0; j < val.list.len; j++)
+                foreach (j, file : val.list)
                 {
-                    BencodeValue* file = val.list[j];
                     if (file.type == bencode::BencodeType.DICT)
                     {
                         io::printfn("    File %d keys:", j);
-                        for (usz k = 0; k < file.dict.len; k++)
+                        foreach (entry : file.dict_entries())
                         {
-                            io::printfn("      - %s", (String)file.dict.keys[k]);
+                            io::printfn("      - %s", entry.key);
                         }
                     }
                 }
@@ -1198,11 +1183,11 @@ fn void test_inspect_url_seed() @test
             if (url_list.type == bencode::BencodeType.LIST)
             {
                 io::printfn("url-list count: %d", url_list.list.len);
-                for (usz i = 0; i < url_list.list.len; i++)
+                foreach (i, url_val : url_list.list)
                 {
-                    if (url_list.list[i].type == bencode::BencodeType.STRING)
+                    if (url_val.type == bencode::BencodeType.STRING)
                     {
-                        io::printfn("  [%d]: %s", i, (String)url_list.list[i].string);
+                        io::printfn("  [%d]: %s", i, (String)url_val.string);
                     }
                 }
             }
@@ -1240,11 +1225,11 @@ fn void test_inspect_httpseed() @test
             if (httpseeds.type == bencode::BencodeType.LIST)
             {
                 io::printfn("httpseeds count: %d", httpseeds.list.len);
-                for (usz i = 0; i < httpseeds.list.len; i++)
+                foreach (i, httpseed_val : httpseeds.list)
                 {
-                    if (httpseeds.list[i].type == bencode::BencodeType.STRING)
+                    if (httpseed_val.type == bencode::BencodeType.STRING)
                     {
-                        io::printfn("  [%d]: %s", i, (String)httpseeds.list[i].string);
+                        io::printfn("  [%d]: %s", i, (String)httpseed_val.string);
                     }
                 }
             }
@@ -1760,25 +1745,24 @@ fn void test_error_zero_length() @test
 
 fn void test_sanitize_torrent_name_with_traversal() @test
 {
-    // Create a torrent with path traversal in the name using bencode encoder
-    BencodeValue* root = bencode::make_dict();
-    defer bencode::free_bencode_value(root);
-
-    // Add announce
-    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
-
-    // Build info dictionary
-    BencodeValue* info = bencode::make_dict();
-    bencode::dict_set(info, "name", bencode::make_string("../../../etc/file"));  // Path traversal!
-    bencode::dict_set(info, "length", bencode::make_integer(1000));
-    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
-
     // Create 20-byte pieces hash
     char[20] pieces_hash;
     foreach (i, &c : pieces_hash) *c = 0;
-    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
 
-    bencode::dict_set(root, "info", info);
+    // Build info dictionary
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string("../../../etc/file"),  // Path traversal!
+        "length", bencode::make_integer(1000),
+        "piece length", bencode::make_integer(32768),
+        "pieces", bencode::make_string((String)pieces_hash[..])
+    );
+
+    // Create a torrent with path traversal in the name using bencode encoder
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com/announce"),
+        "info", info
+    );
+    defer bencode::free_bencode_value(root);
 
     // Encode to bencode
     String data = bencode::encode(root);
@@ -1796,25 +1780,26 @@ fn void test_sanitize_torrent_name_with_traversal() @test
 
 fn void test_sanitize_torrent_name_with_null_bytes() @test
 {
-    // Create a torrent with null bytes in the name
-    BencodeValue* root = bencode::make_dict();
-    defer bencode::free_bencode_value(root);
-
-    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
-
-    BencodeValue* info = bencode::make_dict();
-
     // Create name with null byte
     char[9] name_with_null = {'t', 'e', 's', 't', 0, 'f', 'i', 'l', 'e'};
-    bencode::dict_set(info, "name", bencode::make_string((String)name_with_null[..]));
-    bencode::dict_set(info, "length", bencode::make_integer(1000));
-    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
 
+    // Create pieces hash
     char[20] pieces_hash;
     foreach (i, &c : pieces_hash) *c = 0;
-    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
 
-    bencode::dict_set(root, "info", info);
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string((String)name_with_null[..]),
+        "length", bencode::make_integer(1000),
+        "piece length", bencode::make_integer(32768),
+        "pieces", bencode::make_string((String)pieces_hash[..])
+    );
+
+    // Create a torrent with null bytes in the name
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com/announce"),
+        "info", info
+    );
+    defer bencode::free_bencode_value(root);
 
     String data = bencode::encode(root);
     defer free(data);
@@ -1830,37 +1815,39 @@ fn void test_sanitize_torrent_name_with_null_bytes() @test
 
 fn void test_sanitize_file_paths_with_invalid_utf8() @test
 {
-    // Create a multi-file torrent with invalid UTF-8 in path component
-    BencodeValue* root = bencode::make_dict();
-    defer bencode::free_bencode_value(root);
-
-    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
-
-    BencodeValue* info = bencode::make_dict();
-    bencode::dict_set(info, "name", bencode::make_string("testdata"));
-    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
-
+    // Create pieces hash
     char[20] pieces_hash;
     foreach (i, &c : pieces_hash) *c = 0;
-    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
-
-    // Create files list
-    BencodeValue* files = bencode::make_list();
-
-    // First file with invalid UTF-8
-    BencodeValue* file1 = bencode::make_dict();
-    bencode::dict_set(file1, "length", bencode::make_integer(500));
 
     // Path with invalid UTF-8 (incomplete 2-byte sequence)
     char[9] invalid_utf8 = {'f', 'i', 'l', 'e', 0xc2, '.', 't', 'x', 't'};  // 0xc2 without continuation byte
-    BencodeValue* path1 = bencode::make_list();
-    bencode::list_append(path1, bencode::make_string("testdir"));
-    bencode::list_append(path1, bencode::make_string((String)invalid_utf8[..]));
-    bencode::dict_set(file1, "path", path1);
-    bencode::list_append(files, file1);
 
-    bencode::dict_set(info, "files", files);
-    bencode::dict_set(root, "info", info);
+    // First file with invalid UTF-8
+    BencodeValue* path1 = bencode::@blist(
+        bencode::make_string("testdir"),
+        bencode::make_string((String)invalid_utf8[..])
+    );
+
+    BencodeValue* file1 = bencode::@bdict(
+        "length", bencode::make_integer(500),
+        "path", path1
+    );
+
+    BencodeValue* files = bencode::@blist(file1);
+
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string("testdata"),
+        "piece length", bencode::make_integer(32768),
+        "pieces", bencode::make_string((String)pieces_hash[..]),
+        "files", files
+    );
+
+    // Create a multi-file torrent with invalid UTF-8 in path component
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com/announce"),
+        "info", info
+    );
+    defer bencode::free_bencode_value(root);
 
     String data = bencode::encode(root);
     defer free(data);
@@ -1879,36 +1866,38 @@ fn void test_sanitize_file_paths_with_invalid_utf8() @test
 
 fn void test_sanitize_file_paths_with_directional_chars() @test
 {
-    // Create a multi-file torrent with Unicode directional override characters
-    BencodeValue* root = bencode::make_dict();
-    defer bencode::free_bencode_value(root);
-
-    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
-
-    BencodeValue* info = bencode::make_dict();
-    bencode::dict_set(info, "name", bencode::make_string("testdata"));
-    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
-
+    // Create pieces hash
     char[20] pieces_hash;
     foreach (i, &c : pieces_hash) *c = 0;
-    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
-
-    // Create files list
-    BencodeValue* files = bencode::make_list();
-
-    BencodeValue* file1 = bencode::make_dict();
-    bencode::dict_set(file1, "length", bencode::make_integer(500));
 
     // Filename with RIGHT-TO-LEFT OVERRIDE character (U+202E = 0xE2 0x80 0xAE)
     char[10] rtl_filename = {'t', 'e', 's', 't', 0xe2, 0x80, 0xae, 't', 'x', 't'};
-    BencodeValue* path1 = bencode::make_list();
-    bencode::list_append(path1, bencode::make_string("evil"));
-    bencode::list_append(path1, bencode::make_string((String)rtl_filename[..]));
-    bencode::dict_set(file1, "path", path1);
-    bencode::list_append(files, file1);
 
-    bencode::dict_set(info, "files", files);
-    bencode::dict_set(root, "info", info);
+    BencodeValue* path1 = bencode::@blist(
+        bencode::make_string("evil"),
+        bencode::make_string((String)rtl_filename[..])
+    );
+
+    BencodeValue* file1 = bencode::@bdict(
+        "length", bencode::make_integer(500),
+        "path", path1
+    );
+
+    BencodeValue* files = bencode::@blist(file1);
+
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string("testdata"),
+        "piece length", bencode::make_integer(32768),
+        "pieces", bencode::make_string((String)pieces_hash[..]),
+        "files", files
+    );
+
+    // Create a multi-file torrent with Unicode directional override characters
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com/announce"),
+        "info", info
+    );
+    defer bencode::free_bencode_value(root);
 
     String data = bencode::encode(root);
     defer free(data);
@@ -1938,21 +1927,22 @@ fn void test_sanitize_long_file_paths() @test
     }
     long_name.append(".txt");  // Add extension
 
-    BencodeValue* root = bencode::make_dict();
-    defer bencode::free_bencode_value(root);
-
-    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
-
-    BencodeValue* info = bencode::make_dict();
-    bencode::dict_set(info, "name", bencode::make_string(long_name.str_view()));
-    bencode::dict_set(info, "length", bencode::make_integer(1000));
-    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
-
+    // Create pieces hash
     char[20] pieces_hash;
     foreach (i, &c : pieces_hash) *c = 0;
-    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
 
-    bencode::dict_set(root, "info", info);
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string(long_name.str_view()),
+        "length", bencode::make_integer(1000),
+        "piece length", bencode::make_integer(32768),
+        "pieces", bencode::make_string((String)pieces_hash[..])
+    );
+
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com/announce"),
+        "info", info
+    );
+    defer bencode::free_bencode_value(root);
 
     String data = bencode::encode(root);
     defer free(data);
