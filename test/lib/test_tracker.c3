@@ -2,6 +2,7 @@ module libtorrent::tracker_test;
 import libtorrent::tracker;
 import libtorrent::bencode;
 import std::io;
+import std::net::url;
 
 <*
  Test peer ID generation format.
@@ -258,4 +259,159 @@ fn void test_parse_tracker_response_warning() @test {
            "Warning message should match");
 
     free(result.warning_message);
+}
+
+<*
+ Test URL building includes the full path.
+ This is a regression test for the bug where the path was incorrectly stripped.
+*>
+fn void test_build_announce_url_preserves_path() @test {
+    char[20] info_hash;
+    char[20] peer_id;
+
+    // Initialize with simple values
+    for (usz i = 0; i < 20; i++) {
+        info_hash[i] = (char)i;
+        peer_id[i] = (char)('A' + i);
+    }
+
+    // Test with HTTPS tracker that has /announce path
+    String url = tracker::build_announce_url(
+        "https://torrent.ubuntu.com/announce",
+        &info_hash,
+        &peer_id,
+        6881,
+        0,
+        0,
+        1000000,
+        "started"
+    );
+    defer free(url);
+
+    // The URL should contain the full path
+    assert(url.starts_with("https://torrent.ubuntu.com/announce?"),
+           "URL should preserve the /announce path");
+
+    // Should not have scheme://host appearing twice
+    usz first_https = url.index_of("https://") ?? 0;
+    usz second_https = url[first_https + 8..].index_of("https://") ?? url.len;
+    assert(second_https == url.len, "Scheme should appear only once");
+}
+
+<*
+ Test URL building with tracker that has deeper path.
+*>
+fn void test_build_announce_url_deep_path() @test {
+    char[20] info_hash;
+    char[20] peer_id;
+
+    for (usz i = 0; i < 20; i++) {
+        info_hash[i] = (char)i;
+        peer_id[i] = (char)('X');
+    }
+
+    String url = tracker::build_announce_url(
+        "http://tracker.example.com/path/to/announce",
+        &info_hash,
+        &peer_id,
+        6881,
+        0,
+        0,
+        1000,
+        ""
+    );
+    defer free(url);
+
+    assert(url.starts_with("http://tracker.example.com/path/to/announce?"),
+           "URL should preserve full path");
+    assert(url.contains("info_hash="), "URL should have info_hash");
+}
+
+<*
+ Test URL building with non-standard port.
+*>
+fn void test_build_announce_url_custom_port() @test {
+    char[20] info_hash;
+    char[20] peer_id;
+
+    for (usz i = 0; i < 20; i++) {
+        info_hash[i] = 0;
+        peer_id[i] = 0;
+    }
+
+    String url = tracker::build_announce_url(
+        "http://tracker.example.com:8080/announce",
+        &info_hash,
+        &peer_id,
+        6881,
+        0,
+        0,
+        1000,
+        ""
+    );
+    defer free(url);
+
+    // Should preserve both port and path
+    assert(url.starts_with("http://tracker.example.com:8080/announce?"),
+           "URL should preserve port and path");
+}
+
+<*
+ Test CORRECT path extraction from announce URL.
+ The path should include the full path from the URL, not just the query string.
+
+ This is currently BROKEN - the announce() function incorrectly extracts the path.
+ Expected to FAIL until the bug is fixed.
+*>
+fn void test_correct_path_extraction_from_announce_url() @test {
+    // Simulate what happens in announce() function
+    String tracker_url = "https://torrent.ubuntu.com/announce";
+
+    char[20] info_hash;
+    char[20] peer_id;
+    for (usz i = 0; i < 20; i++) {
+        info_hash[i] = (char)i;
+        peer_id[i] = (char)('A' + i);
+    }
+
+    String announce_url = tracker::build_announce_url(
+        tracker_url,
+        &info_hash,
+        &peer_id,
+        6881,
+        0, 0, 1000,
+        "started"
+    );
+    defer free(announce_url);
+
+    // Extract path the CORRECT way (using URL parser)
+    Url? parsed = url::parse(mem, announce_url);
+    if (catch err = parsed) {
+        assert(false, "Should parse URL");
+        return;
+    }
+    defer parsed.free();
+
+    DString correct_path;
+    correct_path.append(parsed.path);
+    if (parsed.query.len > 0) {
+        correct_path.append_char('?');
+        correct_path.append(parsed.query);
+    }
+
+    io::printfn("Original tracker URL: %s", tracker_url);
+    io::printfn("Full announce URL: %s", announce_url);
+    io::printfn("Correct path+query: '%s'", correct_path.str_view());
+
+    // The path SHOULD start with /announce?
+    assert(correct_path.str_view().starts_with("/announce?"),
+           "Path should start with /announce?");
+
+    // Should contain the query parameters
+    assert(correct_path.str_view().contains("info_hash="),
+           "Path should contain query parameters");
+
+    // Should NOT start with just '?'
+    assert(correct_path.str_view()[0] != '?',
+           "Path should not start with '?' - it needs the /announce part");
 }

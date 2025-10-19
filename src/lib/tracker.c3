@@ -286,6 +286,21 @@ fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort our_port,
     );
     defer free(announce_url);
 
+    // Parse the full announce URL to extract path + query
+    Url? full_url = url::parse(mem, announce_url);
+    if (catch err = full_url) {
+        return TRACKER_URL_INVALID?;
+    }
+    defer full_url.free();
+
+    // Build path + query string for HTTP request
+    DString path_and_query;
+    path_and_query.append(full_url.path);
+    if (full_url.query.len > 0) {
+        path_and_query.append_char('?');
+        path_and_query.append(full_url.query);
+    }
+
     // Create HTTP client
     any client = http::http_client(tracker_url_parsed.host, tracker_port, use_tls);
     if (!client.ptr) {
@@ -297,9 +312,9 @@ fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort our_port,
     String[] empty_headers;
     http::HttpResponse? http_response = ((http::HttpClient)client).request(
         "GET",
-        announce_url[torrent.announce.len..],  // Path + query
-        empty_headers,  // No custom headers
-        ""              // No body
+        path_and_query.str_view(),  // Path + query
+        empty_headers,               // No custom headers
+        ""                           // No body
     );
 
     if (catch err = http_response) {
