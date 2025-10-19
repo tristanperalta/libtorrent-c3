@@ -381,3 +381,130 @@ fn void test_decode_unexpected_end() @test
         assert(false, "Expected decode to fail for incomplete integer");
     }
 }
+
+// ============================================================================
+// Auto-Wrapping Macro Tests
+// ============================================================================
+
+fn void test_blist_wrap_strings() @test
+{
+    BencodeValue* list = bencode::@blist_wrap("hello", "world", "test");
+    defer bencode::free_bencode_value(list);
+
+    assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
+    assert(list.list.len == 3, "Expected 3 items");
+    assert(list.list[0].type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list[1].type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list[2].type == bencode::BencodeType.STRING, "Expected STRING");
+    assert((String)list.list[0].string == "hello");
+    assert((String)list.list[1].string == "world");
+    assert((String)list.list[2].string == "test");
+}
+
+fn void test_blist_wrap_integers() @test
+{
+    BencodeValue* list = bencode::@blist_wrap(1, 42, 100);
+    defer bencode::free_bencode_value(list);
+
+    assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
+    assert(list.list.len == 3, "Expected 3 items");
+    assert(list.list[0].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list[1].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list[2].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list[0].integer == 1);
+    assert(list.list[1].integer == 42);
+    assert(list.list[2].integer == 100);
+}
+
+fn void test_blist_wrap_mixed() @test
+{
+    BencodeValue* list = bencode::@blist_wrap("hello", 42, "world", 100);
+    defer bencode::free_bencode_value(list);
+
+    assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
+    assert(list.list.len == 4, "Expected 4 items");
+    assert(list.list[0].type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list[1].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list[2].type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list[3].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert((String)list.list[0].string == "hello");
+    assert(list.list[1].integer == 42);
+    assert((String)list.list[2].string == "world");
+    assert(list.list[3].integer == 100);
+}
+
+fn void test_bdict_wrap_basic() @test
+{
+    BencodeValue* dict = bencode::@bdict_wrap(
+        "name", "example",
+        "size", 1024
+    );
+    defer bencode::free_bencode_value(dict);
+
+    assert(dict.type == bencode::BencodeType.DICT, "Expected DICT type");
+    assert(dict.dict.len == 2, "Expected 2 keys");
+
+    BencodeValue* name = bencode::dict_get(dict, "name");
+    BencodeValue* size = bencode::dict_get(dict, "size");
+
+    assert(name != null, "Expected 'name' key to exist");
+    assert(size != null, "Expected 'size' key to exist");
+    assert(name.type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(size.type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert((String)name.string == "example");
+    assert(size.integer == 1024);
+}
+
+fn void test_bdict_wrap_complex() @test
+{
+    BencodeValue* dict = bencode::@bdict_wrap(
+        "name", "test",
+        "count", 5,
+        "description", "auto-wrapping test",
+        "value", 999
+    );
+    defer bencode::free_bencode_value(dict);
+
+    assert(dict.type == bencode::BencodeType.DICT, "Expected DICT type");
+    assert(dict.dict.len == 4, "Expected 4 keys");
+
+    BencodeValue* name = bencode::dict_get(dict, "name");
+    BencodeValue* count = bencode::dict_get(dict, "count");
+    BencodeValue* desc = bencode::dict_get(dict, "description");
+    BencodeValue* value = bencode::dict_get(dict, "value");
+
+    assert((String)name.string == "test");
+    assert(count.integer == 5);
+    assert((String)desc.string == "auto-wrapping test");
+    assert(value.integer == 999);
+}
+
+fn void test_blist_wrap_with_prewrapped() @test
+{
+    BencodeValue* wrapped = bencode::make_string("pre-wrapped");
+
+    BencodeValue* list = bencode::@blist_wrap("hello", wrapped, 42);
+    defer bencode::free_bencode_value(list);
+
+    assert(list.list.len == 3, "Expected 3 items");
+    assert((String)list.list[0].string == "hello");
+    assert((String)list.list[1].string == "pre-wrapped");
+    assert(list.list[2].integer == 42);
+}
+
+fn void test_bdict_wrap_with_prewrapped() @test
+{
+    BencodeValue* wrapped_val = bencode::make_integer(999);
+
+    BencodeValue* dict = bencode::@bdict_wrap(
+        "auto", "wrapped",
+        "manual", wrapped_val
+    );
+    defer bencode::free_bencode_value(dict);
+
+    BencodeValue* auto_val = bencode::dict_get(dict, "auto");
+    BencodeValue* manual_val = bencode::dict_get(dict, "manual");
+
+    assert((String)auto_val.string == "wrapped");
+    assert(manual_val.integer == 999);
+}

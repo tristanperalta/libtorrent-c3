@@ -746,3 +746,93 @@ macro BencodeValue* @bdict(...)
     $endfor
     return dict;
 }
+
+/**
+ * Macro: Auto-wrap a value based on its type.
+ *
+ * This helper macro automatically wraps primitive values in their
+ * corresponding bencode types based on compile-time type introspection.
+ *
+ * Supported types:
+ * - String → make_string()
+ * - int, long, ichar, isz → make_integer()
+ * - BencodeValue* → pass through (already wrapped)
+ *
+ * @param value The value to wrap
+ * @return A BencodeValue* containing the wrapped value
+ */
+macro BencodeValue* @wrap_value(value)
+{
+    var $type_name = $typeof(value).nameof;
+    $switch $type_name:
+        $case "String":
+            return make_string(value);
+        $case "int":
+        $case "long":
+        $case "ichar":
+        $case "isz":
+            return make_integer((long)value);
+        $case "BencodeValue*":
+            return value;
+        $default:
+            $error "Unsupported type for bencode auto-wrap: use make_string(), make_integer(), or pass BencodeValue*";
+    $endswitch
+}
+
+/**
+ * Macro: Create a bencode list with automatic type wrapping.
+ *
+ * This macro automatically wraps primitive values (String, int, long)
+ * in their corresponding bencode types, eliminating manual make_string()
+ * and make_integer() calls.
+ *
+ * Usage:
+ *   BencodeValue* list = @blist_wrap("hello", 42, "world");
+ *   // Equivalent to:
+ *   BencodeValue* list = @blist(
+ *       make_string("hello"),
+ *       make_integer(42),
+ *       make_string("world")
+ *   );
+ *
+ * @param ... Variable number of values to add to the list
+ * @return A BencodeValue* containing the list
+ */
+macro BencodeValue* @blist_wrap(...)
+{
+    BencodeValue* list = make_list();
+    $for var $i = 0; $i < $vacount; $i++:
+        list_append(list, @wrap_value($vaarg[$i]));
+    $endfor
+    return list;
+}
+
+/**
+ * Macro: Create a bencode dictionary with automatic value wrapping.
+ *
+ * This macro automatically wraps primitive values in their corresponding
+ * bencode types. Keys must still be String type.
+ *
+ * Usage:
+ *   BencodeValue* dict = @bdict_wrap(
+ *       "name", "example",
+ *       "size", 1024
+ *   );
+ *   // Equivalent to:
+ *   BencodeValue* dict = @bdict(
+ *       "name", make_string("example"),
+ *       "size", make_integer(1024)
+ *   );
+ *
+ * @param ... Variable number of key-value pairs (must be even)
+ * @return A BencodeValue* containing the dictionary
+ */
+macro BencodeValue* @bdict_wrap(...)
+{
+    $assert $vacount % 2 == 0;
+    BencodeValue* dict = make_dict();
+    $for var $i = 0; $i < $vacount; $i += 2:
+        dict_set(dict, $vaarg[$i], @wrap_value($vaarg[$i + 1]));
+    $endfor
+    return dict;
+}
