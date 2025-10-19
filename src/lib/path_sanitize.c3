@@ -3,7 +3,8 @@ module libtorrent::path_sanitize;
 import std::io::path;
 
 // Fault for fundamentally invalid paths that cannot be sanitized
-fault path_invalid;
+// Use faultdef (not fault) to avoid known C3 0.7.6 bug with pointer optionals
+faultdef PATH_INVALID;
 
 /**
  * Path sanitization utilities for BitTorrent file paths.
@@ -442,7 +443,7 @@ fn String? sanitize_torrent_path(String file_path, path::PathEnv path_env = path
     // Reject fundamentally invalid paths that should trigger info-hash fallback
     if (file_path == "." || file_path == "..")
     {
-        return path_invalid?;  // Return a fault to trigger info-hash fallback
+        return PATH_INVALID?;  // Return a fault to trigger info-hash fallback
     }
 
     // Step 1: UTF-8 validation and repair

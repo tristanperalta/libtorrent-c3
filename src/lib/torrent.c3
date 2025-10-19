@@ -405,6 +405,8 @@ fn TorrentFile*? parse(String data) @public => @pool()
     {
         // Replace with info-hash hex using stdlib hex::tencode()
         // Must copy to heap with malloc() because @pool() memory gets freed when function returns
+        // First free the old name (which was allocated when sanitization failed)
+        free(torrent.info.name);
         String temp_hex = hex::tencode(torrent.info_hash[..]);
         char* hex_persistent = (char*)malloc(temp_hex.len);
         foreach (i, c : temp_hex) hex_persistent[i] = c;
@@ -424,14 +426,10 @@ fn TorrentFile*? parse(String data) @public => @pool()
 fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
 {
     // Extract 'name' (required)
-    BencodeValue* name_val = bencode::dict_get(info_val, "name");
-    if (!name_val || name_val.type != bencode::BencodeType.STRING)
-    {
-        return TORRENT_MISSING_FIELD?;
-    }
+    BencodeValue* name_val = bencode::dict_get_required(bencode::BencodeType.STRING, info_val, "name", TORRENT_MISSING_FIELD)!;
     // Sanitize the torrent name for filesystem safety
-    String? sanitized_name = path_sanitize::sanitize_torrent_path((String)name_val.string);
-    if (catch err = sanitized_name)
+    String? sanitized_name_opt = path_sanitize::sanitize_torrent_path((String)name_val.string);
+    if (catch err = sanitized_name_opt)
     {
         // Sanitization failed (e.g., name is "." or "..") - copy to heap using malloc, will be replaced with hash later
         // Must use explicit heap allocation (not pool) so memory persists after parse() returns
@@ -442,7 +440,8 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     else
     {
         // Use sanitized string directly (it's heap-allocated)
-        info.name = sanitized_name;
+        // After the catch check, sanitized_name_opt is automatically unwrapped to String
+        info.name = sanitized_name_opt;
     }
 
     // Check for single-file vs multi-file mode
@@ -479,11 +478,7 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     }
 
     // Extract 'piece length' (required)
-    BencodeValue* piece_length_val = bencode::dict_get(info_val, "piece length");
-    if (!piece_length_val || piece_length_val.type != bencode::BencodeType.INTEGER)
-    {
-        return TORRENT_MISSING_FIELD?;
-    }
+    BencodeValue* piece_length_val = bencode::dict_get_required(bencode::BencodeType.INTEGER, info_val, "piece length", TORRENT_MISSING_FIELD)!;
     info.piece_length = piece_length_val.integer;
 
     // Validate piece_length is positive
@@ -493,11 +488,7 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     }
 
     // Extract 'pieces' (required)
-    BencodeValue* pieces_val = bencode::dict_get(info_val, "pieces");
-    if (!pieces_val || pieces_val.type != bencode::BencodeType.STRING)
-    {
-        return TORRENT_MISSING_FIELD?;
-    }
+    BencodeValue* pieces_val = bencode::dict_get_required(bencode::BencodeType.STRING, info_val, "pieces", TORRENT_MISSING_FIELD)!;
 
     // Validate pieces length (must be multiple of 20)
     if (pieces_val.string.len % 20 != 0)
@@ -543,11 +534,7 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         FileEntry* file = &info.files[i];
 
         // Extract 'length' (required)
-        BencodeValue* length = bencode::dict_get(file_dict, "length");
-        if (!length || length.type != bencode::BencodeType.INTEGER)
-        {
-            return TORRENT_MISSING_FIELD?;
-        }
+        BencodeValue* length = bencode::dict_get_required(bencode::BencodeType.INTEGER, file_dict, "length", TORRENT_MISSING_FIELD)!;
 
         file.length = length.integer;
 
@@ -562,11 +549,7 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         info.length += file.length;
 
         // Extract 'path' (required)
-        BencodeValue* path = bencode::dict_get(file_dict, "path");
-        if (!path || path.type != bencode::BencodeType.LIST)
-        {
-            return TORRENT_MISSING_FIELD?;
-        }
+        BencodeValue* path = bencode::dict_get_required(bencode::BencodeType.LIST, file_dict, "path", TORRENT_MISSING_FIELD)!;
 
         // Validate path has at least one component
         if (path.list.len == 0)

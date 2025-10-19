@@ -449,6 +449,25 @@ fn BencodeValue* dict_get(BencodeValue* dict, String key) @public
 }
 
 /**
+ * Get a required key from a bencode dictionary with type checking.
+ * Returns the value if found and of the correct type, otherwise returns fault.
+ *
+ * @param $Type The expected BencodeType (e.g., STRING, INTEGER, LIST, DICT)
+ * @param dict The dictionary to search
+ * @param key The key to look up
+ * @param fault_type The fault to return if key is missing or wrong type
+ */
+macro dict_get_required(btype, dict, key, fault_type)
+{
+    BencodeValue* val = dict_get(dict, key);
+    if (!val || val.type != btype)
+    {
+        return fault_type?;
+    }
+    return val;
+}
+
+/**
  * Free a BencodeValue and all its nested data.
  * Use with defer for automatic cleanup.
  *
