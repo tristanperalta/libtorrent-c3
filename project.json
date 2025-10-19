@@ -4,9 +4,10 @@
     "no-unused"
   ],
   "dependency-search-paths": [
-    "lib"
+    "lib",
+    "vendor/c3-vendor/libraries"
   ],
-  "dependencies": [],
+  "dependencies": ["curl"],
   "authors": [
     "Tristan Peralta <tristan@peralta.ph>",
     "Claude Code <noreply@anthropic.com>"
