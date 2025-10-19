@@ -4,6 +4,7 @@ import std::io;
 import std::hash::sha1;
 import std::net::url;
 import libtorrent::bencode;
+import libtorrent::path_sanitize;
 
 /**
  * Torrent File Parser
@@ -394,14 +395,14 @@ fn TorrentFile*? parse(String data) @public => @pool()
     torrent.info_hash = sha1::hash(info_encoded);
 
     // Validate torrent name (BEP 3 compliance)
-    // If name is empty, only contains dots, or has null bytes, use info-hash as name
-    if (torrent.info.name.len == 0 ||
-        torrent.info.name == "." ||
-        torrent.info.name == ".." ||
-        contains_null_bytes(torrent.info.name))
+    // If name is empty, ".", or "..", use info-hash as name
+    // Note: Null bytes and path traversal within names are handled by path sanitization
+    bool is_invalid = torrent.info.name.len == 0 ||
+                     (torrent.info.name.len == 1 && torrent.info.name[0] == '.') ||
+                     (torrent.info.name.len == 2 && torrent.info.name[0] == '.' && torrent.info.name[1] == '.');
+    if (is_invalid)
     {
-        // Free invalid name and replace with info-hash hex
-        if (torrent.info.name.len > 0) free(torrent.info.name);
+        // Replace with info-hash hex (no need to free pool-allocated memory)
         torrent.info.name = hash_to_hex(torrent.info_hash[..]);
     }
 
@@ -423,7 +424,21 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     {
         return TORRENT_MISSING_FIELD?;
     }
-    info.name = copy_string(name_val.string);
+    // Sanitize the torrent name for filesystem safety
+    String? sanitized_name = path_sanitize::sanitize_torrent_path((String)name_val.string);
+    if (catch err = sanitized_name)
+    {
+        // Sanitization failed (e.g., name is "." or "..") - copy to heap using malloc, will be replaced with hash later
+        // Must use explicit heap allocation (not pool) so memory persists after parse() returns
+        char* raw = (char*)malloc(name_val.string.len);
+        foreach (i, c : name_val.string) raw[i] = c;
+        info.name = (String)raw[:name_val.string.len];
+    }
+    else
+    {
+        // Use sanitized string directly (it's heap-allocated)
+        info.name = sanitized_name;
+    }
 
     // Check for single-file vs multi-file mode
     BencodeValue* length_val = bencode::dict_get(info_val, "length");
@@ -565,7 +580,20 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
             {
                 return TORRENT_INVALID_INFO?;
             }
-            file.path[j] = copy_string(component.string);
+            // Sanitize each path component
+            String? sanitized_component = path_sanitize::sanitize_torrent_path((String)component.string);
+            if (catch err = sanitized_component)
+            {
+                // Sanitization failed - copy to heap using malloc to avoid pool allocation issues
+                char* raw = (char*)malloc(component.string.len);
+                foreach (k, c : component.string) raw[k] = c;
+                file.path[j] = (String)raw[:component.string.len];
+            }
+            else
+            {
+                // Use sanitized string directly (it's heap-allocated)
+                file.path[j] = sanitized_component;
+            }
         }
     }
 

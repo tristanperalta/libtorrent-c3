@@ -27,3 +27,5 @@ headers/
 # Debug files
 *.dSYM/
 *.pdb
+
+.claude/

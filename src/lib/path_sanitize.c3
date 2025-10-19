@@ -2,6 +2,9 @@ module libtorrent::path_sanitize;
 
 import std::io::path;
 
+// Fault for fundamentally invalid paths that cannot be sanitized
+fault path_invalid;
+
 /**
  * Path sanitization utilities for BitTorrent file paths.
  *
@@ -436,6 +439,12 @@ fn String truncate_path(String str, usz max_len = 240) @public
  */
 fn String? sanitize_torrent_path(String file_path, path::PathEnv path_env = path::DEFAULT_ENV) @public
 {
+    // Reject fundamentally invalid paths that should trigger info-hash fallback
+    if (file_path == "." || file_path == "..")
+    {
+        return path_invalid?;  // Return a fault to trigger info-hash fallback
+    }
+
     // Step 1: UTF-8 validation and repair
     String utf8_str = file_path.copy(mem);
     repair_utf8(&utf8_str);
@@ -488,8 +497,8 @@ fn String? sanitize_torrent_path(String file_path, path::PathEnv path_env = path
             safe = safe[1..];
         }
 
-        // Handle special cases
-        if (safe == ".." || safe == "." || safe.len == 0)
+        // Handle empty path after stripping
+        if (safe.len == 0)
         {
             free(safe);
             safe = "_";

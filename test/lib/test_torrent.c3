@@ -1009,15 +1009,18 @@ fn void test_bad_name() @test
     TorrentFile* torrent = torrent::parse(data)!!;
     defer torrent::free_torrent_file(torrent);
 
-    // BEP 3: Name with null bytes should be replaced with info-hash hex
-    assert(torrent.info.name.len == 40, "Invalid name with null bytes should be replaced with 40-char info-hash");
-    // Verify it's a valid hex string (all chars are 0-9a-f)
-    for (usz i = 0; i < torrent.info.name.len; i++)
-    {
-        char c = torrent.info.name[i];
-        assert((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'),
-               "Info-hash should be lowercase hex");
+    // Name with null bytes is now sanitized (null bytes replaced with '_')
+    // instead of being replaced with info-hash
+    assert(torrent.info.name.len > 0, "Name should not be empty after sanitization");
+    // Check that name doesn't contain null bytes
+    bool has_null = false;
+    foreach (c : torrent.info.name) {
+        if (c == 0) {
+            has_null = true;
+            break;
+        }
     }
+    assert(!has_null, "Null bytes should be removed by sanitization");
     assert(torrent.info.length == 425, "Should parse file length");
 }
 
@@ -1749,4 +1752,219 @@ fn void test_error_zero_length() @test
     {
         assert(false, "Expected parse to fail for zero-length torrent");
     }
+}
+
+// ===================================
+// Path Sanitization Integration Tests
+// ===================================
+
+fn void test_sanitize_torrent_name_with_traversal() @test
+{
+    // Create a torrent with path traversal in the name using bencode encoder
+    BencodeValue* root = bencode::make_dict();
+    defer bencode::free_bencode_value(root);
+
+    // Add announce
+    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
+
+    // Build info dictionary
+    BencodeValue* info = bencode::make_dict();
+    bencode::dict_set(info, "name", bencode::make_string("../../../etc/file"));  // Path traversal!
+    bencode::dict_set(info, "length", bencode::make_integer(1000));
+    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
+
+    // Create 20-byte pieces hash
+    char[20] pieces_hash;
+    foreach (i, &c : pieces_hash) *c = 0;
+    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
+
+    bencode::dict_set(root, "info", info);
+
+    // Encode to bencode
+    String data = bencode::encode(root);
+    defer free(data);
+
+    TorrentFile* t = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(t);
+
+    // Path traversal should be removed by sanitization
+    io::printfn("Original name in bencode: '../../../etc/file'");
+    io::printfn("Sanitized name: '%s'", t.info.name);
+    assert(!t.info.name.contains(".."), "Path traversal '..' should be removed");
+    assert(t.info.name.len > 0, "Name should not be empty after sanitization");
+}
+
+fn void test_sanitize_torrent_name_with_null_bytes() @test
+{
+    // Create a torrent with null bytes in the name
+    BencodeValue* root = bencode::make_dict();
+    defer bencode::free_bencode_value(root);
+
+    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
+
+    BencodeValue* info = bencode::make_dict();
+
+    // Create name with null byte
+    char[9] name_with_null = {'t', 'e', 's', 't', 0, 'f', 'i', 'l', 'e'};
+    bencode::dict_set(info, "name", bencode::make_string((String)name_with_null[..]));
+    bencode::dict_set(info, "length", bencode::make_integer(1000));
+    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
+
+    char[20] pieces_hash;
+    foreach (i, &c : pieces_hash) *c = 0;
+    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
+
+    bencode::dict_set(root, "info", info);
+
+    String data = bencode::encode(root);
+    defer free(data);
+
+    TorrentFile* t = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(t);
+
+    // Null bytes should be replaced
+    io::printfn("Sanitized name (null bytes replaced): '%s'", t.info.name);
+    assert(!t.info.name.contains("\0"), "Null bytes should be removed");
+    assert(t.info.name.len > 0, "Name should not be empty after sanitization");
+}
+
+fn void test_sanitize_file_paths_with_invalid_utf8() @test
+{
+    // Create a multi-file torrent with invalid UTF-8 in path component
+    BencodeValue* root = bencode::make_dict();
+    defer bencode::free_bencode_value(root);
+
+    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
+
+    BencodeValue* info = bencode::make_dict();
+    bencode::dict_set(info, "name", bencode::make_string("testdata"));
+    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
+
+    char[20] pieces_hash;
+    foreach (i, &c : pieces_hash) *c = 0;
+    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
+
+    // Create files list
+    BencodeValue* files = bencode::make_list();
+
+    // First file with invalid UTF-8
+    BencodeValue* file1 = bencode::make_dict();
+    bencode::dict_set(file1, "length", bencode::make_integer(500));
+
+    // Path with invalid UTF-8 (incomplete 2-byte sequence)
+    char[9] invalid_utf8 = {'f', 'i', 'l', 'e', 0xc2, '.', 't', 'x', 't'};  // 0xc2 without continuation byte
+    BencodeValue* path1 = bencode::make_list();
+    bencode::list_append(path1, bencode::make_string("testdir"));
+    bencode::list_append(path1, bencode::make_string((String)invalid_utf8[..]));
+    bencode::dict_set(file1, "path", path1);
+    bencode::list_append(files, file1);
+
+    bencode::dict_set(info, "files", files);
+    bencode::dict_set(root, "info", info);
+
+    String data = bencode::encode(root);
+    defer free(data);
+
+    TorrentFile* t = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(t);
+
+    // Check that invalid UTF-8 was repaired
+    assert(t.info.is_multi_file, "Should be multi-file torrent");
+    assert(t.info.files.len == 1, "Should have 1 file");
+
+    io::printfn("Sanitized path component: '%s'", t.info.files[0].path[1]);
+    // Invalid UTF-8 should be repaired (replaced with underscore)
+    assert(!t.info.files[0].path[1].contains("\xc2"), "Invalid UTF-8 should be repaired");
+}
+
+fn void test_sanitize_file_paths_with_directional_chars() @test
+{
+    // Create a multi-file torrent with Unicode directional override characters
+    BencodeValue* root = bencode::make_dict();
+    defer bencode::free_bencode_value(root);
+
+    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
+
+    BencodeValue* info = bencode::make_dict();
+    bencode::dict_set(info, "name", bencode::make_string("testdata"));
+    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
+
+    char[20] pieces_hash;
+    foreach (i, &c : pieces_hash) *c = 0;
+    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
+
+    // Create files list
+    BencodeValue* files = bencode::make_list();
+
+    BencodeValue* file1 = bencode::make_dict();
+    bencode::dict_set(file1, "length", bencode::make_integer(500));
+
+    // Filename with RIGHT-TO-LEFT OVERRIDE character (U+202E = 0xE2 0x80 0xAE)
+    char[10] rtl_filename = {'t', 'e', 's', 't', 0xe2, 0x80, 0xae, 't', 'x', 't'};
+    BencodeValue* path1 = bencode::make_list();
+    bencode::list_append(path1, bencode::make_string("evil"));
+    bencode::list_append(path1, bencode::make_string((String)rtl_filename[..]));
+    bencode::dict_set(file1, "path", path1);
+    bencode::list_append(files, file1);
+
+    bencode::dict_set(info, "files", files);
+    bencode::dict_set(root, "info", info);
+
+    String data = bencode::encode(root);
+    defer free(data);
+
+    TorrentFile* t = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(t);
+
+    // Check that directional characters were removed
+    assert(t.info.is_multi_file, "Should be multi-file torrent");
+    assert(t.info.files.len == 1, "Should have 1 file");
+
+    String sanitized_filename = t.info.files[0].path[1];
+    io::printfn("Sanitized filename: '%s'", sanitized_filename);
+
+    // Directional override characters should be removed (security!)
+    assert(!sanitized_filename.contains("\xe2\x80\xae"), "Directional override chars should be removed");
+    assert(sanitized_filename.contains("txt"), "Valid text should remain");
+}
+
+fn void test_sanitize_long_file_paths() @test
+{
+    // Create a torrent with a very long filename
+    DString long_name;
+    for (int i = 0; i < 260; i++)
+    {
+        long_name.append_char('a');
+    }
+    long_name.append(".txt");  // Add extension
+
+    BencodeValue* root = bencode::make_dict();
+    defer bencode::free_bencode_value(root);
+
+    bencode::dict_set(root, "announce", bencode::make_string("http://tracker.example.com/announce"));
+
+    BencodeValue* info = bencode::make_dict();
+    bencode::dict_set(info, "name", bencode::make_string(long_name.str_view()));
+    bencode::dict_set(info, "length", bencode::make_integer(1000));
+    bencode::dict_set(info, "piece length", bencode::make_integer(32768));
+
+    char[20] pieces_hash;
+    foreach (i, &c : pieces_hash) *c = 0;
+    bencode::dict_set(info, "pieces", bencode::make_string((String)pieces_hash[..]));
+
+    bencode::dict_set(root, "info", info);
+
+    String data = bencode::encode(root);
+    defer free(data);
+
+    TorrentFile* t = torrent::parse(data)!!;
+    defer torrent::free_torrent_file(t);
+
+    // Check that path was truncated to 240 chars
+    io::printfn("Original length: %d", long_name.len());
+    io::printfn("Sanitized length: %d", t.info.name.len);
+    assert(t.info.name.len <= 240, "Path should be truncated to 240 chars");
+
+    // Extension should be preserved
+    assert(t.info.name.ends_with(".txt"), "Extension should be preserved during truncation");
 }
