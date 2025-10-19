@@ -1,0 +1,440 @@
+module libtorrent::piece_picker::test;
+
+import libtorrent::piece_picker;
+import std::io;
+
+// ============================================================================
+// Creation and Initialization Tests
+// ============================================================================
+
+fn void test_create_picker() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(10);
+    defer piece_picker::free(&picker);
+
+    assert(picker.num_pieces == 10, "Should track 10 pieces");
+    assert(picker.pieces_complete == 0, "Should start with 0 complete");
+    assert(picker.pieces_downloading == 0, "Should start with 0 downloading");
+}
+
+fn void test_initial_state_all_free() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    // All pieces should start as FREE
+    for (usz i = 0; i < 5; i++)
+    {
+        assert(picker.pieces[i].state == piece_picker::PieceState.FREE, "Piece should start FREE");
+        assert(picker.pieces[i].availability == 0, "Piece should start with 0 availability");
+    }
+}
+
+fn void test_create_large_picker() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(10000);
+    defer piece_picker::free(&picker);
+
+    assert(picker.num_pieces == 10000, "Should handle large number of pieces");
+    assert(picker.pieces.len == 10000, "Should allocate correct array size");
+}
+
+// ============================================================================
+// Peer Bitfield Update Tests
+// ============================================================================
+
+fn void test_update_peer_bitfield() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    // Peer has pieces 0, 2, 4
+    bool[5] peer_pieces = {true, false, true, false, true};
+
+    picker.update_peer_bitfield(peer_pieces[..])!!;
+
+    assert(picker.get_availability(0) == 1, "Piece 0 availability should be 1");
+    assert(picker.get_availability(1) == 0, "Piece 1 availability should be 0");
+    assert(picker.get_availability(2) == 1, "Piece 2 availability should be 1");
+    assert(picker.get_availability(3) == 0, "Piece 3 availability should be 0");
+    assert(picker.get_availability(4) == 1, "Piece 4 availability should be 1");
+}
+
+fn void test_update_multiple_peers() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(3);
+    defer piece_picker::free(&picker);
+
+    // Peer 1 has piece 0
+    bool[3] peer1 = {true, false, false};
+    picker.update_peer_bitfield(peer1[..])!!;
+
+    // Peer 2 has pieces 0 and 1
+    bool[3] peer2 = {true, true, false};
+    picker.update_peer_bitfield(peer2[..])!!;
+
+    // Peer 3 has all pieces
+    bool[3] peer3 = {true, true, true};
+    picker.update_peer_bitfield(peer3[..])!!;
+
+    assert(picker.get_availability(0) == 3, "Piece 0 should have availability 3");
+    assert(picker.get_availability(1) == 2, "Piece 1 should have availability 2");
+    assert(picker.get_availability(2) == 1, "Piece 2 should have availability 1");
+}
+
+fn void test_update_bitfield_wrong_size() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    bool[3] wrong_size = {true, false, true};
+    fault? result = picker.update_peer_bitfield(wrong_size[..]);
+
+    if (catch excuse = result)
+    {
+        // Expected to fail
+        return;
+    }
+    assert(false, "Should fail on wrong bitfield size");
+}
+
+// ============================================================================
+// Peer Has Piece Tests
+// ============================================================================
+
+fn void test_peer_has_piece() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    picker.peer_has_piece(2)!!;
+    assert(picker.get_availability(2) == 1, "Piece 2 should have availability 1");
+
+    picker.peer_has_piece(2)!!;
+    assert(picker.get_availability(2) == 2, "Piece 2 should have availability 2");
+}
+
+fn void test_peer_has_piece_out_of_bounds() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    fault? result = picker.peer_has_piece(10);
+    if (catch excuse = result)
+    {
+        // Expected to fail
+        return;
+    }
+    assert(false, "Should fail on out of bounds index");
+}
+
+// ============================================================================
+// Rarest-First Piece Selection Tests
+// ============================================================================
+
+fn void test_pick_rarest_piece() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    // Set up availability: piece 0=3, 1=1, 2=2, 3=0, 4=1
+    for (usz i = 0; i < 3; i++) picker.peer_has_piece(0)!!;
+    for (usz i = 0; i < 1; i++) picker.peer_has_piece(1)!!;
+    for (usz i = 0; i < 2; i++) picker.peer_has_piece(2)!!;
+    for (usz i = 0; i < 1; i++) picker.peer_has_piece(4)!!;
+
+    // Peer has pieces 0, 1, 2, 4 (not 3)
+    bool[5] peer_pieces = {true, true, true, false, true};
+
+    // Should pick piece 1 or 4 (both have availability 1)
+    uint? piece_opt = picker.pick_piece(peer_pieces[..]);
+    piece_opt!!;
+    uint piece = piece_opt!!;
+
+    assert(piece == 1 || piece == 4, "Should pick rarest piece (1 or 4)");
+    assert(picker.get_availability(piece) == 1, "Picked piece should have lowest availability");
+}
+
+fn void test_pick_piece_skips_complete() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(3);
+    defer piece_picker::free(&picker);
+
+    // All pieces have same availability
+    bool[3] peer_pieces = {true, true, true};
+    picker.update_peer_bitfield(peer_pieces[..])!!;
+
+    // Mark piece 0 as complete
+    picker.mark_complete(0)!!;
+
+    // Should pick piece 1 or 2, not 0
+    uint? piece_opt = picker.pick_piece(peer_pieces[..]);
+    piece_opt!!;
+    uint piece = piece_opt!!;
+
+    assert(piece != 0, "Should not pick completed piece");
+    assert(piece == 1 || piece == 2, "Should pick available piece");
+}
+
+fn void test_pick_piece_skips_downloading() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(3);
+    defer piece_picker::free(&picker);
+
+    bool[3] peer_pieces = {true, true, true};
+    picker.update_peer_bitfield(peer_pieces[..])!!;
+
+    // Mark piece 1 as downloading
+    picker.mark_downloading(1)!!;
+
+    uint? piece_opt = picker.pick_piece(peer_pieces[..]);
+    piece_opt!!;
+    uint piece = piece_opt!!;
+
+    assert(piece != 1, "Should not pick downloading piece");
+    assert(piece == 0 || piece == 2, "Should pick free piece");
+}
+
+fn void test_pick_piece_no_available() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(3);
+    defer piece_picker::free(&picker);
+
+    // Peer has no pieces
+    bool[3] peer_pieces = {false, false, false};
+    picker.update_peer_bitfield(peer_pieces[..])!!;
+
+    uint? result = picker.pick_piece(peer_pieces[..]);
+    if (catch excuse = result)
+    {
+        // Expected to fail
+        return;
+    }
+    assert(false, "Should fail when peer has no pieces we need");
+}
+
+fn void test_pick_piece_all_complete() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(3);
+    defer piece_picker::free(&picker);
+
+    bool[3] peer_pieces = {true, true, true};
+    picker.update_peer_bitfield(peer_pieces[..])!!;
+
+    // Mark all pieces complete
+    picker.mark_complete(0)!!;
+    picker.mark_complete(1)!!;
+    picker.mark_complete(2)!!;
+
+    uint? result = picker.pick_piece(peer_pieces[..]);
+    if (catch excuse = result)
+    {
+        // Expected to fail
+        return;
+    }
+    assert(false, "Should fail when all pieces are complete");
+}
+
+fn void test_pick_piece_wrong_bitfield_size() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    bool[3] wrong_size = {true, true, true};
+    uint? result = picker.pick_piece(wrong_size[..]);
+
+    if (catch excuse = result)
+    {
+        // Expected to fail
+        return;
+    }
+    assert(false, "Should fail on wrong bitfield size");
+}
+
+// ============================================================================
+// State Transition Tests
+// ============================================================================
+
+fn void test_mark_downloading() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    assert(picker.pieces_downloading == 0, "Should start with 0 downloading");
+
+    picker.mark_downloading(2)!!;
+
+    assert(picker.pieces[2].state == piece_picker::PieceState.DOWNLOADING, "Piece should be downloading");
+    assert(picker.pieces_downloading == 1, "Should have 1 downloading");
+}
+
+fn void test_mark_complete() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    picker.mark_downloading(1)!!;
+    assert(picker.pieces_downloading == 1, "Should have 1 downloading");
+    assert(picker.pieces_complete == 0, "Should have 0 complete");
+
+    picker.mark_complete(1)!!;
+
+    assert(picker.pieces[1].state == piece_picker::PieceState.COMPLETE, "Piece should be complete");
+    assert(picker.pieces_downloading == 0, "Should have 0 downloading");
+    assert(picker.pieces_complete == 1, "Should have 1 complete");
+}
+
+fn void test_mark_free_from_downloading() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    picker.mark_downloading(3)!!;
+    assert(picker.pieces_downloading == 1, "Should have 1 downloading");
+
+    picker.mark_free(3)!!;
+
+    assert(picker.pieces[3].state == piece_picker::PieceState.FREE, "Piece should be free");
+    assert(picker.pieces_downloading == 0, "Should have 0 downloading");
+}
+
+fn void test_mark_complete_directly_from_free() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    // Can mark complete directly without marking downloading first
+    picker.mark_complete(2)!!;
+
+    assert(picker.pieces[2].state == piece_picker::PieceState.COMPLETE, "Piece should be complete");
+    assert(picker.pieces_complete == 1, "Should have 1 complete");
+}
+
+// ============================================================================
+// Query Tests
+// ============================================================================
+
+fn void test_have_piece() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    assert(!picker.have_piece(2), "Should not have piece initially");
+
+    picker.mark_complete(2)!!;
+
+    assert(picker.have_piece(2), "Should have piece after completion");
+}
+
+fn void test_is_complete() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(3);
+    defer piece_picker::free(&picker);
+
+    assert(!picker.is_complete(), "Should not be complete initially");
+
+    picker.mark_complete(0)!!;
+    picker.mark_complete(1)!!;
+    assert(!picker.is_complete(), "Should not be complete with 2/3 pieces");
+
+    picker.mark_complete(2)!!;
+    assert(picker.is_complete(), "Should be complete with all pieces");
+}
+
+fn void test_get_progress() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(10);
+    defer piece_picker::free(&picker);
+
+    picker.mark_downloading(0)!!;
+    picker.mark_downloading(1)!!;
+    picker.mark_complete(5)!!;
+    picker.mark_complete(6)!!;
+    picker.mark_complete(7)!!;
+
+    usz total, complete, downloading;
+    picker.get_progress(&total, &complete, &downloading);
+
+    assert(total == 10, "Total should be 10");
+    assert(complete == 3, "Complete should be 3");
+    assert(downloading == 2, "Downloading should be 2");
+}
+
+fn void test_get_availability() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    assert(picker.get_availability(0) == 0, "Should start with 0 availability");
+
+    picker.peer_has_piece(0)!!;
+    assert(picker.get_availability(0) == 1, "Should have availability 1");
+
+    picker.peer_has_piece(0)!!;
+    assert(picker.get_availability(0) == 2, "Should have availability 2");
+}
+
+fn void test_get_availability_out_of_bounds() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    uint avail = picker.get_availability(100);
+    assert(avail == 0, "Out of bounds should return 0");
+}
+
+// ============================================================================
+// Edge Cases
+// ============================================================================
+
+fn void test_empty_picker() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(0);
+    defer piece_picker::free(&picker);
+
+    assert(picker.num_pieces == 0, "Should handle 0 pieces");
+    assert(picker.is_complete(), "0 pieces means complete");
+}
+
+fn void test_single_piece() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(1);
+    defer piece_picker::free(&picker);
+
+    bool[1] peer_pieces = {true};
+    picker.update_peer_bitfield(peer_pieces[..])!!;
+
+    uint? piece_opt = picker.pick_piece(peer_pieces[..]);
+    piece_opt!!;
+    assert(piece_opt!! == 0, "Should pick the only piece");
+
+    picker.mark_complete(0)!!;
+    assert(picker.is_complete(), "Should be complete");
+}
+
+fn void test_rarest_first_deterministic() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(5);
+    defer piece_picker::free(&picker);
+
+    // Create distinct availability levels
+    picker.peer_has_piece(0)!!;
+    picker.peer_has_piece(0)!!;
+    picker.peer_has_piece(0)!!; // availability 3
+
+    picker.peer_has_piece(1)!!;
+    picker.peer_has_piece(1)!!; // availability 2
+
+    picker.peer_has_piece(2)!!; // availability 1
+
+    // Piece 3 and 4 have availability 0
+
+    // Peer has pieces 0, 1, 2
+    bool[5] peer_pieces = {true, true, true, false, false};
+
+    uint? piece_opt = picker.pick_piece(peer_pieces[..]);
+    piece_opt!!;
+
+    // Should pick piece 2 (lowest availability among available)
+    assert(piece_opt!! == 2, "Should pick rarest available piece (piece 2)");
+}

@@ -29,12 +29,16 @@ alias Loop = void;        // uv_loop_t
 alias Handle = void;      // uv_handle_t (use handle_get_data/handle_set_data)
 alias Stream = void;      // uv_stream_t (base for TCP, pipe, etc.)
 alias Tcp = void;         // uv_tcp_t
+alias Udp = void;         // uv_udp_t
+alias Timer = void;       // uv_timer_t
 
 // Request types
 alias Req = void;         // uv_req_t (use req_get_data/req_set_data)
 alias Connect = void;     // uv_connect_t
 alias Write = void;       // uv_write_t
 alias Shutdown = void;    // uv_shutdown_t
+alias UdpSend = void;     // uv_udp_send_t
+alias GetAddrInfo = void; // uv_getaddrinfo_t
 
 // Filesystem request (uv_fs_t) - needs actual storage
 struct Fs
@@ -91,13 +95,20 @@ struct Buf
 	usz len;
 }
 
-// Socket address structures (from POSIX/libc)
+<*
+ Generic socket address (base type).
+ Cast to Sockaddr_in or Sockaddr_in6 for specific protocols.
+*>
 struct Sockaddr
 {
-	ushort sa_family;
+	ushort sa_family;  // Address family (AF_INET, AF_INET6, etc.)
 	char[14] sa_data;
 }
 
+<*
+ IPv4 socket address.
+ Used for TCP/UDP connections over IPv4.
+*>
 struct Sockaddr_in
 {
 	ushort sin_family;
@@ -106,6 +117,10 @@ struct Sockaddr_in
 	char[8] sin_zero;
 }
 
+<*
+ IPv6 socket address.
+ Used for TCP/UDP connections over IPv6.
+*>
 struct Sockaddr_in6
 {
 	ushort sin6_family;
@@ -143,6 +158,22 @@ struct FileStat
 	ulong st_birthtim_nsec;
 }
 
+<*
+ Address info structure (from struct addrinfo).
+ Used for DNS resolution results.
+*>
+struct AddrInfo
+{
+	int ai_flags;
+	int ai_family;       // AF_INET, AF_INET6, etc.
+	int ai_socktype;     // SOCK_STREAM, SOCK_DGRAM, etc.
+	int ai_protocol;     // IPPROTO_TCP, IPPROTO_UDP, etc.
+	uint ai_addrlen;
+	Sockaddr* ai_addr;   // Socket address
+	char* ai_canonname;  // Canonical name
+	AddrInfo* ai_next;   // Next in linked list
+}
+
 // ============================================================================
 // Callback Types
 // ============================================================================
@@ -168,15 +199,26 @@ alias CloseCb = fn void(Handle* handle);
 // Filesystem callback - called when a filesystem operation completes
 alias FsCb = fn void(Fs* req);
 
+// UDP send callback - called when a UDP send request completes
+alias UdpSendCb = fn void(UdpSend* req, int status);
+
+// UDP receive callback - called when data is received on a UDP socket
+alias UdpRecvCb = fn void(Udp* handle, isz nread, Buf* buf, Sockaddr* addr, uint flags);
+
+// Timer callback - called when a timer expires
+alias TimerCb = fn void(Timer* handle);
+
+// DNS callback - called when DNS resolution completes
+alias GetAddrInfoCb = fn void(GetAddrInfo* req, int status, AddrInfo* res);
+
 // ============================================================================
 // Event Loop Functions
 // ============================================================================
 
 <*
  Initialize an event loop.
- Must call uv_loop_close when done.
 
- @param loop : "Pointer to loop structure to initialize"
+ @param loop : "Loop to initialize"
  @return "0 on success, negative error code on failure"
 *>
 fn int loop_init(Loop* loop) @extern("uv_loop_init");
@@ -184,41 +226,62 @@ fn int loop_init(Loop* loop) @extern("uv_loop_init");
 <*
  Run the event loop.
 
- @param loop : "The event loop"
- @param mode : "Run mode (DEFAULT, ONCE, or NOWAIT)"
- @return "0 on success, negative error code on failure"
+ @param loop : "Event loop to run"
+ @param mode : "Run mode (DEFAULT, ONCE, NOWAIT)"
+ @return "0 when no more active handles/requests, or mode-specific value"
 *>
 fn int run(Loop* loop, RunMode mode) @extern("uv_run");
 
 <*
  Stop the event loop.
- Causes uv_run to end at the earliest safe point.
 
- @param loop : "The event loop to stop"
+ @param loop : "Event loop to stop"
 *>
 fn void stop(Loop* loop) @extern("uv_stop");
 
 <*
- Close the event loop, releasing resources.
- All handles must be closed before calling this.
+ Close the event loop and release resources.
 
- @param loop : "The event loop to close"
- @return "0 on success, UV_EBUSY if handles are still active"
+ @param loop : "Event loop to close"
+ @return "0 on success, UV_EBUSY if there are still active handles"
 *>
 fn int loop_close(Loop* loop) @extern("uv_loop_close");
 
 <*
- Check if loop has active handles or requests.
+ Create a new event loop.
 
- @param loop : "The event loop"
- @return "Non-zero if there are active handles/requests, 0 otherwise"
+ @return "Pointer to newly allocated loop, or null on error"
+*>
+fn Loop* loop_new() @extern("uv_loop_new");
+
+<*
+ Delete an event loop created with loop_new().
+
+ @param loop : "Loop to delete"
+*>
+fn void loop_delete(Loop* loop) @extern("uv_loop_delete");
+
+<*
+ Get the default event loop.
+ This is a global singleton loop.
+
+ @return "Pointer to default loop"
+*>
+fn Loop* default_loop() @extern("uv_default_loop");
+
+<*
+ Check if the event loop is alive.
+ A loop is alive if it has active or ref'd handles.
+
+ @param loop : "Event loop"
+ @return "Non-zero if alive, 0 otherwise"
 *>
 fn int loop_alive(Loop* loop) @extern("uv_loop_alive");
 
 <*
- Get size of loop structure (for allocation).
+ Get the size of a loop structure.
 
- @return "Size in bytes of uv_loop_t"
+ @return "Size in bytes"
 *>
 fn usz loop_size() @extern("uv_loop_size");
 
@@ -227,64 +290,128 @@ fn usz loop_size() @extern("uv_loop_size");
 // ============================================================================
 
 <*
- Get size of handle structure for a given type.
+ Allocate memory for a handle of the given type.
+
+ The allocated handle must be initialized with the appropriate init function
+ (e.g., tcp_init for TCP handles).
+
+ @param $Type : "Type of handle to allocate"
+ @param type : "Handle type enum value"
+ @return "Pointer to allocated handle"
+*>
+macro void* alloc_handle($Type, type)
+{
+	usz size = handle_size(type);
+	return mem::calloc(size);
+}
+
+<*
+ Get the size of a handle type.
 
  @param type : "Handle type"
- @return "Size in bytes of handle structure"
+ @return "Size in bytes"
 *>
 fn usz handle_size(HandleType type) @extern("uv_handle_size");
 
 <*
  Close a handle.
- Callback will be called when fully closed.
+ Must be called on each handle before freeing.
 
  @param handle : "Handle to close"
- @param close_cb : "Callback called when close completes"
+ @param cb : "Optional callback to call when close completes"
 *>
-fn void close(Handle* handle, CloseCb close_cb) @extern("uv_close");
+fn void close(Handle* handle, CloseCb cb) @extern("uv_close");
 
 <*
- Check if handle is active.
+ Check if a handle is active.
+ Active means the handle has some operation pending or ongoing.
 
  @param handle : "Handle to check"
  @return "Non-zero if active, 0 otherwise"
 *>
 fn int is_active(Handle* handle) @extern("uv_is_active");
 
+<*
+ Set user data associated with a handle.
+
+ @param handle : "Handle to set data on"
+ @param data : "User data pointer"
+*>
+macro void handle_set(handle, data)
+{
+	uv::handle_set_data((uv::Handle*)handle, data);
+}
+
+<*
+ Get user data associated with a handle.
+
+ @param $Type : "Return type for cast"
+ @param handle : "Handle to get data from"
+ @return "User data pointer"
+*>
+macro void* handle_get($Type, handle)
+{
+	return ($Type*)uv::handle_get_data((uv::Handle*)handle);
+}
+
+<*
+ Set user data associated with a handle (internal).
+
+ @param handle : "Handle"
+ @param data : "User data pointer"
+*>
+fn void handle_set_data(Handle* handle, void* data) @extern("uv_handle_set_data");
+
+<*
+ Get user data associated with a handle (internal).
+
+ @param handle : "Handle"
+ @return "User data pointer"
+*>
+fn void* handle_get_data(Handle* handle) @extern("uv_handle_get_data");
+
 // ============================================================================
-// Stream Functions
+// Request Functions
 // ============================================================================
 
 <*
- Start reading from a stream.
- Callback will be called when data arrives or errors occur.
+ Set user data associated with a request.
 
- @param stream : "Stream to read from"
- @param alloc_cb : "Allocation callback to provide buffers"
- @param read_cb : "Read callback when data arrives"
- @return "0 on success, negative error code on failure"
+ @param req : "Request to set data on"
+ @param data : "User data pointer"
 *>
-fn int read_start(Stream* stream, AllocCb alloc_cb, ReadCb read_cb) @extern("uv_read_start");
+macro void req_set(req, data)
+{
+	uv::req_set_data((uv::Req*)req, data);
+}
 
 <*
- Stop reading from a stream.
+ Get user data associated with a request.
 
- @param stream : "Stream to stop reading"
- @return "0 on success, negative error code on failure"
+ @param $Type : "Return type for cast"
+ @param req : "Request to get data from"
+ @return "User data pointer"
 *>
-fn int read_stop(Stream* stream) @extern("uv_read_stop");
+macro void* req_get($Type, req)
+{
+	return ($Type*)uv::req_get_data((uv::Req*)req);
+}
 
 <*
- Write data to a stream.
+ Set user data associated with a request (internal).
 
- @param req : "Write request structure"
- @param stream : "Stream to write to"
- @param bufs : "Array of buffers to write"
- @param nbufs : "Number of buffers"
- @param cb : "Callback when write completes"
- @return "0 on success, negative error code on failure"
+ @param req : "Request"
+ @param data : "User data pointer"
 *>
-fn int write(Write* req, Stream* stream, Buf* bufs, uint nbufs, WriteCb cb) @extern("uv_write");
+fn void req_set_data(Req* req, void* data) @extern("uv_req_set_data");
+
+<*
+ Get user data associated with a request (internal).
+
+ @param req : "Request"
+ @return "User data pointer"
+*>
+fn void* req_get_data(Req* req) @extern("uv_req_get_data");
 
 // ============================================================================
 // TCP Functions
@@ -294,219 +421,216 @@ fn int write(Write* req, Stream* stream, Buf* bufs, uint nbufs, WriteCb cb) @ext
  Initialize a TCP handle.
 
  @param loop : "Event loop"
- @param handle : "TCP handle to initialize"
+ @param tcp : "TCP handle to initialize"
  @return "0 on success, negative error code on failure"
 *>
-fn int tcp_init(Loop* loop, Tcp* handle) @extern("uv_tcp_init");
+fn int tcp_init(Loop* loop, Tcp* tcp) @extern("uv_tcp_init");
 
 <*
- Connect to a TCP endpoint.
+ Connect to a TCP server.
 
- @param req : "Connect request structure"
- @param handle : "TCP handle"
- @param addr : "Socket address to connect to"
- @param cb : "Callback when connection completes"
+ @param req : "Connect request"
+ @param tcp : "TCP handle"
+ @param addr : "Server address"
+ @param cb : "Callback called when connection completes"
  @return "0 on success, negative error code on failure"
 *>
-fn int tcp_connect(Connect* req, Tcp* handle, Sockaddr* addr, ConnectCb cb) @extern("uv_tcp_connect");
+fn int tcp_connect(Connect* req, Tcp* tcp, Sockaddr* addr, ConnectCb cb) @extern("uv_tcp_connect");
 
 <*
- Enable/disable Nagle's algorithm.
+ Bind a TCP handle to an address.
 
- @param handle : "TCP handle"
- @param enable : "1 to disable Nagle (nodelay), 0 to enable"
+ @param tcp : "TCP handle"
+ @param addr : "Local address to bind to"
+ @param flags : "Bind flags (0 for default)"
  @return "0 on success, negative error code on failure"
 *>
-fn int tcp_nodelay(Tcp* handle, int enable) @extern("uv_tcp_nodelay");
+fn int tcp_bind(Tcp* tcp, Sockaddr* addr, uint flags) @extern("uv_tcp_bind");
 
 <*
- Enable/disable TCP keep-alive.
+ Enable or disable Nagle's algorithm on a TCP handle.
 
- @param handle : "TCP handle"
- @param enable : "1 to enable, 0 to disable"
- @param delay : "Initial delay in seconds (only used if enable=1)"
+ @param tcp : "TCP handle"
+ @param enable : "1 to disable Nagle (enable no-delay), 0 to enable Nagle"
  @return "0 on success, negative error code on failure"
 *>
-fn int tcp_keepalive(Tcp* handle, int enable, uint delay) @extern("uv_tcp_keepalive");
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
+fn int tcp_nodelay(Tcp* tcp, int enable) @extern("uv_tcp_nodelay");
 
 <*
- Initialize a buffer with a base pointer and length.
+ Enable or disable TCP keepalive.
 
- @param base : "Pointer to buffer memory"
- @param len : "Length of buffer"
- @return "Initialized Buf structure"
+ @param tcp : "TCP handle"
+ @param enable : "1 to enable keepalive, 0 to disable"
+ @param delay : "Keepalive delay in seconds (only used if enable is 1)"
+ @return "0 on success, negative error code on failure"
 *>
-fn Buf buf_init(char* base, uint len) @extern("uv_buf_init");
+fn int tcp_keepalive(Tcp* tcp, int enable, uint delay) @extern("uv_tcp_keepalive");
 
 <*
- Get description of an error code.
+ Listen for incoming connections.
 
- @param err : "Error code (negative number)"
- @return "String describing the error"
+ @param stream : "Stream handle (TCP)"
+ @param backlog : "Connection backlog size"
+ @param cb : "Callback called when a new connection arrives"
+ @return "0 on success, negative error code on failure"
 *>
-fn char* strerror(int err) @extern("uv_strerror");
+fn int listen(Stream* stream, int backlog, ConnectionCb cb) @extern("uv_listen");
 
 <*
- Get error name.
+ Accept an incoming connection.
 
- @param err : "Error code"
- @return "String name of error (e.g., 'ECONNREFUSED')"
+ @param server : "Server stream handle"
+ @param client : "Client stream handle (must be initialized)"
+ @return "0 on success, negative error code on failure"
 *>
-fn char* err_name(int err) @extern("uv_err_name");
+fn int accept(Stream* server, Stream* client) @extern("uv_accept");
+
+<*
+ Start reading from a stream.
+
+ @param stream : "Stream to read from"
+ @param alloc_cb : "Callback to allocate read buffer"
+ @param read_cb : "Callback called when data is available"
+ @return "0 on success, negative error code on failure"
+*>
+fn int read_start(Stream* stream, AllocCb alloc_cb, ReadCb read_cb) @extern("uv_read_start");
+
+<*
+ Stop reading from a stream.
+
+ @param stream : "Stream to stop reading from"
+ @return "0 on success, negative error code on failure"
+*>
+fn int read_stop(Stream* stream) @extern("uv_read_stop");
+
+<*
+ Write data to a stream.
+
+ @param req : "Write request"
+ @param stream : "Stream to write to"
+ @param bufs : "Array of buffers to write"
+ @param nbufs : "Number of buffers"
+ @param cb : "Callback called when write completes"
+ @return "0 on success, negative error code on failure"
+*>
+fn int write(Write* req, Stream* stream, Buf* bufs, uint nbufs, WriteCb cb) @extern("uv_write");
+
+<*
+ Shutdown the write side of a stream.
+
+ @param req : "Shutdown request"
+ @param stream : "Stream to shutdown"
+ @param cb : "Callback called when shutdown completes"
+ @return "0 on success, negative error code on failure"
+*>
+fn int shutdown(Shutdown* req, Stream* stream, WriteCb cb) @extern("uv_shutdown");
 
 // ============================================================================
-// DNS/Address Functions
+// Address Functions
 // ============================================================================
 
 <*
- Convert address string and port to sockaddr.
+ Convert IPv4 address string to binary form.
 
- @param ip : "IP address string (e.g., '127.0.0.1')"
- @param port : "Port number"
+ @param ip : "IPv4 address string (e.g., 127.0.0.1)"
  @param addr : "Output sockaddr_in structure"
  @return "0 on success, negative error code on failure"
 *>
 fn int ip4_addr(char* ip, int port, Sockaddr_in* addr) @extern("uv_ip4_addr");
 
 <*
- Convert IPv6 address string and port to sockaddr.
+ Convert IPv6 address string to binary form.
 
- @param ip : "IPv6 address string"
- @param port : "Port number"
+ @param ip : "IPv6 address string (e.g., ::1)"
  @param addr : "Output sockaddr_in6 structure"
  @return "0 on success, negative error code on failure"
 *>
 fn int ip6_addr(char* ip, int port, Sockaddr_in6* addr) @extern("uv_ip6_addr");
 
-// ============================================================================
-// Data Field Access Functions
-// ============================================================================
+<*
+ Convert IPv4 binary address to string form.
+
+ @param src : "Input sockaddr_in structure"
+ @param dst : "Output buffer for string"
+ @param size : "Size of output buffer"
+ @return "0 on success, negative error code on failure"
+*>
+fn int ip4_name(Sockaddr_in* src, char* dst, usz size) @extern("uv_ip4_name");
 
 <*
- Set user data on a handle.
- All handles have a data field that can store a user pointer.
+ Convert IPv6 binary address to string form.
 
- @param handle: "Handle to set data on"
- @param data: "User data pointer"
+ @param src : "Input sockaddr_in6 structure"
+ @param dst : "Output buffer for string"
+ @param size : "Size of output buffer"
+ @return "0 on success, negative error code on failure"
 *>
-fn void handle_set_data(Handle* handle, void* data) @extern("uv_handle_set_data");
-
-<*
- Get user data from a handle.
-
- @param handle: "Handle to get data from"
-*>
-fn void* handle_get_data(Handle* handle) @extern("uv_handle_get_data");
-
-<*
- Set user data on a request.
- All requests have a data field that can store a user pointer.
-
- @param req: "Request to set data on"
- @param data: "User data pointer"
-*>
-fn void req_set_data(Req* req, void* data) @extern("uv_req_set_data");
-
-<*
- Get user data from a request.
-
- @param req: "Request to get data from"
-*>
-fn void* req_get_data(Req* req) @extern("uv_req_get_data");
+fn int ip6_name(Sockaddr_in6* src, char* dst, usz size) @extern("uv_ip6_name");
 
 // ============================================================================
-// Allocation Macros
+// Error Functions
 // ============================================================================
 
 <*
- Allocate a libuv handle of the specified type.
- Uses handle_size() to get the correct size automatically.
+ Get the name of an error code.
 
- @param $HandleType: "Type to allocate (e.g., uv::Tcp)"
- @param handle_type: "Handle type enum value (e.g., HandleType.TCP)"
+ @param err : "Error code"
+ @return "Error name string"
 *>
-macro alloc_handle($HandleType, HandleType handle_type)
-{
-    usz size = handle_size(handle_type);
-    return ($HandleType*)mem::new_array(char, size);
-}
+fn char* err_name(int err) @extern("uv_err_name");
 
 <*
- Allocate a libuv request.
- Allocates a buffer large enough for any request type.
+ Get the description of an error code.
 
- @param $ReqType: "Request type to allocate (e.g., uv::Connect)"
+ @param err : "Error code"
+ @return "Error description string"
 *>
-macro alloc_req($ReqType)
-{
-    // 512 bytes should be enough for any libuv request type
-    // uv_req_t is typically much smaller than this
-    return ($ReqType*)mem::new_array(char, 512);
-}
+fn char* strerror(int err) @extern("uv_strerror");
 
 // ============================================================================
-// Data Field Access Macros
+// Error Codes
 // ============================================================================
 
-<*
- Get user data from a handle with automatic casting.
-
- @param $Type: "Type to cast the result to (e.g., TcpConnection)"
- @param handle: "Handle to get data from (any handle pointer type)"
-*>
-macro handle_get($Type, handle)
-{
-    return ($Type*)handle_get_data((Handle*)handle);
-}
-
-<*
- Set user data on a handle with automatic casting.
-
- @param handle: "Handle to set data on (any handle pointer type)"
- @param data: "User data pointer to store"
-*>
-macro handle_set(handle, data)
-{
-    handle_set_data((Handle*)handle, data);
-}
-
-<*
- Get user data from a request with automatic casting.
-
- @param $Type: "Type to cast the result to (e.g., ConnectContext)"
- @param req: "Request to get data from (any request pointer type)"
-*>
-macro req_get($Type, req)
-{
-    return ($Type*)req_get_data((Req*)req);
-}
-
-<*
- Set user data on a request with automatic casting.
-
- @param req: "Request to set data on (any request pointer type)"
- @param data: "User data pointer to store"
-*>
-macro req_set(req, data)
-{
-    req_set_data((Req*)req, data);
-}
+// Common libuv error codes (negative values)
+const int UV_EOF = -4095;           // End of file
+const int UV_ECONNREFUSED = -4078;  // Connection refused
+const int UV_ETIMEDOUT = -4039;     // Connection timed out
+const int UV_ENOTCONN = -4053;      // Socket not connected
+const int UV_ECONNRESET = -4077;    // Connection reset by peer
 
 // ============================================================================
-// Error Handling Macros
+// Socket Constants
+// ============================================================================
+
+// Address families
+const int AF_UNSPEC = 0;   // Unspecified (IPv4 or IPv6)
+const int AF_INET = 2;     // IPv4
+const int AF_INET6 = 10;   // IPv6
+
+// Socket types
+const int SOCK_STREAM = 1;  // TCP
+const int SOCK_DGRAM = 2;   // UDP
+
+// Protocols
+const int IPPROTO_TCP = 6;   // TCP protocol
+const int IPPROTO_UDP = 17;  // UDP protocol
+
+// getaddrinfo flags
+const int AI_PASSIVE = 1;       // Socket address for bind()
+const int AI_CANONNAME = 2;     // Fill in ai_canonname
+const int AI_NUMERICHOST = 4;   // Prevent hostname resolution
+const int AI_NUMERICSERV = 1024; // Service is numeric port
+
+// ============================================================================
+// Utility Macros
 // ============================================================================
 
 <*
- Check libuv result code and return fault on error.
- Automatically prints error message with libuv error description.
+ Check a libuv result code and return a fault if it's an error.
 
- @param result: "Return code from libuv function (0 = success, negative = error)"
- @param message: "Description of what failed (e.g., 'Failed to start reading')"
- @param fault_type: "Fault to return on error (e.g., TCP_READ_FAILED)"
+ @param result : "Result code from libuv function"
+ @param message : "Error message to print"
+ @param fault_type : "Fault type to return"
 *>
 macro @uv_check(result, message, fault_type)
 {
@@ -517,15 +641,18 @@ macro @uv_check(result, message, fault_type)
     }
 }
 
-// ============================================================================
-// Error Codes (commonly used subset)
-// ============================================================================
+<*
+ Allocate memory for a request type.
+ Allocates 512 bytes which is enough for any libuv request.
 
-const int UV_EOF = -4095;           // End of file
-const int UV_ECONNREFUSED = -4078;  // Connection refused
-const int UV_ETIMEDOUT = -4039;     // Connection timed out
-const int UV_ENOTCONN = -4053;      // Socket not connected
-const int UV_ECONNRESET = -4077;    // Connection reset by peer
+ @param $ReqType : "Request type to allocate"
+ @return "Pointer to allocated request"
+*>
+macro alloc_req($ReqType)
+{
+    // 512 bytes should be enough for any libuv request type
+    return ($ReqType*)mem::new_array(char, 512);
+}
 
 // ============================================================================
 // Filesystem Functions
@@ -640,3 +767,140 @@ fn FileStat* fs_req_statbuf(Fs* req) @extern("uv_fs_get_statbuf");
  @param req : "Filesystem request to clean up"
 *>
 fn void fs_req_cleanup(Fs* req) @extern("uv_fs_req_cleanup");
+
+// ============================================================================
+// UDP Functions
+// ============================================================================
+
+<*
+ Initialize a UDP handle.
+
+ @param loop : "Event loop"
+ @param udp : "UDP handle to initialize"
+ @return "0 on success, negative error code on failure"
+*>
+fn int udp_init(Loop* loop, Udp* udp) @extern("uv_udp_init");
+
+<*
+ Bind a UDP handle to an address.
+
+ @param udp : "UDP handle"
+ @param addr : "Local address to bind to"
+ @param flags : "Bind flags (0 for default, UV_UDP_REUSEADDR to reuse address)"
+ @return "0 on success, negative error code on failure"
+*>
+fn int udp_bind(Udp* udp, Sockaddr* addr, uint flags) @extern("uv_udp_bind");
+
+<*
+ Send data over UDP.
+
+ @param req : "UDP send request"
+ @param udp : "UDP handle"
+ @param bufs : "Array of buffers to send"
+ @param nbufs : "Number of buffers"
+ @param addr : "Destination address"
+ @param cb : "Callback called when send completes"
+ @return "0 on success, negative error code on failure"
+*>
+fn int udp_send(UdpSend* req, Udp* udp, Buf* bufs, uint nbufs, Sockaddr* addr, UdpSendCb cb) @extern("uv_udp_send");
+
+<*
+ Start receiving data on a UDP handle.
+
+ @param udp : "UDP handle"
+ @param alloc_cb : "Callback to allocate receive buffer"
+ @param recv_cb : "Callback called when data is received"
+ @return "0 on success, negative error code on failure"
+*>
+fn int udp_recv_start(Udp* udp, AllocCb alloc_cb, UdpRecvCb recv_cb) @extern("uv_udp_recv_start");
+
+<*
+ Stop receiving data on a UDP handle.
+
+ @param udp : "UDP handle"
+ @return "0 on success, negative error code on failure"
+*>
+fn int udp_recv_stop(Udp* udp) @extern("uv_udp_recv_stop");
+
+// UDP flags
+const uint UV_UDP_REUSEADDR = 4;  // Allow reusing addresses
+
+// ============================================================================
+// Timer Functions
+// ============================================================================
+
+<*
+ Initialize a timer handle.
+
+ @param loop : "Event loop"
+ @param timer : "Timer handle to initialize"
+ @return "0 on success, negative error code on failure"
+*>
+fn int timer_init(Loop* loop, Timer* timer) @extern("uv_timer_init");
+
+<*
+ Start a timer.
+
+ @param timer : "Timer handle"
+ @param cb : "Callback called when timer expires"
+ @param timeout : "Timeout in milliseconds"
+ @param repeat : "Repeat interval in milliseconds (0 for one-shot)"
+ @return "0 on success, negative error code on failure"
+*>
+fn int timer_start(Timer* timer, TimerCb cb, ulong timeout, ulong repeat) @extern("uv_timer_start");
+
+<*
+ Stop a timer.
+
+ @param timer : "Timer handle"
+ @return "0 on success, negative error code on failure"
+*>
+fn int timer_stop(Timer* timer) @extern("uv_timer_stop");
+
+<*
+ Restart a timer with the same timeout and repeat values.
+
+ @param timer : "Timer handle"
+ @return "0 on success, negative error code on failure"
+*>
+fn int timer_again(Timer* timer) @extern("uv_timer_again");
+
+<*
+ Set the repeat interval for a timer.
+
+ @param timer : "Timer handle"
+ @param repeat : "Repeat interval in milliseconds"
+*>
+fn void timer_set_repeat(Timer* timer, ulong repeat) @extern("uv_timer_set_repeat");
+
+<*
+ Get the repeat interval for a timer.
+
+ @param timer : "Timer handle"
+ @return "Repeat interval in milliseconds"
+*>
+fn ulong timer_get_repeat(Timer* timer) @extern("uv_timer_get_repeat");
+
+// ============================================================================
+// DNS Functions
+// ============================================================================
+
+<*
+ Resolve a hostname asynchronously.
+
+ @param loop : "Event loop"
+ @param req : "GetAddrInfo request"
+ @param cb : "Callback called when resolution completes"
+ @param node : "Hostname to resolve (null-terminated string)"
+ @param service : "Service name or port number (null for none)"
+ @param hints : "Hints for resolution (null for defaults)"
+ @return "0 on success, negative error code on failure"
+*>
+fn int getaddrinfo(Loop* loop, GetAddrInfo* req, GetAddrInfoCb cb, char* node, char* service, AddrInfo* hints) @extern("uv_getaddrinfo");
+
+<*
+ Free address info structure returned by getaddrinfo.
+
+ @param ai : "Address info structure to free"
+*>
+fn void freeaddrinfo(AddrInfo* ai) @extern("uv_freeaddrinfo");

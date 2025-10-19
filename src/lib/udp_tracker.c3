@@ -239,7 +239,7 @@ struct ErrorResponse {
  @param transaction_id : "Random transaction ID"
  @param buffer : "Output buffer (must be at least 16 bytes)"
 *>
-fn void pack_connect_request(int transaction_id, char[] buffer)
+fn void pack_connect_request(int transaction_id, char[] buffer) @public
 {
     assert(buffer.len >= 16, "Buffer too small for connect request");
 
@@ -265,7 +265,7 @@ fn void pack_connect_request(int transaction_id, char[] buffer)
  @param buffer : "Input buffer (must be at least 16 bytes)"
  @return "Parsed ConnectResponse or fault"
 *>
-fn ConnectResponse? unpack_connect_response(char[] buffer)
+fn ConnectResponse? unpack_connect_response(char[] buffer) @public
 {
     if (buffer.len < 16) {
         return UDP_TRACKER_INVALID_RESPONSE?;
@@ -308,7 +308,7 @@ fn ConnectResponse? unpack_connect_response(char[] buffer)
  @param request : "Announce request to pack"
  @param buffer : "Output buffer (must be at least 98 bytes)"
 *>
-fn void pack_announce_request(AnnounceRequest* request, char[] buffer)
+fn void pack_announce_request(AnnounceRequest* request, char[] buffer) @public
 {
     assert(buffer.len >= 98, "Buffer too small for announce request");
 
@@ -396,7 +396,7 @@ fn void pack_announce_request(AnnounceRequest* request, char[] buffer)
  @param peers_out : "Output array for peers"
  @return "Parsed AnnounceResponse or fault"
 *>
-fn AnnounceResponse? unpack_announce_response(char[] buffer, char[]* peers_out)
+fn AnnounceResponse? unpack_announce_response(char[] buffer, char[]* peers_out) @public
 {
     if (buffer.len < 20) {
         return UDP_TRACKER_INVALID_RESPONSE?;
@@ -460,7 +460,7 @@ fn AnnounceResponse? unpack_announce_response(char[] buffer, char[]* peers_out)
 
  @return "Random 32-bit transaction ID"
 *>
-fn int generate_transaction_id()
+fn int generate_transaction_id() @public
 {
     random::DefaultRandom rng;
     random::seed(&rng, (uint)time::now().to_seconds());
@@ -476,7 +476,7 @@ fn int generate_transaction_id()
  @param event : "Event string (started/stopped/completed or empty)"
  @return "Event code"
 *>
-fn int event_string_to_code(String event)
+fn int event_string_to_code(String event) @public
 {
     if (event == "started") return EVENT_STARTED;
     if (event == "stopped") return EVENT_STOPPED;
