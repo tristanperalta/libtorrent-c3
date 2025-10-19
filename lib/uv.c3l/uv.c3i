@@ -1,0 +1,491 @@
+// uv.c3i
+// C3 FFI bindings for libuv
+// https://libuv.org/
+// Created for libtorrent-c3 project
+
+module uv;
+
+import std::io;
+
+<*
+ libuv - Cross-platform asynchronous I/O library
+
+ This file provides C FFI bindings for libuv, focusing on the subset
+ needed for async TCP connections in BitTorrent peer-to-peer protocol.
+
+ Core concepts:
+ - Event loop: uv_loop_t - the central event dispatcher
+ - Handles: uv_handle_t, uv_stream_t, uv_tcp_t - I/O endpoints
+ - Requests: uv_req_t, uv_connect_t, uv_write_t - async operation contexts
+ - Callbacks: Functions called when async operations complete
+*>
+
+// ============================================================================
+// Opaque Types - Actual structs defined in libuv, we treat as opaque pointers
+// ============================================================================
+
+// Loop and handle types
+alias Loop = void;        // uv_loop_t
+alias Handle = void;      // uv_handle_t (use handle_get_data/handle_set_data)
+alias Stream = void;      // uv_stream_t (base for TCP, pipe, etc.)
+alias Tcp = void;         // uv_tcp_t
+
+// Request types
+alias Req = void;         // uv_req_t (use req_get_data/req_set_data)
+alias Connect = void;     // uv_connect_t
+alias Write = void;       // uv_write_t
+alias Shutdown = void;    // uv_shutdown_t
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+// C-style enums with explicit values
+enum RunMode : const
+{
+	DEFAULT = 0,
+	ONCE = 1,
+	NOWAIT = 2,
+}
+
+enum HandleType : const
+{
+	UNKNOWN_HANDLE = 0,
+	ASYNC,
+	CHECK,
+	FS_EVENT,
+	FS_POLL,
+	HANDLE,
+	IDLE,
+	NAMED_PIPE,
+	POLL,
+	PREPARE,
+	PROCESS,
+	STREAM,
+	TCP,
+	TIMER,
+	TTY,
+	UDP,
+	SIGNAL,
+	FILE,
+	HANDLE_TYPE_MAX,
+}
+
+// ============================================================================
+// Structures
+// ============================================================================
+
+<*
+ Buffer structure for read/write operations.
+ Points to a memory region for I/O.
+*>
+struct Buf
+{
+	char* base;
+	usz len;
+}
+
+// Socket address structures (from POSIX/libc)
+struct Sockaddr
+{
+	ushort sa_family;
+	char[14] sa_data;
+}
+
+struct Sockaddr_in
+{
+	ushort sin_family;
+	ushort sin_port;
+	uint sin_addr;
+	char[8] sin_zero;
+}
+
+struct Sockaddr_in6
+{
+	ushort sin6_family;
+	ushort sin6_port;
+	uint sin6_flowinfo;
+	char[16] sin6_addr;
+	uint sin6_scope_id;
+}
+
+// ============================================================================
+// Callback Types
+// ============================================================================
+
+// Allocation callback - called when libuv needs a buffer for reading data
+alias AllocCb = fn void(Handle* handle, usz suggested_size, Buf* buf);
+
+// Read callback - called when data is available or an error occurs
+alias ReadCb = fn void(Stream* stream, isz nread, Buf* buf);
+
+// Write callback - called when a write request completes
+alias WriteCb = fn void(Write* req, int status);
+
+// Connect callback - called when a TCP connection attempt completes
+alias ConnectCb = fn void(Connect* req, int status);
+
+// Connection callback - called when a server has a new incoming connection
+alias ConnectionCb = fn void(Stream* server, int status);
+
+// Close callback - called when a handle is closed
+alias CloseCb = fn void(Handle* handle);
+
+// ============================================================================
+// Event Loop Functions
+// ============================================================================
+
+<*
+ Initialize an event loop.
+ Must call uv_loop_close when done.
+
+ @param loop : "Pointer to loop structure to initialize"
+ @return "0 on success, negative error code on failure"
+*>
+fn int loop_init(Loop* loop) @extern("uv_loop_init");
+
+<*
+ Run the event loop.
+
+ @param loop : "The event loop"
+ @param mode : "Run mode (DEFAULT, ONCE, or NOWAIT)"
+ @return "0 on success, negative error code on failure"
+*>
+fn int run(Loop* loop, RunMode mode) @extern("uv_run");
+
+<*
+ Stop the event loop.
+ Causes uv_run to end at the earliest safe point.
+
+ @param loop : "The event loop to stop"
+*>
+fn void stop(Loop* loop) @extern("uv_stop");
+
+<*
+ Close the event loop, releasing resources.
+ All handles must be closed before calling this.
+
+ @param loop : "The event loop to close"
+ @return "0 on success, UV_EBUSY if handles are still active"
+*>
+fn int loop_close(Loop* loop) @extern("uv_loop_close");
+
+<*
+ Check if loop has active handles or requests.
+
+ @param loop : "The event loop"
+ @return "Non-zero if there are active handles/requests, 0 otherwise"
+*>
+fn int loop_alive(Loop* loop) @extern("uv_loop_alive");
+
+<*
+ Get size of loop structure (for allocation).
+
+ @return "Size in bytes of uv_loop_t"
+*>
+fn usz loop_size() @extern("uv_loop_size");
+
+// ============================================================================
+// Handle Functions
+// ============================================================================
+
+<*
+ Get size of handle structure for a given type.
+
+ @param type : "Handle type"
+ @return "Size in bytes of handle structure"
+*>
+fn usz handle_size(HandleType type) @extern("uv_handle_size");
+
+<*
+ Close a handle.
+ Callback will be called when fully closed.
+
+ @param handle : "Handle to close"
+ @param close_cb : "Callback called when close completes"
+*>
+fn void close(Handle* handle, CloseCb close_cb) @extern("uv_close");
+
+<*
+ Check if handle is active.
+
+ @param handle : "Handle to check"
+ @return "Non-zero if active, 0 otherwise"
+*>
+fn int is_active(Handle* handle) @extern("uv_is_active");
+
+// ============================================================================
+// Stream Functions
+// ============================================================================
+
+<*
+ Start reading from a stream.
+ Callback will be called when data arrives or errors occur.
+
+ @param stream : "Stream to read from"
+ @param alloc_cb : "Allocation callback to provide buffers"
+ @param read_cb : "Read callback when data arrives"
+ @return "0 on success, negative error code on failure"
+*>
+fn int read_start(Stream* stream, AllocCb alloc_cb, ReadCb read_cb) @extern("uv_read_start");
+
+<*
+ Stop reading from a stream.
+
+ @param stream : "Stream to stop reading"
+ @return "0 on success, negative error code on failure"
+*>
+fn int read_stop(Stream* stream) @extern("uv_read_stop");
+
+<*
+ Write data to a stream.
+
+ @param req : "Write request structure"
+ @param stream : "Stream to write to"
+ @param bufs : "Array of buffers to write"
+ @param nbufs : "Number of buffers"
+ @param cb : "Callback when write completes"
+ @return "0 on success, negative error code on failure"
+*>
+fn int write(Write* req, Stream* stream, Buf* bufs, uint nbufs, WriteCb cb) @extern("uv_write");
+
+// ============================================================================
+// TCP Functions
+// ============================================================================
+
+<*
+ Initialize a TCP handle.
+
+ @param loop : "Event loop"
+ @param handle : "TCP handle to initialize"
+ @return "0 on success, negative error code on failure"
+*>
+fn int tcp_init(Loop* loop, Tcp* handle) @extern("uv_tcp_init");
+
+<*
+ Connect to a TCP endpoint.
+
+ @param req : "Connect request structure"
+ @param handle : "TCP handle"
+ @param addr : "Socket address to connect to"
+ @param cb : "Callback when connection completes"
+ @return "0 on success, negative error code on failure"
+*>
+fn int tcp_connect(Connect* req, Tcp* handle, Sockaddr* addr, ConnectCb cb) @extern("uv_tcp_connect");
+
+<*
+ Enable/disable Nagle's algorithm.
+
+ @param handle : "TCP handle"
+ @param enable : "1 to disable Nagle (nodelay), 0 to enable"
+ @return "0 on success, negative error code on failure"
+*>
+fn int tcp_nodelay(Tcp* handle, int enable) @extern("uv_tcp_nodelay");
+
+<*
+ Enable/disable TCP keep-alive.
+
+ @param handle : "TCP handle"
+ @param enable : "1 to enable, 0 to disable"
+ @param delay : "Initial delay in seconds (only used if enable=1)"
+ @return "0 on success, negative error code on failure"
+*>
+fn int tcp_keepalive(Tcp* handle, int enable, uint delay) @extern("uv_tcp_keepalive");
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+<*
+ Initialize a buffer with a base pointer and length.
+
+ @param base : "Pointer to buffer memory"
+ @param len : "Length of buffer"
+ @return "Initialized Buf structure"
+*>
+fn Buf buf_init(char* base, uint len) @extern("uv_buf_init");
+
+<*
+ Get description of an error code.
+
+ @param err : "Error code (negative number)"
+ @return "String describing the error"
+*>
+fn char* strerror(int err) @extern("uv_strerror");
+
+<*
+ Get error name.
+
+ @param err : "Error code"
+ @return "String name of error (e.g., 'ECONNREFUSED')"
+*>
+fn char* err_name(int err) @extern("uv_err_name");
+
+// ============================================================================
+// DNS/Address Functions
+// ============================================================================
+
+<*
+ Convert address string and port to sockaddr.
+
+ @param ip : "IP address string (e.g., '127.0.0.1')"
+ @param port : "Port number"
+ @param addr : "Output sockaddr_in structure"
+ @return "0 on success, negative error code on failure"
+*>
+fn int ip4_addr(char* ip, int port, Sockaddr_in* addr) @extern("uv_ip4_addr");
+
+<*
+ Convert IPv6 address string and port to sockaddr.
+
+ @param ip : "IPv6 address string"
+ @param port : "Port number"
+ @param addr : "Output sockaddr_in6 structure"
+ @return "0 on success, negative error code on failure"
+*>
+fn int ip6_addr(char* ip, int port, Sockaddr_in6* addr) @extern("uv_ip6_addr");
+
+// ============================================================================
+// Data Field Access Functions
+// ============================================================================
+
+<*
+ Set user data on a handle.
+ All handles have a data field that can store a user pointer.
+
+ @param handle: "Handle to set data on"
+ @param data: "User data pointer"
+*>
+fn void handle_set_data(Handle* handle, void* data) @extern("uv_handle_set_data");
+
+<*
+ Get user data from a handle.
+
+ @param handle: "Handle to get data from"
+*>
+fn void* handle_get_data(Handle* handle) @extern("uv_handle_get_data");
+
+<*
+ Set user data on a request.
+ All requests have a data field that can store a user pointer.
+
+ @param req: "Request to set data on"
+ @param data: "User data pointer"
+*>
+fn void req_set_data(Req* req, void* data) @extern("uv_req_set_data");
+
+<*
+ Get user data from a request.
+
+ @param req: "Request to get data from"
+*>
+fn void* req_get_data(Req* req) @extern("uv_req_get_data");
+
+// ============================================================================
+// Allocation Macros
+// ============================================================================
+
+<*
+ Allocate a libuv handle of the specified type.
+ Uses handle_size() to get the correct size automatically.
+
+ @param $HandleType: "Type to allocate (e.g., uv::Tcp)"
+ @param handle_type: "Handle type enum value (e.g., HandleType.TCP)"
+*>
+macro alloc_handle($HandleType, HandleType handle_type)
+{
+    usz size = handle_size(handle_type);
+    return ($HandleType*)mem::new_array(char, size);
+}
+
+<*
+ Allocate a libuv request.
+ Allocates a buffer large enough for any request type.
+
+ @param $ReqType: "Request type to allocate (e.g., uv::Connect)"
+*>
+macro alloc_req($ReqType)
+{
+    // 512 bytes should be enough for any libuv request type
+    // uv_req_t is typically much smaller than this
+    return ($ReqType*)mem::new_array(char, 512);
+}
+
+// ============================================================================
+// Data Field Access Macros
+// ============================================================================
+
+<*
+ Get user data from a handle with automatic casting.
+
+ @param $Type: "Type to cast the result to (e.g., TcpConnection)"
+ @param handle: "Handle to get data from (any handle pointer type)"
+*>
+macro handle_get($Type, handle)
+{
+    return ($Type*)handle_get_data((Handle*)handle);
+}
+
+<*
+ Set user data on a handle with automatic casting.
+
+ @param handle: "Handle to set data on (any handle pointer type)"
+ @param data: "User data pointer to store"
+*>
+macro handle_set(handle, data)
+{
+    handle_set_data((Handle*)handle, data);
+}
+
+<*
+ Get user data from a request with automatic casting.
+
+ @param $Type: "Type to cast the result to (e.g., ConnectContext)"
+ @param req: "Request to get data from (any request pointer type)"
+*>
+macro req_get($Type, req)
+{
+    return ($Type*)req_get_data((Req*)req);
+}
+
+<*
+ Set user data on a request with automatic casting.
+
+ @param req: "Request to set data on (any request pointer type)"
+ @param data: "User data pointer to store"
+*>
+macro req_set(req, data)
+{
+    req_set_data((Req*)req, data);
+}
+
+// ============================================================================
+// Error Handling Macros
+// ============================================================================
+
+<*
+ Check libuv result code and return fault on error.
+ Automatically prints error message with libuv error description.
+
+ @param result: "Return code from libuv function (0 = success, negative = error)"
+ @param message: "Description of what failed (e.g., 'Failed to start reading')"
+ @param fault_type: "Fault to return on error (e.g., TCP_READ_FAILED)"
+*>
+macro @uv_check(result, message, fault_type)
+{
+    if (result != 0)
+    {
+        io::printfn("%s: %s", message, (ZString)strerror(result));
+        return fault_type?;
+    }
+}
+
+// ============================================================================
+// Error Codes (commonly used subset)
+// ============================================================================
+
+const int UV_EOF = -4095;           // End of file
+const int UV_ECONNREFUSED = -4078;  // Connection refused
+const int UV_ETIMEDOUT = -4039;     // Connection timed out
+const int UV_ENOTCONN = -4053;      // Socket not connected
+const int UV_ECONNRESET = -4077;    // Connection reset by peer

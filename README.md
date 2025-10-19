@@ -1,6 +1,6 @@
 # libtorrent-c3
 
-A BitTorrent library implementation written in C3, providing torrent file parsing, bencode encoding/decoding, and secure path handling.
+A BitTorrent library implementation written in C3, providing torrent file parsing, bencode encoding/decoding, async I/O networking, and secure path handling.
 
 ## Features
 
@@ -13,6 +13,13 @@ A BitTorrent library implementation written in C3, providing torrent file parsin
   - Announce lists with multi-tracker support
   - Web seed URLs (BEP 19)
   - DHT nodes and extended metadata
+- **Async I/O**: libuv-based event loop and TCP networking
+  - Non-blocking TCP connections
+  - Event-driven architecture
+  - Clean macro-based API for error handling and resource management
+- **HTTP Client**: curl-based HTTP/HTTPS support for tracker communication
+  - Tracker announces and scrapes
+  - Web seed downloads
 - **Path Sanitization**: Security-focused path handling
   - Path traversal prevention (removes `../`)
   - Invalid UTF-8 repair
@@ -20,7 +27,6 @@ A BitTorrent library implementation written in C3, providing torrent file parsin
   - Null byte filtering
   - Path length limits (240 chars)
 - **Memory Safe**: Leverages C3's temp allocator and `defer` for automatic cleanup
-- **Well Tested**: 129 passing tests with full coverage
 
 ## Targets
 
@@ -40,6 +46,14 @@ This project has two build targets:
 ### Prerequisites
 
 - [C3 compiler](https://c3-lang.org/) version 0.7.6 or later
+- **libuv** - Cross-platform async I/O library
+  - Arch Linux: `sudo pacman -S libuv`
+  - Ubuntu/Debian: `sudo apt install libuv1-dev`
+  - macOS: `brew install libuv`
+- **libcurl** - HTTP/HTTPS client library
+  - Arch Linux: `sudo pacman -S curl`
+  - Ubuntu/Debian: `sudo apt install libcurl4-openssl-dev`
+  - macOS: `brew install curl`
 
 ### Build all targets
 
@@ -85,8 +99,8 @@ c3c test
 ### Run tests for specific target
 
 ```bash
-c3c test libtorrent       # Run library tests (129 tests)
-c3c test torrent-client   # Run executable tests
+c3c test libtorrent
+c3c test torrent-client
 ```
 
 ### Run specific tests (filter by name)
@@ -166,6 +180,43 @@ fn void sanitize_example()
     {
         io::printfn("Sanitized: %s", safe_path);  // Output: "etc/passwd"
     }
+}
+```
+
+### Async TCP Networking
+
+```c3
+import libtorrent::event_loop;
+import libtorrent::async_tcp;
+
+fn void on_connect(async_tcp::TcpConnection* conn, int status, void* user_data)
+{
+    if (status != 0)
+    {
+        io::printfn("Connection failed");
+        return;
+    }
+
+    io::printfn("Connected!");
+
+    // Write some data
+    char[] data = "GET / HTTP/1.0\r\n\r\n";
+    conn.write(data, &on_write)!;
+}
+
+fn void async_example()
+{
+    // Create event loop
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    // Connect to server
+    async_tcp::TcpConnection* conn = async_tcp::connect(
+        &loop, "example.com", 80, &on_connect
+    )!!;
+
+    // Run event loop
+    loop.run()!;
 }
 ```
 
