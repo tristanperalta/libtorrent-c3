@@ -2,6 +2,7 @@ module libtorrent::torrent;
 
 import std::io;
 import std::hash::sha1;
+import std::encoding::hex;
 import std::net::url;
 import libtorrent::bencode;
 import libtorrent::path_sanitize;
@@ -391,7 +392,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
     // Calculate info_hash (SHA1 of bencoded info dict)
     String info_encoded = bencode::encode(info_val);
-    defer free(info_encoded);
+    defer free(info_encoded);  // bencode::encode() returns heap memory
     torrent.info_hash = sha1::hash(info_encoded);
 
     // Validate torrent name (BEP 3 compliance)
@@ -402,8 +403,12 @@ fn TorrentFile*? parse(String data) @public => @pool()
                      (torrent.info.name.len == 2 && torrent.info.name[0] == '.' && torrent.info.name[1] == '.');
     if (is_invalid)
     {
-        // Replace with info-hash hex (no need to free pool-allocated memory)
-        torrent.info.name = hash_to_hex(torrent.info_hash[..]);
+        // Replace with info-hash hex using stdlib hex::tencode()
+        // Must copy to heap with malloc() because @pool() memory gets freed when function returns
+        String temp_hex = hex::tencode(torrent.info_hash[..]);
+        char* hex_persistent = (char*)malloc(temp_hex.len);
+        foreach (i, c : temp_hex) hex_persistent[i] = c;
+        torrent.info.name = (String)hex_persistent[:temp_hex.len];
     }
 
     return torrent;
@@ -687,26 +692,6 @@ fn bool contains_null_bytes(String str)
     return false;
 }
 
-/**
- * Helper: Convert SHA1 hash (20 bytes) to hex string (40 chars).
- * Used for generating torrent name from info-hash when name is invalid.
- */
-fn String hash_to_hex(char[] hash)
-{
-    assert(hash.len == 20, "Hash must be 20 bytes");
-
-    char[] hex = mem::new_array(char, 40);
-    char[] hex_chars = "0123456789abcdef";
-
-    for (usz i = 0; i < 20; i++)
-    {
-        char byte = hash[i];
-        hex[i * 2] = hex_chars[(byte >> 4) & 0x0F];
-        hex[i * 2 + 1] = hex_chars[byte & 0x0F];
-    }
-
-    return (String)hex;
-}
 
 /**
  * Helper: Copy a string to persistent memory.
