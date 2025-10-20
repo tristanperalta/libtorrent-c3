@@ -382,3 +382,201 @@ fn void test_sorted_order() @test
     assert(pool.peers[3].ip[3] == 3 && pool.peers[3].port == 6883, "Fourth peer should be 192.168.1.3:6883");
     assert(pool.peers[4].ip[3] == 5 && pool.peers[4].port == 6885, "Fifth peer should be 192.168.1.5:6885");
 }
+
+// ===== Phase 2 Tests: Peer Ranking & Candidate Selection =====
+
+// Test peer rank calculation with different scenarios.
+fn void test_peer_rank_calculation() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peer and verify base rank (just IP-based randomness)
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+
+    // Base rank: IP-based randomness only (1 * 7 % 20 = 7)
+    assert(peer.peer_rank == 7, "Base rank should be IP-based randomness");
+
+    // Simulate download from peer (should boost rank by +100)
+    peer.prev_amount_download = 1000;
+    pool.update_candidate_cache();
+    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    assert(peer.peer_rank == 107, "Rank with download history should be 107");
+
+    // Mark as seed (should boost rank by +50)
+    peer.seed = true;
+    pool.update_candidate_cache();
+    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    assert(peer.peer_rank == 157, "Rank with seed + download should be 157");
+
+    // Add failure (should penalize by -20)
+    peer.failcount = 1;
+    pool.update_candidate_cache();
+    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    assert(peer.peer_rank == 137, "Rank with 1 failure should be 137");
+
+    // Add hash failure (should penalize by -30)
+    peer.hashfails = 1;
+    pool.update_candidate_cache();
+    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    assert(peer.peer_rank == 107, "Rank with hash failure should be 107");
+}
+
+// Test candidate cache gets sorted by rank.
+fn void test_candidate_cache_sorting() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers with different characteristics
+    // Peer 1: Normal peer (rank = 1 * 7 % 20 = 7)
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+
+    // Peer 2: Seed (rank = 50 + 2 * 7 % 20 = 64)
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.seed = true;
+
+    // Peer 3: Downloaded from before (rank = 100 + 3 * 7 % 20 = 101)
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, true);
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.prev_amount_download = 5000;
+
+    // Update cache
+    pool.update_candidate_cache();
+
+    // Verify cache is sorted by rank (highest first)
+    assert(pool.candidate_cache.len == 3, "Should have 3 candidates");
+    assert(pool.candidate_cache[0].peer_rank > pool.candidate_cache[1].peer_rank,
+           "First candidate should have highest rank");
+    assert(pool.candidate_cache[1].peer_rank > pool.candidate_cache[2].peer_rank,
+           "Second candidate should have higher rank than third");
+
+    // Verify order: peer3 (101) > peer2 (64) > peer1 (7)
+    assert(pool.candidate_cache[0].port == 6883, "Best candidate should be peer3");
+    assert(pool.candidate_cache[1].port == 6882, "Second candidate should be peer2");
+    assert(pool.candidate_cache[2].port == 6881, "Third candidate should be peer1");
+}
+
+// Test pick_best_candidate returns highest-ranked peer.
+fn void test_pick_best_candidate() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Empty pool - should return fault
+    if (catch err = pool.pick_best_candidate())
+    {
+        // Good - no candidates available
+    }
+    else
+    {
+        assert(false, "Should fail when no candidates");
+    }
+
+    // Add peers
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+
+    // Mark one as seed
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.seed = true;
+
+    pool.update_candidate_cache();
+
+    // Pick best - should be the seed
+    peer_pool::TorrentPeer* best = pool.pick_best_candidate()!!;
+    assert(best.port == 6882, "Best candidate should be the seed");
+    assert(best.seed == true, "Best candidate should be seed");
+}
+
+// Test seeds are prioritized over non-seeds.
+fn void test_seed_priority() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add regular peer
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    int regular_rank = peer1.peer_rank;
+
+    // Add seed peer
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.seed = true;
+
+    pool.update_candidate_cache();
+    peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    int seed_rank = peer2.peer_rank;
+
+    // Seed should have higher rank
+    assert(seed_rank > regular_rank, "Seed should have higher rank than regular peer");
+    assert(seed_rank - regular_rank >= 50, "Seed boost should be at least +50");
+}
+
+// Test failures penalize peer rank.
+fn void test_failure_penalty() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peer
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    int initial_rank = peer.peer_rank;
+
+    // Add connection failure
+    peer.failcount = 1;
+    pool.update_candidate_cache();
+    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    int rank_after_fail = peer.peer_rank;
+
+    assert(rank_after_fail < initial_rank, "Rank should decrease after failure");
+    assert(initial_rank - rank_after_fail == 20, "Failure penalty should be -20");
+
+    // Add hash failure
+    peer.hashfails = 1;
+    pool.update_candidate_cache();
+    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    int rank_after_hash_fail = peer.peer_rank;
+
+    assert(rank_after_hash_fail < rank_after_fail, "Rank should decrease after hash failure");
+    assert(rank_after_fail - rank_after_hash_fail == 30, "Hash failure penalty should be -30");
+}

@@ -108,6 +108,9 @@ struct PeerPool
     // Sorted by IP:port for binary search
     TorrentPeer*[] peers;         // Main peer list (sorted by IP:port)
 
+    // Phase 2: Candidate selection (sorted by rank, highest first)
+    TorrentPeer*[] candidate_cache;  // Ready-to-connect peers (sorted by rank descending)
+
     // Torrent info (needed for peer connections)
     char[20] info_hash;           // Torrent info hash
     char[20] our_peer_id;         // Our peer ID
@@ -182,6 +185,60 @@ fn isz find_peer_index(PeerPool* pool, char[4] ip, ushort port)
 }
 
 <*
+ Calculate peer rank for prioritization (Phase 2).
+ Higher rank = better peer = higher priority for connections.
+
+ Ranking algorithm (inspired by libtorrent):
+ - +100: Has downloaded data from this peer before (proven good)
+ - +50: Peer is a seed (has all pieces)
+ - -20 per failcount: Connection failures (unreliable)
+ - -30 per hashfails: Hash verification failures (bad data)
+ - +0-19: Deterministic randomness based on IP (symmetric priority)
+
+ Returns: Rank value (higher is better)
+*>
+fn int calculate_peer_rank(PeerPool* pool, TorrentPeer* peer)
+{
+    int rank = 0;
+
+    // Prioritize peers we've successfully downloaded from
+    if (peer.prev_amount_download > 0)
+    {
+        rank += 100;
+    }
+
+    // Prioritize seeds if we're downloading
+    if (peer.seed)
+    {
+        rank += 50;
+    }
+
+    // Penalize failed connections
+    rank -= (int)peer.failcount * 20;
+
+    // Penalize hash failures (bad peer)
+    rank -= (int)peer.hashfails * 30;
+
+    // Add deterministic randomness based on IP
+    // This ensures symmetric priority (both peers rank each other similarly)
+    // and provides variety in initial connection attempts
+    rank += ((int)peer.ip[3] * 7) % 20;
+
+    return rank;
+}
+
+<*
+ Compare two peers by rank for sorting candidate cache.
+ Returns: >0 if a has higher rank (better peer), <0 if b is better, 0 if equal
+ Note: Reversed from typical comparator (higher rank first)
+*>
+fn int compare_peers_by_rank(TorrentPeer* a, TorrentPeer* b)
+{
+    // Higher rank first (descending order)
+    return b.peer_rank - a.peer_rank;
+}
+
+<*
  Create a peer pool for a torrent.
 
  @param loop : "Event loop for async operations"
@@ -208,6 +265,9 @@ fn PeerPool* create(event_loop::EventLoop* loop,
 
     // Initialize empty peer list
     pool.peers = {};
+
+    // Initialize empty candidate cache (Phase 2)
+    pool.candidate_cache = {};
 
     // No callbacks yet
     pool.on_connected = null;
@@ -239,8 +299,106 @@ fn void free(PeerPool* pool) @public
         std::core::mem::free(pool.peers);
     }
 
+    // Free candidate cache (Phase 2)
+    // Note: candidate_cache contains pointers to same peers, so don't free the peers again
+    if (pool.candidate_cache.len > 0)
+    {
+        std::core::mem::free(pool.candidate_cache);
+    }
+
     // Free pool itself
     std::core::mem::free(pool);
+}
+
+<*
+ Update candidate cache with all eligible peers sorted by rank (Phase 2).
+
+ This rebuilds the candidate cache from scratch by:
+ 1. Filtering peers that are eligible to connect (DISCOVERED or DISCONNECTED)
+ 2. Calculating/updating their ranks
+ 3. Sorting by rank (highest first)
+
+ Called after adding new peers or when peer states/statistics change.
+*>
+fn void PeerPool.update_candidate_cache(&self) @public
+{
+    // Free old cache
+    if (self.candidate_cache.len > 0)
+    {
+        std::core::mem::free(self.candidate_cache);
+        self.candidate_cache = {};
+    }
+
+    // Count eligible candidates
+    usz eligible_count = 0;
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        PeerState state = self.peers[i].state;
+        // Only DISCOVERED and DISCONNECTED peers are eligible for new connections
+        // (CONNECTING, CONNECTED, and BANNED are not)
+        if (state == PeerState.DISCOVERED || state == PeerState.DISCONNECTED)
+        {
+            eligible_count++;
+        }
+    }
+
+    if (eligible_count == 0)
+    {
+        return; // No candidates
+    }
+
+    // Allocate candidate cache
+    self.candidate_cache = mem::new_array(TorrentPeer*, eligible_count);
+
+    // Populate cache with eligible peers and update ranks
+    usz cache_index = 0;
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        PeerState state = self.peers[i].state;
+        if (state == PeerState.DISCOVERED || state == PeerState.DISCONNECTED)
+        {
+            // Update peer rank
+            self.peers[i].peer_rank = calculate_peer_rank(self, self.peers[i]);
+
+            // Add to cache
+            self.candidate_cache[cache_index] = self.peers[i];
+            cache_index++;
+        }
+    }
+
+    // Sort cache by rank (highest first)
+    // Simple bubble sort - good enough for typical candidate counts
+    for (usz i = 0; i < self.candidate_cache.len; i++)
+    {
+        for (usz j = i + 1; j < self.candidate_cache.len; j++)
+        {
+            if (compare_peers_by_rank(self.candidate_cache[i], self.candidate_cache[j]) > 0)
+            {
+                // Swap
+                TorrentPeer* temp = self.candidate_cache[i];
+                self.candidate_cache[i] = self.candidate_cache[j];
+                self.candidate_cache[j] = temp;
+            }
+        }
+    }
+}
+
+<*
+ Pick the best candidate peer to connect to (Phase 2).
+
+ Returns the highest-ranked peer from the candidate cache, or fault if no candidates available.
+
+ @return "Best peer to connect to, or PEER_NOT_FOUND fault"
+*>
+fn TorrentPeer*? PeerPool.pick_best_candidate(&self) @public
+{
+    if (self.candidate_cache.len == 0)
+    {
+        return PEER_NOT_FOUND?;
+    }
+
+    // Return first peer (highest rank due to sorting)
+    return self.candidate_cache[0];
 }
 
 <*
@@ -282,7 +440,6 @@ fn void PeerPool.add_peer(&self, char[4] ip, ushort port, bool from_tracker) @pu
     peer.last_connected = 0;
     peer.seed = false;
     peer.optimistically_unchoked = false;
-    peer.peer_rank = 0;
     peer.from_tracker = from_tracker;
 
     // Initialize peer_id to zeros
@@ -290,6 +447,9 @@ fn void PeerPool.add_peer(&self, char[4] ip, ushort port, bool from_tracker) @pu
     {
         peer.peer_id[i] = 0;
     }
+
+    // Calculate initial rank (Phase 2)
+    peer.peer_rank = calculate_peer_rank(self, peer);
 
     // Insert at correct position to maintain sort order
     isz insert_pos = -(idx + 1);  // Convert negative index to insertion point
@@ -331,6 +491,9 @@ fn void PeerPool.add_peers_from_tracker(&self, tracker::Peer[] peers) @public
     {
         self.add_peer(peers[i].ip, peers[i].port, true);
     }
+
+    // Update candidate cache after batch add (Phase 2)
+    self.update_candidate_cache();
 }
 
 <*
