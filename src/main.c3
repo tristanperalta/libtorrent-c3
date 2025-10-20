@@ -2,6 +2,7 @@ module torrent_client;
 
 import std::io;
 import std::encoding::hex;
+import uv;
 import libtorrent;
 import libtorrent::tracker;
 import libtorrent::event_loop;
@@ -84,7 +85,8 @@ fn void on_info_load_complete(String data, int status, void* user_data)
 
     if (status != 0)
     {
-        io::eprintfn("Error loading file: status=%d", status);
+        ZString error_str = (ZString)uv::strerror(status);
+        io::eprintfn("Error loading file: %s (status=%d)", error_str, status);
         ctx.exit_code = 1;
         return;
     }
@@ -382,7 +384,8 @@ fn void on_announce_load_complete(String data, int status, void* user_data)
 
     if (status != 0)
     {
-        io::eprintfn("Error loading file: status=%d", status);
+        ZString error_str = (ZString)uv::strerror(status);
+        io::eprintfn("Error loading file: %s (status=%d)", error_str, status);
         ctx.exit_code = 1;
         ctx.completed = true;
         return;
@@ -701,7 +704,8 @@ fn void on_connect_load_complete(String data, int status, void* user_data)
 
     if (status != 0)
     {
-        io::eprintfn("Error loading file: status=%d", status);
+        ZString error_str = (ZString)uv::strerror(status);
+        io::eprintfn("Error loading file: %s (status=%d)", error_str, status);
         ctx.exit_code = 1;
         ctx.all_completed = true;
         return;
