@@ -5,8 +5,7 @@ import std::encoding::hex;
 import libtorrent;
 import libtorrent::tracker;
 import libtorrent::event_loop;
-
-faultdef FILE_ERROR;
+import libtorrent::torrent_loader;
 
 fn int main(int argc, ZString* argv)
 {
@@ -18,6 +17,16 @@ fn int main(int argc, ZString* argv)
 
     String command = (String)argv[1].str_view();
 
+    // Create event loop early (needed for async operations)
+    event_loop::EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        io::eprintfn("Error creating event loop");
+        return 1;
+    }
+    event_loop::EventLoop loop = loop_opt;
+    defer loop.free();
+
     // Check for commands
     if (command == "info")
     {
@@ -28,8 +37,7 @@ fn int main(int argc, ZString* argv)
             return 1;
         }
         String torrent_path = (String)argv[2].str_view();
-        load_and_display_torrent(torrent_path);
-        return 0;
+        return cmd_info(&loop, torrent_path);
     }
     else if (command == "announce")
     {
@@ -40,23 +48,31 @@ fn int main(int argc, ZString* argv)
             return 1;
         }
         String torrent_path = (String)argv[2].str_view();
-        return cmd_announce(torrent_path);
+        return cmd_announce(&loop, torrent_path);
     }
     else
     {
         // Legacy behavior: treat first arg as file path
-        load_and_display_torrent(command);
-        return 0;
+        return cmd_info(&loop, command);
     }
 }
 
-fn void load_and_display_torrent(String path)
+// Context for info command
+struct InfoContext
 {
-    // Load file
-    String? data = load_torrent_file(path);
-    if (catch err = data)
+    bool completed;
+    int exit_code;
+}
+
+fn void on_info_load_complete(String data, int status, void* user_data)
+{
+    InfoContext* ctx = (InfoContext*)user_data;
+    ctx.completed = true;
+
+    if (status != 0)
     {
-        io::eprintfn("Error loading file: %s", err);
+        io::eprintfn("Error loading file: status=%d", status);
+        ctx.exit_code = 1;
         return;
     }
     defer free(data);
@@ -66,24 +82,40 @@ fn void load_and_display_torrent(String path)
     if (catch err = torrent)
     {
         io::eprintfn("Error parsing torrent: %s", err);
+        ctx.exit_code = 1;
         return;
     }
     defer libtorrent::torrent::free_torrent_file(torrent);
 
     // Display metadata
     display_torrent_info(torrent);
+    ctx.exit_code = 0;
 }
 
-fn String? load_torrent_file(String path)
+<*
+ Info command: load and display torrent metadata (async).
+
+ @param loop : "Event loop"
+ @param torrent_path : "Path to torrent file"
+ @return "Exit code (0 = success, 1 = error)"
+*>
+fn int cmd_info(event_loop::EventLoop* loop, String torrent_path)
 {
-    // Load entire file
-    char[]? buffer = io::file::load(mem, path);
-    if (catch err = buffer)
+    InfoContext ctx;
+    ctx.completed = false;
+    ctx.exit_code = 0;
+
+    // Start async load
+    torrent_loader::load_file_async(loop, torrent_path,
+                                     &on_info_load_complete, &ctx);
+
+    // Run event loop until load completes
+    while (!ctx.completed && loop.is_alive())
     {
-        return FILE_ERROR?;
+        loop.run_once();
     }
 
-    return (String)buffer;
+    return ctx.exit_code;
 }
 
 fn void print_usage()
@@ -310,37 +342,35 @@ fn void display_tracker_response(tracker::TrackerResponse* response)
     }
 }
 
-// Context for async announce
-struct AnnounceContext
+// Context for announce command (includes both load and announce state)
+struct CmdAnnounceContext
 {
+    event_loop::EventLoop* loop;
     bool completed;
     tracker::TrackerResponse* response;
-    int status;
+    int tracker_status;
+    int exit_code;
+    libtorrent::torrent::TorrentFile* torrent;
 }
 
-fn void on_announce_complete(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_tracker_announce_complete(tracker::TrackerResponse* response, int status, void* user_data)
 {
-    AnnounceContext* ctx = (AnnounceContext*)user_data;
+    CmdAnnounceContext* ctx = (CmdAnnounceContext*)user_data;
     ctx.completed = true;
     ctx.response = response;
-    ctx.status = status;
+    ctx.tracker_status = status;
 }
 
-<*
- Announce command: contact tracker and display peer list.
- Now uses async tracker (non-blocking with thread pool for HTTP).
-
- @param torrent_path : "Path to torrent file"
- @return "Exit code (0 = success, 1 = error)"
-*>
-fn int cmd_announce(String torrent_path)
+fn void on_announce_load_complete(String data, int status, void* user_data)
 {
-    // Load torrent file
-    String? data = load_torrent_file(torrent_path);
-    if (catch err = data)
+    CmdAnnounceContext* ctx = (CmdAnnounceContext*)user_data;
+
+    if (status != 0)
     {
-        io::eprintfn("Error loading file: %s", err);
-        return 1;
+        io::eprintfn("Error loading file: status=%d", status);
+        ctx.exit_code = 1;
+        ctx.completed = true;
+        return;
     }
     defer free(data);
 
@@ -349,9 +379,13 @@ fn int cmd_announce(String torrent_path)
     if (catch err = torrent)
     {
         io::eprintfn("Error parsing torrent: %s", err);
-        return 1;
+        ctx.exit_code = 1;
+        ctx.completed = true;
+        return;
     }
-    defer libtorrent::torrent::free_torrent_file(torrent);
+
+    // Store torrent (will be freed by caller)
+    ctx.torrent = torrent;
 
     // Check if torrent has tracker
     String tracker_url = torrent.announce;
@@ -366,33 +400,61 @@ fn int cmd_announce(String torrent_path)
         {
             io::eprintfn("Error: Torrent has no tracker URL");
             io::eprintfn("This torrent uses DHT or peer exchange only");
-            return 1;
+            ctx.exit_code = 1;
+            ctx.completed = true;
+            return;
         }
     }
 
-    io::printfn("Announcing to tracker (async): %s", tracker_url);
+    io::printfn("Announcing to tracker: %s", tracker_url);
     io::printfn("");
 
-    // Create event loop
-    event_loop::EventLoop? loop_opt = event_loop::create();
-    if (catch err = loop_opt)
-    {
-        io::eprintfn("Error creating event loop");
-        return 1;
-    }
-    event_loop::EventLoop loop = loop_opt;
-    defer loop.free();
-
-    // Announce context
-    AnnounceContext ctx;
+    // Reset completion flag for announce phase
     ctx.completed = false;
-    ctx.response = null;
-    ctx.status = 0;
 
     // Announce to tracker (non-blocking)
     ushort our_port = 6881;
-    tracker::announce(&loop, torrent, our_port, "started",
-                      &on_announce_complete, &ctx);
+    tracker::announce(ctx.loop, torrent, our_port, "started",
+                      &on_tracker_announce_complete, ctx);
+}
+
+<*
+ Announce command: contact tracker and display peer list.
+ Uses async file loading and async tracker (fully non-blocking).
+
+ @param loop : "Event loop"
+ @param torrent_path : "Path to torrent file"
+ @return "Exit code (0 = success, 1 = error)"
+*>
+fn int cmd_announce(event_loop::EventLoop* loop, String torrent_path)
+{
+    CmdAnnounceContext ctx;
+    ctx.loop = loop;
+    ctx.completed = false;
+    ctx.response = null;
+    ctx.tracker_status = 0;
+    ctx.exit_code = 0;
+    ctx.torrent = null;
+
+    // Start async load
+    torrent_loader::load_file_async(loop, torrent_path,
+                                     &on_announce_load_complete, &ctx);
+
+    // Run event loop until load completes
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    // Check if load/parse failed
+    if (ctx.exit_code != 0 || !ctx.torrent)
+    {
+        if (ctx.torrent)
+        {
+            libtorrent::torrent::free_torrent_file(ctx.torrent);
+        }
+        return ctx.exit_code;
+    }
 
     // Run event loop until announce completes
     while (!ctx.completed && loop.is_alive())
@@ -400,7 +462,13 @@ fn int cmd_announce(String torrent_path)
         loop.run_once();
     }
 
-    if (!ctx.completed || ctx.status != 0 || !ctx.response)
+    // Free torrent (must be done before returning)
+    if (ctx.torrent)
+    {
+        libtorrent::torrent::free_torrent_file(ctx.torrent);
+    }
+
+    if (!ctx.completed || ctx.tracker_status != 0 || !ctx.response)
     {
         io::eprintfn("Error announcing to tracker");
         io::eprintfn("");
