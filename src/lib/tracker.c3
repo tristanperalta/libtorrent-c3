@@ -2,7 +2,7 @@ module libtorrent::tracker;
 
 import libtorrent::http;
 import libtorrent::bencode;
-import libtorrent::torrent;
+import libtorrent::metainfo;
 import libtorrent::udp_tracker;
 import libtorrent::http_tracker;
 import libtorrent::event_loop;
@@ -31,7 +31,7 @@ faultdef TRACKER_UNSUPPORTED_PROTOCOL;
 *>
 interface Tracker
 {
-    fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort port, String event);
+    fn TrackerResponse? announce(metainfo::TorrentFile* torrent, ushort port, String event);
     fn void free();
 }
 
@@ -274,7 +274,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
  @param event : "Event type (started/stopped/completed or empty string)"
  @return "Tracker response with peer list or fault"
 *>
-fn TrackerResponse? HttpTracker.announce(HttpTracker* self, torrent::TorrentFile* torrent, ushort our_port,
+fn TrackerResponse? HttpTracker.announce(HttpTracker* self, metainfo::TorrentFile* torrent, ushort our_port,
                                           String event) @dynamic
 {
     // Generate peer ID
@@ -376,7 +376,7 @@ alias AnnounceCallback = fn void(TrackerResponse* response, int status, void* us
  @param user_data : "User data passed to callback"
 *>
 fn void announce(event_loop::EventLoop* loop,
-                 torrent::TorrentFile* torrent,
+                 metainfo::TorrentFile* torrent,
                  ushort our_port,
                  String event,
                  AnnounceCallback callback,

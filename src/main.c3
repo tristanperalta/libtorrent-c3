@@ -78,14 +78,14 @@ fn void on_info_load_complete(String data, int status, void* user_data)
     defer free(data);
 
     // Parse torrent
-    libtorrent::torrent::TorrentFile*? torrent = libtorrent::torrent::parse(data);
+    libtorrent::metainfo::TorrentFile*? torrent = libtorrent::metainfo::parse(data);
     if (catch err = torrent)
     {
         io::eprintfn("Error parsing torrent: %s", err);
         ctx.exit_code = 1;
         return;
     }
-    defer libtorrent::torrent::free_torrent_file(torrent);
+    defer libtorrent::metainfo::free_torrent_file(torrent);
 
     // Display metadata
     display_torrent_info(torrent);
@@ -132,7 +132,7 @@ fn void print_usage()
     io::printfn("  torrent-client ubuntu.torrent          # Same as 'info'");
 }
 
-fn void display_torrent_info(libtorrent::torrent::TorrentFile* torrent)
+fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
 {
     io::printfn("=== Torrent Information ===");
     io::printfn("");
@@ -350,7 +350,7 @@ struct CmdAnnounceContext
     tracker::TrackerResponse* response;
     int tracker_status;
     int exit_code;
-    libtorrent::torrent::TorrentFile* torrent;
+    libtorrent::metainfo::TorrentFile* torrent;
 }
 
 fn void on_tracker_announce_complete(tracker::TrackerResponse* response, int status, void* user_data)
@@ -375,7 +375,7 @@ fn void on_announce_load_complete(String data, int status, void* user_data)
     defer free(data);
 
     // Parse torrent
-    libtorrent::torrent::TorrentFile*? torrent = libtorrent::torrent::parse(data);
+    libtorrent::metainfo::TorrentFile*? torrent = libtorrent::metainfo::parse(data);
     if (catch err = torrent)
     {
         io::eprintfn("Error parsing torrent: %s", err);
@@ -451,7 +451,7 @@ fn int cmd_announce(event_loop::EventLoop* loop, String torrent_path)
     {
         if (ctx.torrent)
         {
-            libtorrent::torrent::free_torrent_file(ctx.torrent);
+            libtorrent::metainfo::free_torrent_file(ctx.torrent);
         }
         return ctx.exit_code;
     }
@@ -465,7 +465,7 @@ fn int cmd_announce(event_loop::EventLoop* loop, String torrent_path)
     // Free torrent (must be done before returning)
     if (ctx.torrent)
     {
-        libtorrent::torrent::free_torrent_file(ctx.torrent);
+        libtorrent::metainfo::free_torrent_file(ctx.torrent);
     }
 
     if (!ctx.completed || ctx.tracker_status != 0 || !ctx.response)

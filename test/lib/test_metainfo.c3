@@ -1,8 +1,8 @@
-module libtorrent::torrent::test;
+module libtorrent::metainfo::test;
 
 import std::io;
 import std::io::file;
-import libtorrent::torrent;
+import libtorrent::metainfo;
 import libtorrent::bencode;
 
 /**
@@ -83,8 +83,8 @@ fn void test_parse_valid_torrent() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify we got a valid torrent
     assert(torrent != null, "Expected non-null torrent");
@@ -93,7 +93,7 @@ fn void test_parse_valid_torrent() @test
 fn void test_parse_invalid_format() @test
 {
     // Not valid bencode
-    if (catch err = torrent::parse("invalid data"))
+    if (catch err = metainfo::parse("invalid data"))
     {
         // Expected to fail
     }
@@ -108,7 +108,7 @@ fn void test_parse_missing_announce() @test
     // Valid bencode but missing required 'announce' field
     String data = "de";  // Empty dictionary
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         // Expected to fail
     }
@@ -123,7 +123,7 @@ fn void test_parse_missing_info() @test
     // Has announce but no info dict
     String data = "d8:announce9:test:urbae";
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         // Expected to fail
     }
@@ -142,8 +142,8 @@ fn void test_extract_announce() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Check that announce field exists and is non-empty
     assert(torrent.announce.len > 0, "Expected non-empty announce URL");
@@ -155,8 +155,8 @@ fn void test_extract_info_name() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Check that name exists
     assert(torrent.info.name.len > 0, "Expected non-empty file name");
@@ -168,8 +168,8 @@ fn void test_extract_info_length() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Check that length is positive
     assert(torrent.info.length > 0, "Expected positive file length");
@@ -181,8 +181,8 @@ fn void test_extract_piece_length() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Check that piece_length is positive
     assert(torrent.info.piece_length > 0, "Expected positive piece length");
@@ -194,8 +194,8 @@ fn void test_extract_pieces() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Check that pieces exist and are multiples of 20
     assert(torrent.info.pieces.len > 0, "Expected non-empty pieces");
@@ -212,8 +212,8 @@ fn void test_optional_created_by() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // created_by is optional, just print it if it exists
     if (torrent.created_by.len > 0)
@@ -231,8 +231,8 @@ fn void test_optional_creation_date() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // creation_date is optional
     if (torrent.creation_date > 0)
@@ -254,10 +254,10 @@ fn void test_get_num_pieces() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
-    usz num_pieces = torrent::get_num_pieces(torrent);
+    usz num_pieces = metainfo::get_num_pieces(torrent);
     assert(num_pieces > 0, "Expected at least one piece");
     io::printfn("Number of pieces: %d", num_pieces);
 }
@@ -267,11 +267,11 @@ fn void test_get_piece_hash_valid() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Get first piece hash
-    char[] hash = torrent::get_piece_hash(torrent, 0)!!;
+    char[] hash = metainfo::get_piece_hash(torrent, 0)!!;
     assert(hash.len == 20, "Expected 20-byte hash");
 
     io::printf("First piece hash: ");
@@ -287,13 +287,13 @@ fn void test_get_piece_hash_invalid_index() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
-    usz num_pieces = torrent::get_num_pieces(torrent);
+    usz num_pieces = metainfo::get_num_pieces(torrent);
 
     // Try to get hash beyond the last piece
-    if (catch err = torrent::get_piece_hash(torrent, num_pieces))
+    if (catch err = metainfo::get_piece_hash(torrent, num_pieces))
     {
         // Expected to fail
         io::printn("Correctly rejected out-of-bounds index");
@@ -333,8 +333,8 @@ fn void test_parse_real_torrent_numbers() @test
     String data = load_torrent_file("test/fixtures/numbers.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -351,8 +351,8 @@ fn void test_parse_real_torrent_sintel() @test
     String data = load_torrent_file("test/fixtures/sintel.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify basic fields (announce is optional)
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -387,8 +387,8 @@ fn void test_parse_leaves() @test
     String data = load_torrent_file("test/fixtures/leaves.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify basic fields
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -423,8 +423,8 @@ fn void test_parse_libtorrent_base() @test
     String data = load_torrent_file("test/fixtures/base.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify basic fields
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -444,8 +444,8 @@ fn void test_parse_libtorrent_test1_single() @test
     String data = load_torrent_file("test/fixtures/test1_single.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify basic fields
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -469,8 +469,8 @@ fn void test_info_hash_calculated() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify info_hash is not all zeros
     bool all_zeros = true;
@@ -499,14 +499,14 @@ fn void test_info_hash_deterministic() @test
     String data1 = create_test_torrent();
     defer free(data1);
 
-    TorrentFile* torrent1 = torrent::parse(data1)!!;
-    defer torrent::free_torrent_file(torrent1);
+    TorrentFile* torrent1 = metainfo::parse(data1)!!;
+    defer metainfo::free_torrent_file(torrent1);
 
     String data2 = create_test_torrent();
     defer free(data2);
 
-    TorrentFile* torrent2 = torrent::parse(data2)!!;
-    defer torrent::free_torrent_file(torrent2);
+    TorrentFile* torrent2 = metainfo::parse(data2)!!;
+    defer metainfo::free_torrent_file(torrent2);
 
     // Verify both have the same info_hash
     for (usz i = 0; i < 20; i++)
@@ -527,8 +527,8 @@ fn void test_parse_url_seed() @test
     String data = load_torrent_file("test/fixtures/url_seed.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.info.length > 0, "Expected file length");
@@ -554,8 +554,8 @@ fn void test_parse_url_seed_multi() @test
     String data = load_torrent_file("test/fixtures/url_seed_multi.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -577,8 +577,8 @@ fn void test_parse_duplicate_web_seeds() @test
     String data = load_torrent_file("test/fixtures/duplicate_web_seeds.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -607,8 +607,8 @@ fn void test_parse_pad_file() @test
     String data = load_torrent_file("test/fixtures/pad_file.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -635,8 +635,8 @@ fn void test_parse_collection() @test
     String data = load_torrent_file("test/fixtures/collection.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.collections.len > 0, "Expected collections");
@@ -659,8 +659,8 @@ fn void test_parse_similar() @test
     String data = load_torrent_file("test/fixtures/similar.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.similar_count > 0, "Expected similar torrents");
@@ -687,8 +687,8 @@ fn void test_parse_dht_nodes() @test
     String data = load_torrent_file("test/fixtures/dht_nodes.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.nodes.len > 0, "Expected DHT nodes");
@@ -716,8 +716,8 @@ fn void test_url_list() @test
     String data = load_torrent_file("test/fixtures/url_list.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // url-list contains empty string - should be filtered out
@@ -733,8 +733,8 @@ fn void test_url_list2() @test
     String data = load_torrent_file("test/fixtures/url_list2.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // url-list contains nested list (invalid) - should be ignored
@@ -749,8 +749,8 @@ fn void test_url_list3() @test
     String data = load_torrent_file("test/fixtures/url_list3.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // url-list contains integer (invalid) - should be ignored
@@ -765,8 +765,8 @@ fn void test_url_seed_multi_space() @test
     String data = load_torrent_file("test/fixtures/url_seed_multi_space.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.url_list.len == 1, "Expected 1 URL seed");
@@ -787,8 +787,8 @@ fn void test_url_seed_multi_space_nolist() @test
     String data = load_torrent_file("test/fixtures/url_seed_multi_space_nolist.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.url_list.len == 1, "Expected 1 URL seed");
@@ -809,8 +809,8 @@ fn void test_whitespace_url() @test
     String data = load_torrent_file("test/fixtures/whitespace_url.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.announce.len > 0, "Expected announce URL");
@@ -828,8 +828,8 @@ fn void test_empty_files_1() @test
     String data = load_torrent_file("test/fixtures/empty-files-1.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -845,8 +845,8 @@ fn void test_empty_files_2() @test
     String data = load_torrent_file("test/fixtures/empty-files-2.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -862,8 +862,8 @@ fn void test_empty_files_3() @test
     String data = load_torrent_file("test/fixtures/empty-files-3.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -879,8 +879,8 @@ fn void test_empty_files_4() @test
     String data = load_torrent_file("test/fixtures/empty-files-4.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -896,8 +896,8 @@ fn void test_empty_files_5() @test
     String data = load_torrent_file("test/fixtures/empty-files-5.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -913,8 +913,8 @@ fn void test_large_torrent() @test
     String data = load_torrent_file("test/fixtures/large.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -922,7 +922,7 @@ fn void test_large_torrent() @test
     io::printfn("  name: %s", torrent.info.name);
     io::printfn("  total length: %d bytes", torrent.info.length);
     io::printfn("  num files: %d", torrent.info.files.len);
-    io::printfn("  num pieces: %d", torrent::get_num_pieces(torrent));
+    io::printfn("  num pieces: %d", metainfo::get_num_pieces(torrent));
 }
 
 fn void test_unordered_torrent() @test
@@ -930,8 +930,8 @@ fn void test_unordered_torrent() @test
     String data = load_torrent_file("test/fixtures/unordered.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -946,8 +946,8 @@ fn void test_single_multi_file() @test
     String data = load_torrent_file("test/fixtures/single_multi_file.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -962,8 +962,8 @@ fn void test_invalid_name2() @test
     String data = load_torrent_file("test/fixtures/invalid_name2.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // BEP 3: When name is "..", should use info-hash hex as name
     assert(torrent.info.name == "b61560c2918f463768cd122b6d2fdd47b77bdb35",
@@ -976,8 +976,8 @@ fn void test_invalid_name3() @test
     String data = load_torrent_file("test/fixtures/invalid_name3.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -993,8 +993,8 @@ fn void test_bad_name() @test
     String data = load_torrent_file("test/fixtures/bad_name.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Name with null bytes is now sanitized (null bytes replaced with '_')
     // instead of being replaced with info-hash
@@ -1094,8 +1094,8 @@ fn void test_multitracker_numbers_torrent() @test
     String data = load_torrent_file("test/fixtures/zero2.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify announce-list is parsed
     assert(torrent.announce_list.len > 0, "Expected announce-list to be present");
@@ -1242,8 +1242,8 @@ fn void test_parse_creation_date() @test
     String data = load_torrent_file("test/fixtures/creation_date.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -1262,8 +1262,8 @@ fn void test_parse_no_creation_date() @test
     String data = load_torrent_file("test/fixtures/no_creation_date.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -1281,8 +1281,8 @@ fn void test_parse_httpseed() @test
     String data = load_torrent_file("test/fixtures/httpseed.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.info.length > 0, "Expected file length");
@@ -1305,8 +1305,8 @@ fn void test_parse_long_name() @test
     String data = load_torrent_file("test/fixtures/long_name.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // long_name.torrent should have a very long filename
@@ -1321,8 +1321,8 @@ fn void test_parse_sample() @test
     String data = load_torrent_file("test/fixtures/sample.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -1340,8 +1340,8 @@ fn void test_web_seeds_optional() @test
     String data = load_torrent_file("test/fixtures/base.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify torrent parses successfully
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -1366,8 +1366,8 @@ fn void test_multifile_file_details() @test
     String data = load_torrent_file("test/fixtures/sample.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     // Verify it's multi-file
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -1404,8 +1404,8 @@ fn void test_multifile_offsets_sequential() @test
     String data = load_torrent_file("test/fixtures/sample.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     io::printfn("=== Validating file offsets ===");
 
@@ -1427,8 +1427,8 @@ fn void test_multifile_total_length() @test
     String data = load_torrent_file("test/fixtures/sample.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     io::printfn("=== Validating total length ===");
 
@@ -1452,8 +1452,8 @@ fn void test_multifile_path_components() @test
     String data = load_torrent_file("test/fixtures/creation_date.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     io::printfn("=== Validating path components ===");
 
@@ -1485,8 +1485,8 @@ fn void test_multifile_numbers_torrent() @test
     String data = load_torrent_file("test/fixtures/numbers.torrent");
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     io::printfn("=== numbers.torrent file structure ===");
     io::printfn("  name: %s", torrent.info.name);
@@ -1516,7 +1516,7 @@ fn void test_multifile_empty_files_rejected() @test
     String data = load_torrent_file("test/fixtures/no_files.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== no_files.torrent ===");
         io::printn("  Correctly rejected (multi-file with empty files list)");
@@ -1536,7 +1536,7 @@ fn void test_error_missing_piece_len() @test
     String data = load_torrent_file("test/fixtures/missing_piece_len.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== missing_piece_len.torrent ===");
         io::printn("  Correctly rejected (missing piece length)");
@@ -1552,7 +1552,7 @@ fn void test_error_no_name() @test
     String data = load_torrent_file("test/fixtures/no_name.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== no_name.torrent ===");
         io::printn("  Correctly rejected (missing name)");
@@ -1568,7 +1568,7 @@ fn void test_error_invalid_pieces() @test
     String data = load_torrent_file("test/fixtures/invalid_pieces.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== invalid_pieces.torrent ===");
         io::printn("  Correctly rejected (invalid pieces)");
@@ -1584,7 +1584,7 @@ fn void test_error_invalid_piece_len() @test
     String data = load_torrent_file("test/fixtures/invalid_piece_len.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== invalid_piece_len.torrent ===");
         io::printn("  Correctly rejected (invalid piece length)");
@@ -1600,7 +1600,7 @@ fn void test_error_invalid_info() @test
     String data = load_torrent_file("test/fixtures/invalid_info.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== invalid_info.torrent ===");
         io::printn("  Correctly rejected (invalid info)");
@@ -1616,7 +1616,7 @@ fn void test_error_negative_piece_len() @test
     String data = load_torrent_file("test/fixtures/negative_piece_len.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== negative_piece_len.torrent ===");
         io::printn("  Correctly rejected (negative piece length)");
@@ -1632,7 +1632,7 @@ fn void test_error_negative_size() @test
     String data = load_torrent_file("test/fixtures/negative_size.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== negative_size.torrent ===");
         io::printn("  Correctly rejected (negative total size)");
@@ -1648,7 +1648,7 @@ fn void test_error_negative_file_size() @test
     String data = load_torrent_file("test/fixtures/negative_file_size.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== negative_file_size.torrent ===");
         io::printn("  Correctly rejected (negative file size)");
@@ -1664,7 +1664,7 @@ fn void test_error_invalid_file_size() @test
     String data = load_torrent_file("test/fixtures/invalid_file_size.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== invalid_file_size.torrent ===");
         io::printn("  Correctly rejected (invalid file size)");
@@ -1680,7 +1680,7 @@ fn void test_error_unaligned_pieces() @test
     String data = load_torrent_file("test/fixtures/unaligned_pieces.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== unaligned_pieces.torrent ===");
         io::printn("  Correctly rejected (pieces not aligned to 20 bytes)");
@@ -1696,7 +1696,7 @@ fn void test_error_string_root() @test
     String data = load_torrent_file("test/fixtures/string.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== string.torrent ===");
         io::printn("  Correctly rejected (root is string, not dict)");
@@ -1712,7 +1712,7 @@ fn void test_error_no_files() @test
     String data = load_torrent_file("test/fixtures/no_files.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== no_files.torrent ===");
         io::printn("  Correctly rejected (multi-file with no files)");
@@ -1728,7 +1728,7 @@ fn void test_error_zero_length() @test
     String data = load_torrent_file("test/fixtures/zero.torrent");
     defer free(data);
 
-    if (catch err = torrent::parse(data))
+    if (catch err = metainfo::parse(data))
     {
         io::printn("=== zero.torrent ===");
         io::printn("  Correctly rejected (zero-length torrent)");
@@ -1768,8 +1768,8 @@ fn void test_sanitize_torrent_name_with_traversal() @test
     String data = bencode::encode(root);
     defer free(data);
 
-    TorrentFile* t = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(t);
+    TorrentFile* t = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(t);
 
     // Path traversal should be removed by sanitization
     io::printfn("Original name in bencode: '../../../etc/file'");
@@ -1804,8 +1804,8 @@ fn void test_sanitize_torrent_name_with_null_bytes() @test
     String data = bencode::encode(root);
     defer free(data);
 
-    TorrentFile* t = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(t);
+    TorrentFile* t = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(t);
 
     // Null bytes should be replaced
     io::printfn("Sanitized name (null bytes replaced): '%s'", t.info.name);
@@ -1852,8 +1852,8 @@ fn void test_sanitize_file_paths_with_invalid_utf8() @test
     String data = bencode::encode(root);
     defer free(data);
 
-    TorrentFile* t = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(t);
+    TorrentFile* t = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(t);
 
     // Check that invalid UTF-8 was repaired
     assert(t.info.is_multi_file, "Should be multi-file torrent");
@@ -1902,8 +1902,8 @@ fn void test_sanitize_file_paths_with_directional_chars() @test
     String data = bencode::encode(root);
     defer free(data);
 
-    TorrentFile* t = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(t);
+    TorrentFile* t = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(t);
 
     // Check that directional characters were removed
     assert(t.info.is_multi_file, "Should be multi-file torrent");
@@ -1947,8 +1947,8 @@ fn void test_sanitize_long_file_paths() @test
     String data = bencode::encode(root);
     defer free(data);
 
-    TorrentFile* t = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(t);
+    TorrentFile* t = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(t);
 
     // Check that path was truncated to 240 chars
     io::printfn("Original length: %d", long_name.len());

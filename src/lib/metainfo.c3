@@ -1,4 +1,4 @@
-module libtorrent::torrent;
+module libtorrent::metainfo;
 
 import std::io;
 import std::hash::sha1;

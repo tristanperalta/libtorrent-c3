@@ -5,7 +5,7 @@ import libtorrent::async_udp;
 import libtorrent::async_timer;
 import libtorrent::event_loop;
 import libtorrent::tracker;
-import libtorrent::torrent;
+import libtorrent::metainfo;
 import uv;
 import std::io;
 import std::net::url;
@@ -426,7 +426,7 @@ enum AnnounceState
 struct AnnounceContext
 {
     event_loop::EventLoop* loop;
-    torrent::TorrentFile* torrent;
+    metainfo::TorrentFile* torrent;
     ushort port;
     String event;
     AnnounceCallback callback;
@@ -882,7 +882,7 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
  @param user_data : "User data passed to callback"
  @param initial_timeout_seconds : "Initial timeout in seconds (0 = use default, for testing use 1)"
 *>
-fn void async_announce(event_loop::EventLoop* loop, torrent::TorrentFile* torrent,
+fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torrent,
                        ushort port, String event, AnnounceCallback callback,
                        void* user_data, int initial_timeout_seconds = 0) @public
 {

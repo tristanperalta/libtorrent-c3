@@ -2,7 +2,7 @@ module libtorrent::udp_tracker::test;
 
 import libtorrent::udp_tracker;
 import libtorrent::tracker;
-import libtorrent::torrent;
+import libtorrent::metainfo;
 import libtorrent::bencode;
 import libtorrent::async_udp;
 import libtorrent::event_loop;
@@ -190,9 +190,9 @@ fn void close_mock_tracker(MockTrackerServer* server)
 // Test Helper: Create Test Torrent
 // ============================================================================
 
-fn torrent::TorrentFile* create_test_torrent(String tracker_url)
+fn metainfo::TorrentFile* create_test_torrent(String tracker_url)
 {
-    torrent::TorrentFile* torrent = mem::new(torrent::TorrentFile);
+    metainfo::TorrentFile* torrent = mem::new(metainfo::TorrentFile);
 
     torrent.announce = tracker_url;
 
@@ -211,7 +211,7 @@ fn torrent::TorrentFile* create_test_torrent(String tracker_url)
     return torrent;
 }
 
-fn void free_test_torrent(torrent::TorrentFile* torrent)
+fn void free_test_torrent(metainfo::TorrentFile* torrent)
 {
     free(torrent);
 }
@@ -278,7 +278,7 @@ fn void test_async_announce_success() @test
 
     // Create test torrent
     // NOTE: Using localhost instead of 127.0.0.1 due to getaddrinfo issues with IP addresses
-    torrent::TorrentFile* torrent = create_test_torrent("udp://localhost:9100/announce");
+    metainfo::TorrentFile* torrent = create_test_torrent("udp://localhost:9100/announce");
     defer free_test_torrent(torrent);
 
     // Test context
@@ -345,7 +345,7 @@ fn void test_async_announce_dns_failure() @test
     defer loop.free();
 
     // Create test torrent with invalid hostname
-    torrent::TorrentFile* torrent = create_test_torrent("udp://this-hostname-does-not-exist-12345.invalid:6969/announce");
+    metainfo::TorrentFile* torrent = create_test_torrent("udp://this-hostname-does-not-exist-12345.invalid:6969/announce");
     defer free_test_torrent(torrent);
 
     TestContext ctx;
@@ -408,7 +408,7 @@ fn void test_async_announce_invalid_url() @test
     defer loop.free();
 
     // Create test torrent with HTTP URL (not UDP)
-    torrent::TorrentFile* torrent = create_test_torrent("http://tracker.example.com:6969/announce");
+    metainfo::TorrentFile* torrent = create_test_torrent("http://tracker.example.com:6969/announce");
     defer free_test_torrent(torrent);
 
     TestContext ctx;
@@ -465,7 +465,7 @@ fn void test_async_announce_timeout() @test
     server.should_respond = false;  // Don't respond to requests
 
     // Create test torrent
-    torrent::TorrentFile* torrent = create_test_torrent("udp://127.0.0.1:9101/announce");
+    metainfo::TorrentFile* torrent = create_test_torrent("udp://127.0.0.1:9101/announce");
     defer free_test_torrent(torrent);
 
     TestContext ctx;
@@ -542,7 +542,7 @@ fn void test_async_announce_invalid_response() @test
     server.send_invalid_response = true;
 
     // Create test torrent
-    torrent::TorrentFile* torrent = create_test_torrent("udp://127.0.0.1:9102/announce");
+    metainfo::TorrentFile* torrent = create_test_torrent("udp://127.0.0.1:9102/announce");
     defer free_test_torrent(torrent);
 
     TestContext ctx;

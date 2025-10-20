@@ -3,7 +3,7 @@ module libtorrent::http_tracker;
 import libtorrent::http;
 import libtorrent::event_loop;
 import libtorrent::tracker;
-import libtorrent::torrent;
+import libtorrent::metainfo;
 import std::net::url;
 import libc;
 import std::io;
@@ -28,7 +28,7 @@ alias AnnounceCallback = fn void(tracker::TrackerResponse* response, int status,
 // Context for async announce operation
 struct AnnounceContext
 {
-    torrent::TorrentFile* torrent;
+    metainfo::TorrentFile* torrent;
     ushort port;
     String event;
     AnnounceCallback callback;
@@ -118,7 +118,7 @@ fn void on_http_response(http::HttpResponse* response, int status, void* user_da
  @param callback : "Completion callback"
  @param user_data : "User data passed to callback"
 *>
-fn void async_announce(event_loop::EventLoop* loop, torrent::TorrentFile* torrent,
+fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torrent,
                        ushort port, String event, AnnounceCallback callback,
                        void* user_data) @public
 {

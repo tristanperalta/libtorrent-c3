@@ -133,8 +133,8 @@ fn void parse_example()
     String data = file::load_buffer("example.torrent")!!;
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     io::printfn("Name: %s", torrent.info.name);
     io::printfn("Size: %d bytes", torrent.info.length);
@@ -144,7 +144,7 @@ fn void parse_example()
 ### Using Bencode Macros
 
 ```c3
-import libtorrent::bencode;
+import libmetainfo::bencode;
 
 fn void bencode_example()
 {
@@ -174,7 +174,7 @@ fn void bencode_example()
 ### Path Sanitization
 
 ```c3
-import libtorrent::path_sanitize;
+import libmetainfo::path_sanitize;
 
 fn void sanitize_example()
 {
@@ -191,8 +191,8 @@ fn void sanitize_example()
 ### Async TCP Networking
 
 ```c3
-import libtorrent::event_loop;
-import libtorrent::async_tcp;
+import libmetainfo::event_loop;
+import libmetainfo::async_tcp;
 
 fn void on_connect(async_tcp::TcpConnection* conn, int status, void* user_data)
 {
@@ -228,9 +228,9 @@ fn void async_example()
 ### Peer Wire Protocol (BEP 3)
 
 ```c3
-import libtorrent::peer_connection;
-import libtorrent::peer_wire;
-import libtorrent::event_loop;
+import libmetainfo::peer_connection;
+import libmetainfo::peer_wire;
+import libmetainfo::event_loop;
 
 fn void on_message(peer_connection::PeerConnection* peer, peer_wire::Message* msg, void* user_data)
 {
@@ -326,8 +326,8 @@ fn void test_parse_valid_torrent() @test
     String data = create_test_torrent();
     defer free(data);
 
-    TorrentFile* torrent = torrent::parse(data)!!;
-    defer torrent::free_torrent_file(torrent);
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
 
     assert(torrent.info.name.len > 0, "Expected valid torrent name");
 }

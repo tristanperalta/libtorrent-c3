@@ -3,7 +3,7 @@ module libtorrent::storage_manager;
 import libtorrent::async_file;
 import libtorrent::async_work;
 import libtorrent::event_loop;
-import libtorrent::torrent;
+import libtorrent::metainfo;
 import std::io;
 import std::hash::sha1;
 
@@ -80,7 +80,7 @@ alias VerifyCompleteCallback = fn void(uint piece_index, bool verified, int stat
  @param pre_allocate : "Pre-allocate file space (default: true)"
  @return "Initialized storage manager or fault"
 *>
-fn StorageManager? create(event_loop::EventLoop* loop, torrent::TorrentInfo* info,
+fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* info,
                           String base_path, bool pre_allocate = true) @public
 {
     StorageManager manager;

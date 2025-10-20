@@ -1,7 +1,7 @@
 module libtorrent::storage_manager::test;
 
 import libtorrent::storage_manager;
-import libtorrent::torrent;
+import libtorrent::metainfo;
 import libtorrent::event_loop;
 import std::io;
 import std::hash::sha1;
@@ -22,9 +22,9 @@ struct TestContext
 // ============================================================================
 
 // Create a simple single-file torrent for testing
-fn torrent::TorrentInfo create_test_torrent_single_file() @private
+fn metainfo::TorrentInfo create_test_torrent_single_file() @private
 {
-    torrent::TorrentInfo info;
+    metainfo::TorrentInfo info;
     info.name = "test_file.bin";
     info.length = 98304;  // 96KB = 3 pieces of 32KB
     info.piece_length = 32768;  // 32KB pieces
@@ -42,16 +42,16 @@ fn torrent::TorrentInfo create_test_torrent_single_file() @private
 }
 
 // Create a multi-file torrent for testing
-fn torrent::TorrentInfo create_test_torrent_multi_file() @private
+fn metainfo::TorrentInfo create_test_torrent_multi_file() @private
 {
-    torrent::TorrentInfo info;
+    metainfo::TorrentInfo info;
     info.name = "test_files";
     info.length = 98304;  // 96KB total
     info.piece_length = 32768;  // 32KB pieces
     info.is_multi_file = true;
 
     // Create 3 files: 40KB, 40KB, 16KB
-    info.files = mem::new_array(torrent::FileEntry, 3);
+    info.files = mem::new_array(metainfo::FileEntry, 3);
 
     // File 1: 40KB
     info.files[0].path = mem::new_array(String, 1);
@@ -104,7 +104,7 @@ fn void test_create_storage_manager() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_single_file();
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
     defer std::core::mem::free(info.pieces);
 
     storage_manager::StorageManager? manager_opt =
@@ -135,7 +135,7 @@ fn void test_initialize_storage() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_single_file();
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
     defer std::core::mem::free(info.pieces);
 
     storage_manager::StorageManager manager =
@@ -227,7 +227,7 @@ fn void test_write_piece() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_single_file();
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
     defer std::core::mem::free(info.pieces);
 
     storage_manager::StorageManager manager =
@@ -278,7 +278,7 @@ fn void test_write_read_piece() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_single_file();
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
     defer std::core::mem::free(info.pieces);
 
     storage_manager::StorageManager manager =
@@ -364,7 +364,7 @@ fn void test_verify_piece() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_single_file();
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
     defer std::core::mem::free(info.pieces);
 
     storage_manager::StorageManager manager =
@@ -431,7 +431,7 @@ fn void test_multi_file_storage() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_multi_file();
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
     defer {
         for (usz i = 0; i < info.files.len; i++)
         {
@@ -474,7 +474,7 @@ fn void test_piece_spanning_files() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_multi_file();
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
     defer {
         for (usz i = 0; i < info.files.len; i++)
         {
@@ -570,7 +570,7 @@ fn void test_last_piece_shorter() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    torrent::TorrentInfo info = create_test_torrent_single_file();
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
     defer std::core::mem::free(info.pieces);
 
     storage_manager::StorageManager manager =
