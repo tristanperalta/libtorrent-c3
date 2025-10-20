@@ -166,7 +166,8 @@ fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torre
         0,  // uploaded
         0,  // downloaded
         torrent.info.length,  // left
-        event
+        event,
+        tracker::DEFAULT_NUMWANT  // Request 50 peers
     );
 
     // Parse the full announce URL to extract path + query

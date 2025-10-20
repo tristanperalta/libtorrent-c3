@@ -25,6 +25,9 @@ faultdef TRACKER_INVALID_RESPONSE;
 faultdef TRACKER_URL_INVALID;
 faultdef TRACKER_UNSUPPORTED_PROTOCOL;
 
+// Default number of peers to request from tracker (BEP 3 standard)
+const int DEFAULT_NUMWANT = 50;
+
 <*
  Tracker interface - all tracker implementations must implement this.
  Provides a unified way to announce to different tracker types (HTTP/UDP).
@@ -109,12 +112,13 @@ fn char[20] generate_peer_id()
  @param downloaded : "Bytes downloaded"
  @param left : "Bytes remaining to download"
  @param event : "Event type (started/stopped/completed/empty)"
+ @param numwant : "Number of peers requested (default 50)"
  @return "Complete announce URL with query parameters"
 *>
 fn String build_announce_url(String tracker_url, char[20]* info_hash,
                               char[20]* peer_id, ushort port,
                               long uploaded, long downloaded, long left,
-                              String event)
+                              String event, int numwant)
 {
     DString url;
     url.append(tracker_url);
@@ -145,6 +149,7 @@ fn String build_announce_url(String tracker_url, char[20]* info_hash,
     url.appendf("&downloaded=%d", downloaded);
     url.appendf("&left=%d", left);
     url.append("&compact=1");  // Request compact format
+    url.appendf("&numwant=%d", numwant);  // Number of peers requested
 
     // Add event if not empty
     if (event.len > 0) {
@@ -303,7 +308,8 @@ fn TrackerResponse? HttpTracker.announce(HttpTracker* self, metainfo::TorrentFil
         0,  // uploaded
         0,  // downloaded
         torrent.info.length,  // left
-        event
+        event,
+        DEFAULT_NUMWANT  // Request 50 peers
     );
     defer free(announce_url);
 
