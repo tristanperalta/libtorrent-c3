@@ -51,7 +51,8 @@ fn void test_build_announce_url() @test {
         0,
         0,
         1000000,
-        "started"
+        "started",
+        50  // numwant
     );
     defer free(url);
 
@@ -95,7 +96,8 @@ fn void test_build_announce_url_with_existing_query() @test {
         0,
         0,
         0,
-        ""
+        "",
+        50  // numwant
     );
     defer free(url);
 
@@ -284,7 +286,8 @@ fn void test_build_announce_url_preserves_path() @test {
         0,
         0,
         1000000,
-        "started"
+        "started",
+        50  // numwant
     );
     defer free(url);
 
@@ -318,7 +321,8 @@ fn void test_build_announce_url_deep_path() @test {
         0,
         0,
         1000,
-        ""
+        "",
+        50  // numwant
     );
     defer free(url);
 
@@ -347,7 +351,8 @@ fn void test_build_announce_url_custom_port() @test {
         0,
         0,
         1000,
-        ""
+        "",
+        50  // numwant
     );
     defer free(url);
 
@@ -380,7 +385,8 @@ fn void test_correct_path_extraction_from_announce_url() @test {
         &peer_id,
         6881,
         0, 0, 1000,
-        "started"
+        "started",
+        50  // numwant
     );
     defer free(announce_url);
 
