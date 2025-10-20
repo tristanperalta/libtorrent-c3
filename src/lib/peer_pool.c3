@@ -617,6 +617,9 @@ fn void PeerPool.add_peers_from_tracker(&self, tracker::Peer[] peers) @public
 {
     for (usz i = 0; i < peers.len; i++)
     {
+        // Skip peers with invalid port 0
+        if (peers[i].port == 0) continue;
+
         self.add_peer(peers[i].ip, peers[i].port, true);
     }
 
