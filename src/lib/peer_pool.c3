@@ -111,6 +111,9 @@ struct PeerPool
     // Phase 2: Candidate selection (sorted by rank, highest first)
     TorrentPeer*[] candidate_cache;  // Ready-to-connect peers (sorted by rank descending)
 
+    // Phase 3: Connection management
+    usz num_active_connections;     // Current number of active connections
+
     // Torrent info (needed for peer connections)
     char[20] info_hash;           // Torrent info hash
     char[20] our_peer_id;         // Our peer ID
@@ -269,6 +272,9 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     // Initialize empty candidate cache (Phase 2)
     pool.candidate_cache = {};
 
+    // Initialize connection count (Phase 3)
+    pool.num_active_connections = 0;
+
     // No callbacks yet
     pool.on_connected = null;
     pool.on_message = null;
@@ -286,6 +292,9 @@ fn PeerPool* create(event_loop::EventLoop* loop,
 fn void free(PeerPool* pool) @public
 {
     if (!pool) return;
+
+    // Disconnect all active connections (Phase 3)
+    pool.disconnect_all();
 
     // Free all peer structures
     for (usz i = 0; i < pool.peers.len; i++)
@@ -399,6 +408,26 @@ fn TorrentPeer*? PeerPool.pick_best_candidate(&self) @public
 
     // Return first peer (highest rank due to sorting)
     return self.candidate_cache[0];
+}
+
+<*
+ Set user callbacks for peer events (Phase 3).
+
+ @param on_connected : "Callback when peer connects successfully (can be null)"
+ @param on_message : "Callback when peer sends message (can be null)"
+ @param on_disconnected : "Callback when peer disconnects (can be null)"
+ @param user_data : "User context passed to callbacks"
+*>
+fn void PeerPool.set_callbacks(&self,
+                                 PeerConnectedCallback on_connected,
+                                 PeerMessageCallback on_message,
+                                 PeerDisconnectedCallback on_disconnected,
+                                 void* user_data) @public
+{
+    self.on_connected = on_connected;
+    self.on_message = on_message;
+    self.on_disconnected = on_disconnected;
+    self.user_data = user_data;
 }
 
 <*
@@ -592,5 +621,179 @@ fn void PeerPool.get_stats(&self,
             default:
                 // Count DISCOVERED, DISCONNECTED, BANNED in total only
         }
+    }
+}
+
+// ===== Phase 3: Async Connection Management =====
+
+<*
+ Internal callback - bridges peer_connection state changes to peer pool (Phase 3).
+
+ This receives state changes from peer_connection and updates the TorrentPeer state accordingly.
+*>
+fn void on_peer_state_change_internal(peer_connection::PeerConnection* conn,
+                                       peer_connection::PeerState conn_state,
+                                       void* user_data)
+{
+    TorrentPeer* peer = (TorrentPeer*)user_data;
+    PeerPool* pool = null;  // We need to find the pool from the peer
+
+    // TODO: This is a limitation - we don't have easy access to pool from peer
+    // For now, we'll handle state in connect_to_peers() via the user callback
+    // This function signature is for future use
+}
+
+<*
+ Internal callback - bridges peer_connection messages to user callback (Phase 3).
+*>
+fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
+                                  peer_wire::Message* msg,
+                                  void* user_data)
+{
+    // Extract peer info from user_data
+    // Format: We'll pack {TorrentPeer*, PeerPool*} later
+    // For now, simplified approach
+}
+
+<*
+ Disconnect a specific peer by IP:port (Phase 3).
+
+ @param ip : "Peer IP address"
+ @param port : "Peer port"
+*>
+fn void PeerPool.disconnect_peer(&self, char[4] ip, ushort port) @public
+{
+    // Find peer
+    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    if (catch err = peer_opt)
+    {
+        return; // Peer not found
+    }
+
+    TorrentPeer* peer = peer_opt;
+
+    // Close connection if active
+    if (peer.connection)
+    {
+        peer_connection::close(peer.connection);
+        peer.connection = null;
+        self.num_active_connections--;
+    }
+
+    // Update state
+    peer.state = PeerState.DISCONNECTED;
+
+    // Update candidate cache
+    self.update_candidate_cache();
+
+    // Call user callback
+    if (self.on_disconnected)
+    {
+        self.on_disconnected(ip, port, false, self.user_data);
+    }
+}
+
+<*
+ Disconnect all active peer connections (Phase 3).
+*>
+fn void PeerPool.disconnect_all(&self) @public
+{
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        if (self.peers[i].connection)
+        {
+            peer_connection::close(self.peers[i].connection);
+            self.peers[i].connection = null;
+            self.peers[i].state = PeerState.DISCONNECTED;
+        }
+    }
+
+    self.num_active_connections = 0;
+
+    // Update candidate cache
+    self.update_candidate_cache();
+}
+
+<*
+ Fill available connection slots with best candidates (Phase 3).
+
+ Automatically connects to the best peers from the candidate cache until
+ max_active_connections is reached or no more candidates are available.
+
+ This is the main entry point for automatic connection management.
+*>
+fn void PeerPool.connect_to_peers(&self) @public
+{
+    // Check if we have room for more connections
+    while (self.num_active_connections < self.config.max_active_connections)
+    {
+        // Pick best candidate
+        TorrentPeer*? best_opt = self.pick_best_candidate();
+        if (catch err = best_opt)
+        {
+            // No more candidates available
+            return;
+        }
+
+        TorrentPeer* peer = best_opt;
+
+        // Format IP address for connection
+        DString ip_builder;
+        ip_builder.appendf("%d.%d.%d.%d",
+                          (int)peer.ip[0] & 0xFF,
+                          (int)peer.ip[1] & 0xFF,
+                          (int)peer.ip[2] & 0xFF,
+                          (int)peer.ip[3] & 0xFF);
+        String ip_str = ip_builder.copy_str(mem);
+        defer std::core::mem::free(ip_str);
+
+        // Connect to peer
+        // Note: For Phase 3, we pass message/state callbacks directly as null
+        // Phase 4 will implement proper bridging to add IP/port to callbacks
+        peer_connection::PeerConnection*? conn_opt = peer_connection::connect(
+            self.loop,
+            ip_str,
+            peer.port,
+            self.info_hash,
+            self.our_peer_id,
+            null,  // Message callback (Phase 4 will bridge this)
+            null,  // State callback (Phase 4 will bridge this)
+            self.user_data
+        );
+
+        if (catch err = conn_opt)
+        {
+            // Connection failed immediately
+            peer.failcount++;
+
+            if (peer.failcount >= self.config.max_failcount)
+            {
+                peer.state = PeerState.BANNED;
+            }
+            else
+            {
+                peer.state = PeerState.DISCONNECTED;
+            }
+
+            // Update candidate cache to exclude this peer
+            self.update_candidate_cache();
+
+            // Continue trying other candidates
+            continue;
+        }
+
+        // Connection initiated successfully
+        peer.connection = conn_opt;
+        peer.state = PeerState.CONNECTING;
+        self.num_active_connections++;
+
+        // Call user callback if provided
+        if (self.on_connected)
+        {
+            self.on_connected(conn_opt, peer.ip, peer.port, self.user_data);
+        }
+
+        // Update candidate cache to remove this peer from candidates
+        self.update_candidate_cache();
     }
 }

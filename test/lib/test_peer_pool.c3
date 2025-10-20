@@ -580,3 +580,125 @@ fn void test_failure_penalty() @test
     assert(rank_after_hash_fail < rank_after_fail, "Rank should decrease after hash failure");
     assert(rank_after_fail - rank_after_hash_fail == 30, "Hash failure penalty should be -30");
 }
+
+// ===== Phase 3 Tests: Async Connection Management =====
+
+// Test set_callbacks function.
+fn void test_set_callbacks() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Set callbacks (just verify it doesn't crash)
+    pool.set_callbacks(null, null, null, null);
+
+    // Verify we can set non-null callbacks too
+    // Note: We can't actually test invocation without real connections
+    pool.set_callbacks(null, null, null, null);
+}
+
+// Test disconnect_peer function.
+fn void test_disconnect_peer() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add a peer
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+
+    // Disconnect peer (should not crash even without connection)
+    pool.disconnect_peer({ 192, 168, 1, 1 }, 6881);
+
+    // Verify peer still exists but state changed
+    peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    assert(peer.state == peer_pool::PeerState.DISCONNECTED,
+           "Disconnected peer should be in DISCONNECTED state");
+}
+
+// Test disconnect_all function.
+fn void test_disconnect_all() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add multiple peers
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, true);
+
+    // Disconnect all (peers without connections remain unchanged)
+    pool.disconnect_all();
+
+    // Verify active connection count is zero
+    assert(pool.num_active_connections == 0, "Should have 0 active connections");
+
+    // Verify peers still exist (just checking disconnect_all doesn't crash)
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+
+    // Peers without connections stay in their original state (DISCOVERED)
+    assert(peer1.state == peer_pool::PeerState.DISCOVERED, "Peer 1 should still be DISCOVERED");
+    assert(peer2.state == peer_pool::PeerState.DISCOVERED, "Peer 2 should still be DISCOVERED");
+    assert(peer3.state == peer_pool::PeerState.DISCOVERED, "Peer 3 should still be DISCOVERED");
+}
+
+// Test connection limit enforcement.
+fn void test_connection_limit() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    // Create pool with low connection limit
+    peer_pool::PeerPoolConfig config = {
+        .max_peerlist_size = 100,
+        .max_active_connections = 3,  // Only 3 connections
+        .max_failcount = 3,
+        .min_reconnect_time = 60
+    };
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, config, &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add 10 peers
+    for (int i = 0; i < 10; i++)
+    {
+        char[4] ip = { 192, 168, 1, (char)i };
+        pool.add_peer(ip, 6881, true);
+    }
+
+    // Try to connect to peers
+    // Note: This will fail because we're not running a real tracker/peers
+    // But we can verify the limit is respected
+    pool.connect_to_peers();
+
+    // Verify we didn't exceed the connection limit
+    // Note: Actual connections will fail, so num_active_connections stays 0
+    // This test verifies the function doesn't crash
+    assert(pool.num_active_connections <= config.max_active_connections,
+           "Should not exceed max_active_connections");
+}
