@@ -14,6 +14,7 @@ import libtorrent::block_manager;
 import libtorrent::storage_manager;
 import libtorrent::bitfield;
 import libtorrent::async_timer;
+import libtorrent::peer_pool;
 
 fn int main(int argc, ZString* argv)
 {
@@ -636,6 +637,9 @@ struct ConnectContext
     // Peer connections
     PeerConnectionInfo[] peer_infos;
 
+    // Peer pool (Phase 1 - storage only)
+    peer_pool::PeerPool* peer_pool;
+
     int exit_code;
 }
 
@@ -731,6 +735,15 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
     }
 
     io::printfn("Tracker returned %d peers", ctx.total_peers);
+
+    // Add all peers to peer pool (Phase 1 integration)
+    ctx.peer_pool.add_peers_from_tracker(response.peers);
+
+    // Show peer pool stats
+    usz total_peers, candidates, connecting, connected;
+    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
+    io::printfn("  Peer pool now has %d total peers", total_peers);
+
     io::printfn("Attempting to connect to first %d peers...", ctx.total_peers < 5 ? ctx.total_peers : 5);
     io::printfn("");
 
@@ -817,6 +830,16 @@ fn void on_connect_load_complete(String data, int status, void* user_data)
 
     ctx.torrent = torrent;
 
+    // Create peer pool (Phase 1 - storage only)
+    char[20] our_peer_id = tracker::generate_peer_id();
+    peer_pool::PeerPoolConfig pool_config = {
+        .max_peerlist_size = 1000,
+        .max_active_connections = 25,
+        .max_failcount = 3,
+        .min_reconnect_time = 60
+    };
+    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
+
     // Get tracker URL
     String tracker_url = torrent.announce;
     if (tracker_url.len == 0)
@@ -898,6 +921,7 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
     ctx.loop = loop;
     ctx.torrent = null;
     ctx.tracker_response = null;
+    ctx.peer_pool = null;
     ctx.total_peers = 0;
     ctx.connections_attempted = 0;
     ctx.connections_succeeded = 0;
@@ -984,6 +1008,12 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
         free(ctx.peer_infos);
     }
 
+    // Free peer pool
+    if (ctx.peer_pool)
+    {
+        peer_pool::free(ctx.peer_pool);
+    }
+
     return ctx.exit_code;
 }
 
@@ -1028,6 +1058,9 @@ struct DownloadContext
     DownloadPeerInfo[] peers;
     int num_peers;
     int max_peers;
+
+    // Peer pool (Phase 1 - just storage, Phase 3 will add connection management)
+    peer_pool::PeerPool* peer_pool;
 
     // Download state
     bool download_complete;
@@ -1472,6 +1505,14 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
 
     io::printfn("Tracker returned %d peers", num_peers);
 
+    // Add all peers to peer pool (Phase 1 integration)
+    ctx.peer_pool.add_peers_from_tracker(response.peers);
+
+    // Show peer pool stats
+    usz total_peers, candidates, connecting, connected;
+    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
+    io::printfn("  Peer pool now has %d total peers", total_peers);
+
     // Check if this is first announce or re-announce
     bool is_first_announce = (ctx.num_peers == 0);
 
@@ -1885,6 +1926,18 @@ fn void on_download_load_complete(String data, int status, void* user_data)
     ctx.num_pieces = num_pieces;
     ctx.pieces_verified_count = 0;
 
+    // Create peer pool (Phase 1 - storage only, Phase 3 will add connection management)
+    char[20] our_peer_id = tracker::generate_peer_id();
+    peer_pool::PeerPoolConfig pool_config = {
+        .max_peerlist_size = 1000,     // Track up to 1000 peers (vs old limit of 10)
+        .max_active_connections = 25,   // Future: Phase 3 will manage connections
+        .max_failcount = 3,             // Future: Phase 3 will track failures
+        .min_reconnect_time = 60        // Future: Phase 3 will handle retries
+    };
+    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
+    io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);
+    io::printfn("");
+
     // Check for existing pieces (resume support)
     io::printfn("Checking for existing pieces...");
     verify_all_existing_pieces_async(ctx);
@@ -1920,6 +1973,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.peers = {};
     ctx.num_peers = 0;
     ctx.max_peers = 10;
+    ctx.peer_pool = null;
     ctx.download_complete = false;
     ctx.exit_code = 0;
     ctx.num_pieces = 0;
@@ -1973,6 +2027,12 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         {
             free(ctx.tracker_response.peers);
         }
+    }
+
+    // Free peer pool
+    if (ctx.peer_pool)
+    {
+        peer_pool::free(ctx.peer_pool);
     }
 
     return ctx.exit_code;
