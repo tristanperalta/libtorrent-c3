@@ -13,6 +13,7 @@ import libtorrent::download_manager;
 import libtorrent::block_manager;
 import libtorrent::storage_manager;
 import libtorrent::bitfield;
+import libtorrent::async_timer;
 
 fn int main(int argc, ZString* argv)
 {
@@ -1017,6 +1018,11 @@ struct DownloadContext
     // Tracker state
     bool tracker_completed;
     tracker::TrackerResponse* tracker_response;
+    async_timer::Timer* announce_timer;     // Periodic announce timer
+    async_timer::Timer* retry_timer;        // Tracker retry backoff timer
+    int announce_retry_count;               // For exponential backoff
+    int announce_backoff_ms;                // Current backoff delay
+    bool initial_announce_done;             // Has first announce succeeded?
 
     // Peer management
     DownloadPeerInfo[] peers;
@@ -1027,9 +1033,50 @@ struct DownloadContext
     bool download_complete;
     int exit_code;
 
+    // Resume verification
+    uint num_pieces;                        // Total number of pieces
+    uint pieces_verified_count;             // Resume verification progress
+
     // Options
     int numwant;
     String save_path;
+}
+
+<*
+ Called when download is complete - closes all handles.
+ Event loop will exit naturally once all handles are closed.
+*>
+fn void on_complete_download(DownloadContext* ctx)
+{
+    io::printfn("");
+    io::printfn("=== Download Complete! ===");
+    io::printfn("All %d pieces verified successfully", ctx.num_pieces);
+    io::printfn("Cleaning up...");
+
+    // Stop announce timers
+    if (ctx.announce_timer)
+    {
+        async_timer::close(ctx.announce_timer);
+        ctx.announce_timer = null;
+    }
+    if (ctx.retry_timer)
+    {
+        async_timer::close(ctx.retry_timer);
+        ctx.retry_timer = null;
+    }
+
+    // Close all peer connections
+    for (usz i = 0; i < ctx.peers.len; i++)
+    {
+        if (ctx.peers[i].conn)
+        {
+            peer_connection::close(ctx.peers[i].conn);
+        }
+    }
+
+    // Event loop will exit naturally when all handles are closed
+    ctx.download_complete = true;
+    ctx.exit_code = 0;
 }
 
 <*
@@ -1067,11 +1114,7 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
     // Check if download is complete
     if (ctx.dm.is_complete())
     {
-        io::printfn("");
-        io::printfn("=== Download Complete! ===");
-        io::printfn("All %d pieces verified successfully", total);
-        ctx.download_complete = true;
-        ctx.exit_code = 0;
+        on_complete_download(ctx);
         return;
     }
 
@@ -1381,21 +1424,12 @@ fn void on_download_peer_state(peer_connection::PeerConnection* peer,
                 }
             }
 
-            if (all_closed && !ctx.dm.is_complete())
+            if (all_closed)
             {
                 io::printfn("");
-                io::printfn("All peers disconnected - re-announcing to find more peers...");
-
-                // Re-announce to tracker to get fresh peers
-                tracker::announce(ctx.loop, ctx.torrent, 6881, "",
-                                  &on_download_tracker_complete, ctx);
-            }
-            else if (all_closed && ctx.dm.is_complete())
-            {
-                io::printfn("");
-                io::printfn("Download complete!");
-                ctx.download_complete = true;
-                ctx.exit_code = 0;
+                io::printfn("All peers disconnected - waiting for periodic announce to find more peers...");
+                // Note: The announce_timer will automatically bring fresh peers
+                // No manual re-announce needed - the timer handles it
             }
 
         default:
@@ -1576,6 +1610,213 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
 }
 
 <*
+ Callback for each piece verification during resume check.
+*>
+fn void on_verify_existing_piece(uint piece_index, bool verified, int status, void* user_data)
+{
+    DownloadContext* ctx = (DownloadContext*)user_data;
+    ctx.pieces_verified_count++;
+
+    if (status == 0 && verified)
+    {
+        // Piece exists and is valid - mark as complete
+        ctx.dm.picker.mark_complete(piece_index)!!;
+    }
+
+    // Show progress every 1000 pieces
+    if (ctx.pieces_verified_count % 1000 == 0)
+    {
+        io::printfn("  Verified %d/%d pieces...", ctx.pieces_verified_count, ctx.num_pieces);
+    }
+
+    // All pieces verified?
+    if (ctx.pieces_verified_count == ctx.num_pieces)
+    {
+        on_all_pieces_verified(ctx);
+    }
+}
+
+<*
+ Verify all existing pieces on disk (resume support).
+ Calls verify_piece() for each piece asynchronously.
+*>
+fn void verify_all_existing_pieces_async(DownloadContext* ctx)
+{
+    if (ctx.num_pieces == 0)
+    {
+        // No pieces to verify, start announce immediately
+        on_all_pieces_verified(ctx);
+        return;
+    }
+
+    // Verify each piece
+    for (uint i = 0; i < ctx.num_pieces; i++)
+    {
+        // Get expected hash for this piece
+        char[20] expected_hash;
+        usz hash_offset = (usz)i * 20;
+        for (usz j = 0; j < 20; j++)
+        {
+            expected_hash[j] = ctx.torrent.info.pieces[hash_offset + j];
+        }
+
+        // Verify piece asynchronously
+        ctx.sm.verify_piece(i, expected_hash, &on_verify_existing_piece, ctx);
+    }
+}
+
+<*
+ Retry timer callback - retries tracker announce after backoff delay.
+*>
+fn void on_announce_retry_timer(async_timer::Timer* timer, void* user_data)
+{
+    DownloadContext* ctx = (DownloadContext*)user_data;
+
+    io::printfn("  Retrying tracker announce (attempt %d)...", ctx.announce_retry_count + 1);
+
+    // Close retry timer
+    async_timer::close(timer);
+    ctx.retry_timer = null;
+
+    // Retry announce
+    tracker::announce(ctx.loop, ctx.torrent, 6881,
+                      ctx.initial_announce_done ? "" : "started",
+                      &on_announce_complete_with_retry, ctx);
+}
+
+<*
+ Tracker announce completion callback with retry support.
+ Implements exponential backoff on failure.
+*>
+fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int status, void* user_data)
+{
+    DownloadContext* ctx = (DownloadContext*)user_data;
+
+    if (status != 0 || !response || response.failure_reason.len > 0)
+    {
+        // Failed - schedule retry with exponential backoff
+        ctx.announce_retry_count++;
+
+        // Calculate backoff: 1s, 2s, 4s, 8s, 16s, 30s (cap at 30s)
+        int backoff_ms = 1000 * (1 << (ctx.announce_retry_count - 1));
+        if (backoff_ms > 30000) backoff_ms = 30000;
+        ctx.announce_backoff_ms = backoff_ms;
+
+        if (status != 0)
+        {
+            String error_desc = tracker_error_string(status);
+            io::eprintfn("  Tracker announce failed: %s (status=%d)", error_desc, status);
+        }
+        else if (response && response.failure_reason.len > 0)
+        {
+            io::eprintfn("  Tracker error: %s", response.failure_reason);
+        }
+
+        io::printfn("  Retrying in %d seconds...", backoff_ms / 1000);
+
+        // Create retry timer (one-shot)
+        async_timer::Timer*? timer_opt = async_timer::create(ctx.loop);
+        if (catch err = timer_opt)
+        {
+            io::eprintfn("  Failed to create retry timer - giving up");
+            ctx.download_complete = true;
+            ctx.exit_code = 1;
+            return;
+        }
+
+        ctx.retry_timer = timer_opt;
+        async_timer::start(ctx.retry_timer, (ulong)backoff_ms, 0,
+                          &on_announce_retry_timer, ctx);
+        return;
+    }
+
+    // Success - reset retry counter
+    ctx.announce_retry_count = 0;
+    ctx.initial_announce_done = true;
+
+    // Start periodic announce timer if not already running
+    if (!ctx.announce_timer && response.interval > 0)
+    {
+        ulong interval_ms = (ulong)(response.interval * 1000);
+        io::printfn("  Setting up periodic announce every %d seconds", response.interval);
+
+        async_timer::Timer*? timer_opt = async_timer::create(ctx.loop);
+        if (catch err = timer_opt)
+        {
+            io::eprintfn("  Warning: Failed to create announce timer");
+        }
+        else
+        {
+            ctx.announce_timer = timer_opt;
+            async_timer::start(ctx.announce_timer, interval_ms, interval_ms,
+                              &on_announce_timer_tick, ctx);
+        }
+    }
+
+    // Call existing tracker completion handler
+    on_download_tracker_complete(response, status, ctx);
+}
+
+<*
+ Periodic announce timer callback - fires every interval seconds.
+*>
+fn void on_announce_timer_tick(async_timer::Timer* timer, void* user_data)
+{
+    DownloadContext* ctx = (DownloadContext*)user_data;
+
+    if (ctx.dm.is_complete())
+    {
+        // Download complete - stop timer
+        async_timer::stop(timer);
+        return;
+    }
+
+    io::printfn("Periodic tracker re-announce...");
+
+    // Don't use retry logic for periodic announces - just try once
+    tracker::announce(ctx.loop, ctx.torrent, 6881, "",
+                      &on_download_tracker_complete, ctx);
+}
+
+<*
+ Start tracker announce with retry support.
+*>
+fn void announce_with_retry(DownloadContext* ctx)
+{
+    ctx.announce_retry_count = 0;
+    ctx.announce_backoff_ms = 0;
+
+    tracker::announce(ctx.loop, ctx.torrent, 6881,
+                      ctx.initial_announce_done ? "" : "started",
+                      &on_announce_complete_with_retry, ctx);
+}
+
+<*
+ Called when all existing pieces have been verified.
+ Starts the tracker announce process.
+*>
+fn void on_all_pieces_verified(DownloadContext* ctx)
+{
+    usz total, complete, downloading;
+    ctx.dm.get_progress(&total, &complete, &downloading);
+
+    if (complete > 0)
+    {
+        double percent = (complete * 100.0) / total;
+        io::printfn("  Found %d/%d existing pieces (%.1f%%)", complete, total, percent);
+    }
+    else
+    {
+        io::printfn("  No existing pieces found - starting from scratch");
+    }
+    io::printfn("");
+
+    // Now start tracker announce
+    io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
+    announce_with_retry(ctx);
+}
+
+<*
  Callback for torrent file load completion.
 *>
 fn void on_download_load_complete(String data, int status, void* user_data)
@@ -1640,11 +1881,13 @@ fn void on_download_load_complete(String data, int status, void* user_data)
         16384  // 16KB blocks
     );
 
-    io::printfn("Announcing to tracker: %s", torrent.announce);
+    // Store num_pieces for resume verification
+    ctx.num_pieces = num_pieces;
+    ctx.pieces_verified_count = 0;
 
-    // Announce to tracker
-    tracker::announce(ctx.loop, torrent, 6881, "started",
-                      &on_download_tracker_complete, ctx);
+    // Check for existing pieces (resume support)
+    io::printfn("Checking for existing pieces...");
+    verify_all_existing_pieces_async(ctx);
 }
 
 <*
@@ -1669,11 +1912,18 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.sm = null;
     ctx.tracker_completed = false;
     ctx.tracker_response = null;
+    ctx.announce_timer = null;
+    ctx.retry_timer = null;
+    ctx.announce_retry_count = 0;
+    ctx.announce_backoff_ms = 0;
+    ctx.initial_announce_done = false;
     ctx.peers = {};
     ctx.num_peers = 0;
     ctx.max_peers = 10;
     ctx.download_complete = false;
     ctx.exit_code = 0;
+    ctx.num_pieces = 0;
+    ctx.pieces_verified_count = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
 
@@ -1681,30 +1931,14 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     torrent_loader::load_file_async(loop, torrent_path,
                                      &on_download_load_complete, &ctx);
 
-    // Run event loop until download completes
-    while (!ctx.download_complete && loop.is_alive())
-    {
-        loop.run_once();
-    }
+    // Run event loop - blocks until download completes or error
+    // The loop exits naturally when all handles are closed
+    loop.run()!!;
 
-    // Cleanup
-    // Close all peer connections
+    // Cleanup - free allocated memory
+    // (Handles are already closed by on_complete_download or error handlers)
     if (ctx.peers.len > 0)
     {
-        for (usz i = 0; i < ctx.peers.len; i++)
-        {
-            if (ctx.peers[i].conn)
-            {
-                peer_connection::close(ctx.peers[i].conn);
-            }
-        }
-
-        // Give event loop time to finish closing connections
-        for (int i = 0; i < 10 && loop.is_alive(); i++)
-        {
-            loop.run_once();
-        }
-
         // Free peer info
         for (usz i = 0; i < ctx.peers.len; i++)
         {
