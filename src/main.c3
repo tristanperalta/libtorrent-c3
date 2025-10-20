@@ -863,13 +863,25 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
     {
         for (usz i = 0; i < ctx.peer_infos.len; i++)
         {
-            if (ctx.peer_infos[i].ip_str.len > 0)
-            {
-                free(ctx.peer_infos[i].ip_str);
-            }
             if (ctx.peer_infos[i].conn)
             {
                 peer_connection::close(ctx.peer_infos[i].conn);
+            }
+        }
+
+        // Give event loop time to finish closing connections
+        // Run a few iterations to let async close operations complete
+        for (int i = 0; i < 10 && loop.is_alive(); i++)
+        {
+            loop.run_once();
+        }
+
+        // Now free the peer info structures
+        for (usz i = 0; i < ctx.peer_infos.len; i++)
+        {
+            if (ctx.peer_infos[i].ip_str.len > 0)
+            {
+                free(ctx.peer_infos[i].ip_str);
             }
         }
         free(ctx.peer_infos);
