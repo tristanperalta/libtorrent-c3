@@ -4,6 +4,7 @@ import libtorrent::event_loop;
 import libtorrent::tracker;
 import libtorrent::peer_connection;
 import libtorrent::peer_wire;
+import libtorrent::bitfield;
 import std::io;
 import std::time;
 
@@ -80,6 +81,11 @@ struct TorrentPeer
     // Flags
     bool seed;                   // Is this peer a seed (has all pieces)?
     bool optimistically_unchoked; // Currently optimistically unchoked?
+    bool handshake_ok;           // Has handshake completed successfully?
+    bool received_bitfield;      // Have we received BITFIELD from this peer?
+
+    // Piece tracking
+    bitfield::Bitfield pieces;   // Which pieces this peer has
 
     // Ranking
     int peer_rank;               // Priority for connection (higher = better)
@@ -299,6 +305,11 @@ fn void free(PeerPool* pool) @public
     // Free all peer structures
     for (usz i = 0; i < pool.peers.len; i++)
     {
+        // Free bitfield if allocated
+        if (pool.peers[i].pieces.data.len > 0)
+        {
+            bitfield::free(&pool.peers[i].pieces);
+        }
         std::core::mem::free(pool.peers[i]);
     }
 
@@ -411,6 +422,89 @@ fn TorrentPeer*? PeerPool.pick_best_candidate(&self) @public
 }
 
 <*
+ Internal bridge: Called when peer_connection state changes.
+ Routes to user's on_connected/on_disconnected callbacks with IP/port.
+*>
+fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
+                                 peer_connection::PeerState state,
+                                 void* user_data)
+{
+    PeerPool* pool = (PeerPool*)user_data;
+
+    // Find which peer this connection belongs to
+    TorrentPeer* peer_info = null;
+    for (usz i = 0; i < pool.peers.len; i++)
+    {
+        if (pool.peers[i].connection == conn)
+        {
+            peer_info = pool.peers[i];
+            break;
+        }
+    }
+
+    if (!peer_info) return;
+
+    switch (state)
+    {
+        case peer_connection::PeerState.READY:
+            // Peer handshake complete - notify user
+            if (pool.on_connected)
+            {
+                pool.on_connected(conn, peer_info.ip, peer_info.port, pool.user_data);
+            }
+            return;
+
+        case peer_connection::PeerState.CLOSED:
+            // Peer disconnected - update state and notify user
+            peer_info.state = PeerState.DISCONNECTED;
+            pool.num_active_connections--;
+
+            if (pool.on_disconnected)
+            {
+                pool.on_disconnected(peer_info.ip, peer_info.port, true, pool.user_data);
+            }
+
+            // Try to replace this connection
+            pool.connect_to_peers();
+            return;
+
+        default:
+            // Ignore other states (CONNECTING, HANDSHAKING)
+            return;
+    }
+}
+
+<*
+ Internal bridge: Called when peer_connection receives message.
+ Routes to user's on_message callback with IP/port added.
+*>
+fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
+                                   peer_wire::Message* msg,
+                                   void* user_data)
+{
+    PeerPool* pool = (PeerPool*)user_data;
+
+    // Find which peer this connection belongs to
+    TorrentPeer* peer_info = null;
+    for (usz i = 0; i < pool.peers.len; i++)
+    {
+        if (pool.peers[i].connection == conn)
+        {
+            peer_info = pool.peers[i];
+            break;
+        }
+    }
+
+    if (!peer_info) return;
+
+    // Forward to user callback with IP/port
+    if (pool.on_message)
+    {
+        pool.on_message(conn, msg, peer_info.ip, peer_info.port, pool.user_data);
+    }
+}
+
+<*
  Set user callbacks for peer events (Phase 3).
 
  @param on_connected : "Callback when peer connects successfully (can be null)"
@@ -469,6 +563,8 @@ fn void PeerPool.add_peer(&self, char[4] ip, ushort port, bool from_tracker) @pu
     peer.last_connected = 0;
     peer.seed = false;
     peer.optimistically_unchoked = false;
+    peer.handshake_ok = false;
+    peer.received_bitfield = false;
     peer.from_tracker = from_tracker;
 
     // Initialize peer_id to zeros
@@ -476,6 +572,9 @@ fn void PeerPool.add_peer(&self, char[4] ip, ushort port, bool from_tracker) @pu
     {
         peer.peer_id[i] = 0;
     }
+
+    // Initialize empty bitfield (will be set when we receive BITFIELD message)
+    peer.pieces = {};
 
     // Calculate initial rank (Phase 2)
     peer.peer_rank = calculate_peer_rank(self, peer);
@@ -558,6 +657,12 @@ fn void PeerPool.erase_peer(&self, TorrentPeer* peer) @public
         return; // Not found
     }
 
+    // Free bitfield if allocated
+    if (self.peers[idx].pieces.data.len > 0)
+    {
+        bitfield::free(&self.peers[idx].pieces);
+    }
+
     // Free the peer structure
     std::core::mem::free(self.peers[idx]);
 
@@ -625,35 +730,6 @@ fn void PeerPool.get_stats(&self,
 }
 
 // ===== Phase 3: Async Connection Management =====
-
-<*
- Internal callback - bridges peer_connection state changes to peer pool (Phase 3).
-
- This receives state changes from peer_connection and updates the TorrentPeer state accordingly.
-*>
-fn void on_peer_state_change_internal(peer_connection::PeerConnection* conn,
-                                       peer_connection::PeerState conn_state,
-                                       void* user_data)
-{
-    TorrentPeer* peer = (TorrentPeer*)user_data;
-    PeerPool* pool = null;  // We need to find the pool from the peer
-
-    // TODO: This is a limitation - we don't have easy access to pool from peer
-    // For now, we'll handle state in connect_to_peers() via the user callback
-    // This function signature is for future use
-}
-
-<*
- Internal callback - bridges peer_connection messages to user callback (Phase 3).
-*>
-fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
-                                  peer_wire::Message* msg,
-                                  void* user_data)
-{
-    // Extract peer info from user_data
-    // Format: We'll pack {TorrentPeer*, PeerPool*} later
-    // For now, simplified approach
-}
 
 <*
  Disconnect a specific peer by IP:port (Phase 3).
@@ -747,18 +823,17 @@ fn void PeerPool.connect_to_peers(&self) @public
         String ip_str = ip_builder.copy_str(mem);
         defer std::core::mem::free(ip_str);
 
-        // Connect to peer
-        // Note: For Phase 3, we pass message/state callbacks directly as null
-        // Phase 4 will implement proper bridging to add IP/port to callbacks
+        // Connect to peer with internal bridge callbacks
+        // The bridge callbacks add IP/port and route to user callbacks
         peer_connection::PeerConnection*? conn_opt = peer_connection::connect(
             self.loop,
             ip_str,
             peer.port,
             self.info_hash,
             self.our_peer_id,
-            null,  // Message callback (Phase 4 will bridge this)
-            null,  // State callback (Phase 4 will bridge this)
-            self.user_data
+            &on_peer_message_internal,  // Bridge: adds IP/port
+            &on_peer_state_internal,    // Bridge: adds IP/port
+            (PeerPool*)self              // Pass pool as user_data for bridge
         );
 
         if (catch err = conn_opt)
@@ -787,11 +862,7 @@ fn void PeerPool.connect_to_peers(&self) @public
         peer.state = PeerState.CONNECTING;
         self.num_active_connections++;
 
-        // Call user callback if provided
-        if (self.on_connected)
-        {
-            self.on_connected(conn_opt, peer.ip, peer.port, self.user_data);
-        }
+        // Note: on_connected callback will be called from bridge when peer reaches READY state
 
         // Update candidate cache to remove this peer from candidates
         self.update_candidate_cache();

@@ -1022,20 +1022,6 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
 // ============================================================================
 
 <*
- Peer state for download command.
-*>
-struct DownloadPeerInfo
-{
-    String ip_str;
-    ushort port;
-    peer_connection::PeerConnection* conn;
-    peer_connection::PeerState state;
-    bool handshake_ok;
-    bool received_bitfield;  // Have we received BITFIELD from this peer?
-    bitfield::Bitfield pieces;  // Which pieces this peer has
-}
-
-<*
  Download context for managing the download workflow.
 *>
 struct DownloadContext
@@ -1054,12 +1040,7 @@ struct DownloadContext
     int announce_backoff_ms;                // Current backoff delay
     bool initial_announce_done;             // Has first announce succeeded?
 
-    // Peer management
-    DownloadPeerInfo[] peers;
-    int num_peers;
-    int max_peers;
-
-    // Peer pool (Phase 1 - just storage, Phase 3 will add connection management)
+    // Peer management (Phase 6 - using peer pool)
     peer_pool::PeerPool* peer_pool;
 
     // Download state
@@ -1098,13 +1079,10 @@ fn void on_complete_download(DownloadContext* ctx)
         ctx.retry_timer = null;
     }
 
-    // Close all peer connections
-    for (usz i = 0; i < ctx.peers.len; i++)
+    // Close all peer connections (peer pool handles this)
+    if (ctx.peer_pool)
     {
-        if (ctx.peers[i].conn)
-        {
-            peer_connection::close(ctx.peers[i].conn);
-        }
+        ctx.peer_pool.disconnect_all();
     }
 
     // Event loop will exit naturally when all handles are closed
@@ -1122,6 +1100,19 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
     if (!success)
     {
         io::eprintfn("Piece %d verification failed!", piece_index);
+
+        // Mark all peers who sent blocks for this piece as having hash failure
+        // TODO: Track which specific peer sent which block (requires per-block tracking)
+        // For now, we penalize all connected peers slightly
+        for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
+        {
+            peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
+            if (peer_info.state == peer_pool::PeerState.CONNECTED)
+            {
+                ctx.peer_pool.mark_hash_failure(peer_info.ip, peer_info.port)!!;
+            }
+        }
+
         // Mark piece as failed for retry
         ctx.dm.fail_piece(piece_index)!!;
         return;
@@ -1153,9 +1144,10 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
 
     // Start downloading more pieces from available peers
     // Find peer bitfields and start new pieces
-    for (usz i = 0; i < ctx.peers.len; i++)
+    for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
     {
-        if (ctx.peers[i].state == peer_connection::PeerState.READY)
+        peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
+        if (peer_info.state == peer_pool::PeerState.CONNECTED && peer_info.handshake_ok)
         {
             // Try to start a new piece download
             // This is a simplified version - ideally we'd track which pieces each peer has
@@ -1187,25 +1179,24 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
 *>
 fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                                   peer_wire::Message* msg,
+                                  char[4] ip, ushort port,
                                   void* user_data)
 {
     DownloadContext* ctx = (DownloadContext*)user_data;
 
-    // Find peer in our list
-    DownloadPeerInfo* peer_info = null;
-    for (usz i = 0; i < ctx.peers.len; i++)
+    // Get peer from pool
+    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(ip, port);
+    if (catch err = peer_opt)
     {
-        if (ctx.peers[i].conn == peer)
-        {
-            peer_info = &ctx.peers[i];
-            break;
-        }
+        io::eprintfn("  [ERROR] Message from unknown peer %d.%d.%d.%d:%d",
+                     ip[0], ip[1], ip[2], ip[3], port);
+        return;
     }
-
-    if (!peer_info) return;
+    peer_pool::TorrentPeer* peer_info = peer_opt;
 
     // Debug: log received message type
-    io::printfn("  [DEBUG] Received message type %d from peer", (int)msg.type);
+    io::printfn("  [DEBUG] Received message type %d from peer %d.%d.%d.%d:%d",
+                (int)msg.type, ip[0], ip[1], ip[2], ip[3], port);
 
     switch (msg.type)
     {
@@ -1235,7 +1226,8 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 // Update download manager
                 ctx.dm.update_peer_bitfield(has_pieces)!!;
 
-                io::printfn("  Peer %s sent bitfield", peer_info.ip_str);
+                io::printfn("  Peer %d.%d.%d.%d:%d sent bitfield",
+                            ip[0], ip[1], ip[2], ip[3], port);
 
                 // Count how many pieces the peer has
                 int peer_piece_count = 0;
@@ -1265,6 +1257,12 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 }
 
                 free(has_pieces);
+
+                // Check if peer is a seed
+                if (peer_piece_count == (int)num_pieces)
+                {
+                    ctx.peer_pool.mark_peer_seed(ip, port)!!;
+                }
             }
 
         case peer_wire::MessageType.HAVE:
@@ -1283,6 +1281,9 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
             // Add block to download manager
             ctx.dm.receive_block(piece_msg.index, piece_msg.begin, piece_msg.block)!!;
 
+            // Track download statistics
+            ctx.peer_pool.update_peer_stats(ip, port, (ulong)piece_msg.block.len, 0)!!;
+
             // Check if piece is complete
             usz total_blocks, received_blocks;
             if (catch excuse = ctx.dm.get_piece_progress(piece_msg.index, &total_blocks, &received_blocks))
@@ -1299,7 +1300,8 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
             request_blocks_from_peers(ctx);
 
         case peer_wire::MessageType.UNCHOKE:
-            io::printfn("  Peer %s unchoked us", peer_info.ip_str);
+            io::printfn("  Peer %d.%d.%d.%d:%d unchoked us",
+                        ip[0], ip[1], ip[2], ip[3], port);
 
             // If we haven't received BITFIELD yet, assume peer has all pieces
             if (!peer_info.received_bitfield)
@@ -1338,6 +1340,9 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
 
                 free(has_all_pieces);
                 peer_info.received_bitfield = true;  // Mark as handled
+
+                // Mark as seed if has all pieces
+                ctx.peer_pool.mark_peer_seed(ip, port)!!;
             }
 
             // Now we can start requesting blocks!
@@ -1345,7 +1350,8 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
             request_blocks_from_peers(ctx);
 
         case peer_wire::MessageType.CHOKE:
-            io::printfn("  Peer %s choked us", peer_info.ip_str);
+            io::printfn("  Peer %d.%d.%d.%d:%d choked us",
+                        ip[0], ip[1], ip[2], ip[3], port);
 
         default:
             // Ignore other message types for now
@@ -1373,11 +1379,18 @@ fn void request_blocks_from_peers(DownloadContext* ctx)
             break;
         }
 
-        // Find a ready peer to request from
+        // Find a ready peer to request from (iterate through peer pool)
         bool requested = false;
-        for (usz i = 0; i < ctx.peers.len; i++)
+        usz total_peers, candidates, connecting, connected;
+        ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
+
+        // Get all peers from pool and find one that's READY
+        for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
         {
-            if (ctx.peers[i].state == peer_connection::PeerState.READY)
+            peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
+            if (peer_info.connection &&
+                peer_info.state == peer_pool::PeerState.CONNECTED &&
+                peer_info.handshake_ok)
             {
                 // Send REQUEST message
                 if (requests_sent == 0)
@@ -1385,7 +1398,7 @@ fn void request_blocks_from_peers(DownloadContext* ctx)
                     io::printfn("  [DEBUG] First request: piece=%d offset=%d length=%d",
                                req.piece_index, req.offset, req.length);
                 }
-                ctx.peers[i].conn.send_request(req.piece_index, req.offset, req.length)!!;
+                peer_info.connection.send_request(req.piece_index, req.offset, req.length)!!;
                 ctx.dm.mark_block_requested(req.piece_index, req.offset)!!;
                 requests_sent++;
                 requested = true;
@@ -1403,69 +1416,66 @@ fn void request_blocks_from_peers(DownloadContext* ctx)
 }
 
 <*
- Callback for peer state changes.
+ Callback when peer successfully connects.
 *>
-fn void on_download_peer_state(peer_connection::PeerConnection* peer,
-                                peer_connection::PeerState state,
-                                void* user_data)
+fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
+                                    char[4] ip, ushort port,
+                                    void* user_data)
 {
     DownloadContext* ctx = (DownloadContext*)user_data;
 
-    // Find peer in our list
-    DownloadPeerInfo* peer_info = null;
-    for (usz i = 0; i < ctx.peers.len; i++)
+    io::printfn("  Peer %d.%d.%d.%d:%d connected and ready",
+                ip[0], ip[1], ip[2], ip[3], port);
+
+    // Get peer from pool
+    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(ip, port);
+    if (catch err = peer_opt) return;
+
+    peer_pool::TorrentPeer* peer_info = peer_opt;
+    peer_info.handshake_ok = true;
+
+    // Send INTERESTED message to the peer
+    peer.send_interested()!!;
+    io::printfn("  Sent INTERESTED to peer %d.%d.%d.%d:%d",
+                ip[0], ip[1], ip[2], ip[3], port);
+
+    // DON'T start piece downloads yet - wait for BITFIELD first
+    // The BITFIELD message handler will start downloads
+}
+
+<*
+ Callback when peer disconnects.
+*>
+fn void on_download_peer_disconnected(char[4] ip, ushort port,
+                                       bool was_error,
+                                       void* user_data)
+{
+    DownloadContext* ctx = (DownloadContext*)user_data;
+
+    io::printfn("  Peer %d.%d.%d.%d:%d disconnected%s",
+                ip[0], ip[1], ip[2], ip[3], port,
+                was_error ? " (error)" : "");
+
+    // Peer pool automatically tries to replace failed connections
+    // Check if download is complete
+    if (ctx.dm.is_complete())
     {
-        if (ctx.peers[i].conn == peer)
-        {
-            peer_info = &ctx.peers[i];
-            break;
-        }
+        io::printfn("");
+        io::printfn("Download complete!");
+        on_complete_download(ctx);
+        return;
     }
 
-    if (!peer_info) return;
+    // Check if all peers are disconnected
+    usz total_peers, candidates, connecting, connected;
+    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
 
-    peer_info.state = state;
-
-    switch (state)
+    if (connected == 0 && connecting == 0)
     {
-        case peer_connection::PeerState.HANDSHAKING:
-            io::printfn("  Peer %s handshaking...", peer_info.ip_str);
-
-        case peer_connection::PeerState.READY:
-            peer_info.handshake_ok = true;
-            io::printfn("  Peer %s ready for download", peer_info.ip_str);
-
-            // Send INTERESTED message to the peer
-            peer.send_interested()!!;
-            io::printfn("  Sent INTERESTED to peer %s", peer_info.ip_str);
-            io::printfn("  Waiting for peer to send BITFIELD...");
-
-            // DON'T start piece downloads yet - wait for BITFIELD first
-            // The BITFIELD message handler will start downloads
-
-        case peer_connection::PeerState.CLOSED:
-            io::printfn("  Peer %s closed - connection lost", peer_info.ip_str);
-
-            // Check if all peers are closed
-            bool all_closed = true;
-            for (usz i = 0; i < ctx.peers.len; i++)
-            {
-                if (ctx.peers[i].state != peer_connection::PeerState.CLOSED)
-                {
-                    all_closed = false;
-                    break;
-                }
-            }
-
-            if (all_closed)
-            {
-                io::printfn("");
-                io::printfn("All peers disconnected - waiting for periodic announce to find more peers...");
-                // Note: The announce_timer will automatically bring fresh peers
-                // No manual re-announce needed - the timer handles it
-            }
-
-        default:
+        io::printfn("");
+        io::printfn("All peers disconnected - waiting for periodic announce to find more peers...");
+        // Note: The announce_timer will automatically bring fresh peers
+        // No manual re-announce needed - the timer handles it
     }
 }
 
@@ -1511,143 +1521,21 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     // Show peer pool stats
     usz total_peers, candidates, connecting, connected;
     ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-    io::printfn("  Peer pool now has %d total peers", total_peers);
+    io::printfn("  Peer pool now has %d total peers (%d candidates, %d connecting, %d connected)",
+                total_peers, candidates, connecting, connected);
 
-    // Check if this is first announce or re-announce
-    bool is_first_announce = (ctx.num_peers == 0);
+    // Automatically connect to best peers (Phase 6 - peer pool manages connections)
+    io::printfn("Connecting to best peers...");
+    ctx.peer_pool.connect_to_peers();
 
-    if (is_first_announce)
-    {
-        io::printfn("Connecting to peers...");
-        io::printfn("");
+    // Show updated stats
+    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
+    io::printfn("  Started %d new connections (total: %d connecting)", connecting - connected, connecting);
 
-        // First announce - create peers array
-        int peers_to_connect = num_peers < ctx.max_peers ? num_peers : ctx.max_peers;
-        ctx.peers = mem::new_array(DownloadPeerInfo, peers_to_connect);
-        ctx.num_peers = peers_to_connect;
-    }
-    else
-    {
-        // Re-announce - try to add new peers to closed slots
-        io::printfn("Looking for new peers to replace closed connections...");
-    }
-
-    // Generate our peer ID
-    char[20] our_peer_id = tracker::generate_peer_id();
-
-    if (is_first_announce)
-    {
-        // Connect to all initial peers
-        for (int i = 0; i < ctx.num_peers; i++)
-        {
-            tracker::Peer* peer = &response.peers[i];
-
-            // Format IP address
-            DString ip_builder;
-            ip_builder.appendf("%d.%d.%d.%d",
-                              (int)peer.ip[0] & 0xFF,
-                              (int)peer.ip[1] & 0xFF,
-                              (int)peer.ip[2] & 0xFF,
-                              (int)peer.ip[3] & 0xFF);
-
-            ctx.peers[i].ip_str = ip_builder.copy_str(mem);
-            ctx.peers[i].port = peer.port;
-            ctx.peers[i].handshake_ok = false;
-            ctx.peers[i].received_bitfield = false;
-            ctx.peers[i].state = peer_connection::PeerState.CONNECTING;
-
-            io::printfn("Connecting to peer %d/%d: %s:%d",
-                       i + 1, ctx.num_peers,
-                       ctx.peers[i].ip_str, ctx.peers[i].port);
-
-            // Connect to peer
-            peer_connection::PeerConnection*? conn_opt = peer_connection::connect(
-                ctx.loop,
-                ctx.peers[i].ip_str,
-                ctx.peers[i].port,
-                ctx.torrent.info_hash,
-                our_peer_id,
-                &on_download_peer_message,
-                &on_download_peer_state,
-                ctx
-            );
-
-            if (catch err = conn_opt)
-            {
-                io::eprintfn("  Failed to initiate connection: %s", err);
-                ctx.peers[i].conn = null;
-            }
-            else
-            {
-                ctx.peers[i].conn = conn_opt;
-            }
-        }
-    }
-    else
-    {
-        // Re-announce - connect new peers to closed slots
-        int new_peer_index = 0;
-        for (usz i = 0; i < ctx.peers.len && new_peer_index < num_peers; i++)
-        {
-            // Skip peers that are still connected
-            if (ctx.peers[i].state != peer_connection::PeerState.CLOSED) continue;
-
-            tracker::Peer* peer = &response.peers[new_peer_index];
-            new_peer_index++;
-
-            // Format IP address
-            DString ip_builder;
-            ip_builder.appendf("%d.%d.%d.%d",
-                              (int)peer.ip[0] & 0xFF,
-                              (int)peer.ip[1] & 0xFF,
-                              (int)peer.ip[2] & 0xFF,
-                              (int)peer.ip[3] & 0xFF);
-
-            // Free old IP string
-            if (ctx.peers[i].ip_str.len > 0) free(ctx.peers[i].ip_str);
-
-            ctx.peers[i].ip_str = ip_builder.copy_str(mem);
-            ctx.peers[i].port = peer.port;
-            ctx.peers[i].handshake_ok = false;
-            ctx.peers[i].received_bitfield = false;
-            ctx.peers[i].state = peer_connection::PeerState.CONNECTING;
-
-            io::printfn("  Connecting to new peer: %s:%d",
-                       ctx.peers[i].ip_str, ctx.peers[i].port);
-
-            // Connect to peer
-            peer_connection::PeerConnection*? conn_opt = peer_connection::connect(
-                ctx.loop,
-                ctx.peers[i].ip_str,
-                ctx.peers[i].port,
-                ctx.torrent.info_hash,
-                our_peer_id,
-                &on_download_peer_message,
-                &on_download_peer_state,
-                ctx
-            );
-
-            if (catch err = conn_opt)
-            {
-                io::eprintfn("    Failed to initiate connection: %s", err);
-                ctx.peers[i].conn = null;
-            }
-            else
-            {
-                ctx.peers[i].conn = conn_opt;
-            }
-        }
-    }
-
-    if (is_first_announce)
-    {
-        io::printfn("");
-        io::printfn("Download in progress...");
-        io::printfn("(Download will continue until complete or Ctrl+C)");
-        io::printfn("");
-    }
-
-    // Don't set download_complete yet - let the download run
+    io::printfn("");
+    io::printfn("Download in progress...");
+    io::printfn("(Download will continue until complete or Ctrl+C)");
+    io::printfn("");
 }
 
 <*
@@ -1936,6 +1824,14 @@ fn void on_download_load_complete(String data, int status, void* user_data)
     };
     ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
     io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);
+
+    // Set peer pool callbacks (Phase 6 integration)
+    ctx.peer_pool.set_callbacks(
+        &on_download_peer_connected,
+        &on_download_peer_message,
+        &on_download_peer_disconnected,
+        ctx
+    );
     io::printfn("");
 
     // Check for existing pieces (resume support)
@@ -1970,9 +1866,6 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.announce_retry_count = 0;
     ctx.announce_backoff_ms = 0;
     ctx.initial_announce_done = false;
-    ctx.peers = {};
-    ctx.num_peers = 0;
-    ctx.max_peers = 10;
     ctx.peer_pool = null;
     ctx.download_complete = false;
     ctx.exit_code = 0;
@@ -1991,19 +1884,6 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // Cleanup - free allocated memory
     // (Handles are already closed by on_complete_download or error handlers)
-    if (ctx.peers.len > 0)
-    {
-        // Free peer info
-        for (usz i = 0; i < ctx.peers.len; i++)
-        {
-            if (ctx.peers[i].ip_str.len > 0)
-            {
-                free(ctx.peers[i].ip_str);
-            }
-        }
-        free(ctx.peers);
-    }
-
     if (ctx.dm)
     {
         download_manager::free(ctx.dm);
