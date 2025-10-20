@@ -1,0 +1,217 @@
+module libtorrent::http_tracker_async;
+
+import libtorrent::http;
+import libtorrent::event_loop;
+import libtorrent::tracker;
+import libtorrent::torrent;
+import std::net::url;
+import libc;
+import std::io;
+
+<*
+ Async HTTP Tracker Implementation
+ ==================================
+ Non-blocking HTTP tracker client using thread pool + libcurl.
+
+ Usage:
+   async_announce(loop, torrent, port, event, &on_complete, user_data);
+*>
+
+// Error codes for async announce
+const int ASYNC_ERROR_HTTP_FAILED = -1;
+const int ASYNC_ERROR_INVALID_RESPONSE = -2;
+const int ASYNC_ERROR_INVALID_URL = -3;
+
+// Callback type for async announce completion
+alias AnnounceCallback = fn void(tracker::TrackerResponse* response, int status, void* user_data);
+
+// Context for async announce operation
+struct AnnounceContext
+{
+    torrent::TorrentFile* torrent;
+    ushort port;
+    String event;
+    AnnounceCallback callback;
+    void* user_data;
+
+    // Results
+    tracker::TrackerResponse result;
+    int error;
+}
+
+<*
+ Clean up resources and invoke user callback.
+*>
+fn void cleanup_and_callback(AnnounceContext* ctx, bool success)
+{
+    // Invoke user callback
+    if (ctx.callback)
+    {
+        if (success)
+        {
+            ctx.callback(&ctx.result, 0, ctx.user_data);
+        }
+        else
+        {
+            ctx.callback(null, ctx.error, ctx.user_data);
+        }
+    }
+
+    // Free context
+    free(ctx);
+}
+
+<*
+ Handle HTTP response.
+*>
+fn void on_http_response(http::HttpResponse* response, int status, void* user_data)
+{
+    AnnounceContext* ctx = (AnnounceContext*)user_data;
+
+    if (status < 0 || !response)
+    {
+        ctx.error = ASYNC_ERROR_HTTP_FAILED;
+        cleanup_and_callback(ctx, false);
+        return;
+    }
+
+    // Check HTTP status
+    if (response.status != 200)
+    {
+        // Free response body (allocated with libc malloc in worker thread)
+        if (response.body.len > 0) {
+            libc::free((void*)response.body.ptr);
+        }
+        ctx.error = ASYNC_ERROR_HTTP_FAILED;
+        cleanup_and_callback(ctx, false);
+        return;
+    }
+
+    // Parse tracker response
+    tracker::TrackerResponse? parsed = tracker::parse_tracker_response(response.body);
+
+    // Free response body (allocated with libc malloc in worker thread)
+    if (response.body.len > 0) {
+        libc::free((void*)response.body.ptr);
+    }
+
+    if (catch err = parsed)
+    {
+        ctx.error = ASYNC_ERROR_INVALID_RESPONSE;
+        cleanup_and_callback(ctx, false);
+        return;
+    }
+
+    // Success
+    ctx.result = parsed;
+    cleanup_and_callback(ctx, true);
+}
+
+<*
+ Perform async announce to HTTP tracker.
+ Does NOT block the event loop - uses thread pool.
+
+ @param loop : "Event loop"
+ @param torrent : "Torrent file"
+ @param port : "Our listening port"
+ @param event : "Event string (started/stopped/completed or empty)"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
+*>
+fn void async_announce(event_loop::EventLoop* loop, torrent::TorrentFile* torrent,
+                       ushort port, String event, AnnounceCallback callback,
+                       void* user_data) @public
+{
+    // Parse tracker URL
+    String tracker_url = torrent.announce;
+    if (!tracker_url.starts_with("http://") && !tracker_url.starts_with("https://"))
+    {
+        if (callback)
+        {
+            callback(null, ASYNC_ERROR_INVALID_URL, user_data);
+        }
+        return;
+    }
+
+    // Generate peer ID
+    char[20] peer_id = tracker::generate_peer_id();
+
+    // Parse tracker URL
+    url::Url? tracker_url_parsed = url::parse(mem, tracker_url);
+    if (catch err = tracker_url_parsed)
+    {
+        if (callback)
+        {
+            callback(null, ASYNC_ERROR_INVALID_URL, user_data);
+        }
+        return;
+    }
+
+    // Determine protocol and port
+    bool use_tls = tracker_url_parsed.scheme == "https";
+    ushort tracker_port = (ushort)tracker_url_parsed.port;
+    if (tracker_port == 0)
+    {
+        tracker_port = use_tls ? 443 : 80;
+    }
+
+    String host = tracker_url_parsed.host.copy(mem);
+
+    // Build announce URL with query parameters
+    String announce_url = tracker::build_announce_url(
+        tracker_url,
+        &torrent.info_hash,
+        &peer_id,
+        port,
+        0,  // uploaded
+        0,  // downloaded
+        torrent.info.length,  // left
+        event
+    );
+
+    // Parse the full announce URL to extract path + query
+    url::Url? full_url = url::parse(mem, announce_url);
+    if (catch err = full_url)
+    {
+        free(host);
+        free(announce_url);
+        tracker_url_parsed.free();
+        if (callback)
+        {
+            callback(null, ASYNC_ERROR_INVALID_URL, user_data);
+        }
+        return;
+    }
+
+    // Build path + query string for HTTP request
+    DString path_and_query;
+    path_and_query.append(full_url.path);
+    if (full_url.query.len > 0)
+    {
+        path_and_query.append_char('?');
+        path_and_query.append(full_url.query);
+    }
+
+    String path = path_and_query.copy_str(mem);
+
+    full_url.free();
+    free(announce_url);
+    tracker_url_parsed.free();
+
+    // Allocate context
+    AnnounceContext* ctx = mem::new(AnnounceContext);
+    ctx.torrent = torrent;
+    ctx.port = port;
+    ctx.event = event;
+    ctx.callback = callback;
+    ctx.user_data = user_data;
+    ctx.result.peers = {};
+
+    // Make async HTTP request (uses thread pool!)
+    http::request_async(loop, host, tracker_port, use_tls,
+                        "GET", path, "",
+                        &on_http_response, ctx);
+
+    free(host);
+    free(path);
+}

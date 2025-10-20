@@ -4,6 +4,7 @@ import std::io;
 import std::encoding::hex;
 import libtorrent;
 import libtorrent::tracker;
+import libtorrent::event_loop;
 
 faultdef FILE_ERROR;
 
@@ -309,8 +310,25 @@ fn void display_tracker_response(tracker::TrackerResponse* response)
     }
 }
 
+// Context for async announce
+struct AnnounceContext
+{
+    bool completed;
+    tracker::TrackerResponse* response;
+    int status;
+}
+
+fn void on_announce_complete(tracker::TrackerResponse* response, int status, void* user_data)
+{
+    AnnounceContext* ctx = (AnnounceContext*)user_data;
+    ctx.completed = true;
+    ctx.response = response;
+    ctx.status = status;
+}
+
 <*
  Announce command: contact tracker and display peer list.
+ Now uses async tracker (non-blocking with thread pool for HTTP).
 
  @param torrent_path : "Path to torrent file"
  @return "Exit code (0 = success, 1 = error)"
@@ -352,16 +370,39 @@ fn int cmd_announce(String torrent_path)
         }
     }
 
-    io::printfn("Announcing to tracker: %s", tracker_url);
+    io::printfn("Announcing to tracker (async): %s", tracker_url);
     io::printfn("");
 
-    // Announce to tracker (supports HTTP/HTTPS and UDP)
-    ushort our_port = 6881;  // Default BitTorrent port
-    tracker::TrackerResponse? response = tracker::announce(torrent, our_port, "started");
-
-    if (catch err = response)
+    // Create event loop
+    event_loop::EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
     {
-        io::eprintfn("Error announcing to tracker: %s", err);
+        io::eprintfn("Error creating event loop");
+        return 1;
+    }
+    event_loop::EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Announce context
+    AnnounceContext ctx;
+    ctx.completed = false;
+    ctx.response = null;
+    ctx.status = 0;
+
+    // Announce to tracker (async - doesn't block!)
+    ushort our_port = 6881;
+    tracker::async_announce(&loop, torrent, our_port, "started",
+                            &on_announce_complete, &ctx);
+
+    // Run event loop until announce completes
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    if (!ctx.completed || ctx.status != 0 || !ctx.response)
+    {
+        io::eprintfn("Error announcing to tracker");
         io::eprintfn("");
         io::eprintfn("Note: Some trackers may reject announces if you're not");
         io::eprintfn("actually downloading/seeding the torrent.");
@@ -369,20 +410,20 @@ fn int cmd_announce(String torrent_path)
     }
 
     // Display response
-    display_tracker_response(&response);
+    display_tracker_response(ctx.response);
 
     // Free allocated strings in response
-    if (response.failure_reason.len > 0)
+    if (ctx.response.failure_reason.len > 0)
     {
-        free(response.failure_reason);
+        free(ctx.response.failure_reason);
     }
-    if (response.warning_message.len > 0)
+    if (ctx.response.warning_message.len > 0)
     {
-        free(response.warning_message);
+        free(ctx.response.warning_message);
     }
-    if (response.peers.len > 0)
+    if (ctx.response.peers.len > 0)
     {
-        free(response.peers);
+        free(ctx.response.peers);
     }
 
     return 0;

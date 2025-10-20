@@ -49,4 +49,4 @@ fn void test_http_client_interface() @test {
 // Note: We skip testing actual HTTP requests here because:
 // 1. We don't have a mock HTTP server in the test environment
 // 2. Real HTTP requests would be slow and unreliable in unit tests
-// Integration tests with real trackers will test the full HTTP functionality
+// 3. Async HTTP functionality is tested via the announce command with real trackers

@@ -4,6 +4,9 @@ import libtorrent::http;
 import libtorrent::bencode;
 import libtorrent::torrent;
 import libtorrent::udp_tracker;
+import libtorrent::udp_tracker_async;
+import libtorrent::http_tracker_async;
+import libtorrent::event_loop;
 import std::net::url;
 import std::time;
 import std::math::random;
@@ -397,5 +400,50 @@ fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort our_port,
     defer tracker.free();
 
     return tracker.announce(torrent, our_port, event);
+}
+
+// Async announce callback type
+alias AsyncAnnounceCallback = fn void(TrackerResponse* response, int status, void* user_data);
+
+<*
+ Announce to tracker asynchronously (non-blocking).
+ Routes to HTTP or UDP tracker async implementation based on URL.
+
+ @param loop : "Event loop"
+ @param torrent : "The torrent file"
+ @param our_port : "Our listening port"
+ @param event : "Event type (started/stopped/completed or empty string)"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
+*>
+fn void async_announce(event_loop::EventLoop* loop,
+                       torrent::TorrentFile* torrent,
+                       ushort our_port,
+                       String event,
+                       AsyncAnnounceCallback callback,
+                       void* user_data) @public
+{
+    String url = torrent.announce;
+
+    if (url.starts_with("udp://"))
+    {
+        // Use UDP tracker async
+        udp_tracker_async::async_announce(loop, torrent, our_port, event,
+                                           callback, user_data);
+    }
+    else if (url.starts_with("http://") || url.starts_with("https://"))
+    {
+        // Use HTTP tracker async (thread pool)
+        http_tracker_async::async_announce(loop, torrent, our_port, event,
+                                             callback, user_data);
+    }
+    else
+    {
+        // Invalid URL
+        if (callback)
+        {
+            callback(null, -1, user_data);
+        }
+    }
 }
 

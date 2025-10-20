@@ -39,6 +39,7 @@ alias Write = void;       // uv_write_t
 alias Shutdown = void;    // uv_shutdown_t
 alias UdpSend = void;     // uv_udp_send_t
 alias GetAddrInfo = void; // uv_getaddrinfo_t
+alias Work = void;        // uv_work_t (thread pool work request)
 
 // Filesystem request (uv_fs_t) - needs actual storage
 struct Fs
@@ -210,6 +211,10 @@ alias TimerCb = fn void(Timer* handle);
 
 // DNS callback - called when DNS resolution completes
 alias GetAddrInfoCb = fn void(GetAddrInfo* req, int status, AddrInfo* res);
+
+// Thread pool work callbacks
+alias WorkCb = fn void(Work* req);
+alias AfterWorkCb = fn void(Work* req, int status);
 
 // ============================================================================
 // Event Loop Functions
@@ -904,3 +909,24 @@ fn int getaddrinfo(Loop* loop, GetAddrInfo* req, GetAddrInfoCb cb, char* node, c
  @param ai : "Address info structure to free"
 *>
 fn void freeaddrinfo(AddrInfo* ai) @extern("uv_freeaddrinfo");
+
+// ============================================================================
+// Thread Pool Functions
+// ============================================================================
+
+<*
+ Queue work to be run in the thread pool.
+
+ The work_cb function runs in a worker thread (can block safely).
+ The after_work_cb runs in the event loop thread after work completes.
+
+ This allows wrapping blocking operations (like HTTP with libcurl,
+ SHA-1 hashing, encryption, etc.) without blocking the event loop.
+
+ @param loop : "Event loop"
+ @param req : "Work request (uv_work_t)"
+ @param work_cb : "Function to run in thread pool (can block!)"
+ @param after_work_cb : "Callback in event loop thread after work completes"
+ @return "0 on success, negative error code on failure"
+*>
+fn int queue_work(Loop* loop, Work* req, WorkCb work_cb, AfterWorkCb after_work_cb) @extern("uv_queue_work");
