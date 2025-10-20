@@ -1,8 +1,25 @@
 module libtorrent::piece_assembler::test;
 
 import libtorrent::piece_assembler;
+import libtorrent::event_loop;
 import std::hash::sha1;
 import std::io;
+
+// Context for async verification tests
+struct TestVerifyContext
+{
+    bool completed;
+    bool verified;
+    uint expected_piece_index;
+}
+
+fn void on_test_verify_complete(uint piece_index, bool verified, void* user_data)
+{
+    TestVerifyContext* ctx = (TestVerifyContext*)user_data;
+    ctx.completed = true;
+    ctx.verified = verified;
+    assert(piece_index == ctx.expected_piece_index, "Piece index should match");
+}
 
 // ============================================================================
 // Creation Tests
@@ -142,6 +159,9 @@ fn void test_add_block_exceeds_length() @test
 
 fn void test_verify_correct_hash() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     // Create known data
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)(i & 0xFF);
@@ -157,13 +177,28 @@ fn void test_verify_correct_hash() @test
     assembler.add_block(0, data[..])!!;
     assert(assembler.is_complete(), "Should be complete");
 
-    // Verify
-    fault? result = assembler.verify();
-    result!!; // Should succeed
+    // Verify (async)
+    TestVerifyContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = 0;
+
+    assembler.verify(&loop, &on_test_verify_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    assert(ctx.completed, "Verification callback should be called");
+    assert(ctx.verified, "Should verify successfully");
 }
 
 fn void test_verify_incorrect_hash() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     // Create data
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)(i & 0xFF);
@@ -179,18 +214,28 @@ fn void test_verify_incorrect_hash() @test
     // Add data
     assembler.add_block(0, data[..])!!;
 
-    // Verify should fail
-    fault? result = assembler.verify();
-    if (catch excuse = result)
+    // Verify should fail (async)
+    TestVerifyContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = 0;
+
+    assembler.verify(&loop, &on_test_verify_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
     {
-        // Expected to fail
-        return;
+        loop.run_once();
     }
-    assert(false, "Verification should fail with wrong hash");
+
+    assert(ctx.completed, "Verification callback should be called");
+    assert(!ctx.verified, "Verification should fail with wrong hash");
 }
 
 fn void test_verify_not_complete() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 32768, expected_hash, 16384);
     defer piece_assembler::free(&assembler);
@@ -198,18 +243,28 @@ fn void test_verify_not_complete() @test
     char[16384] data;
     assembler.add_block(0, data[..])!!;  // Only 1 of 2 blocks
 
-    // Try to verify incomplete piece
-    fault? result = assembler.verify();
-    if (catch excuse = result)
+    // Try to verify incomplete piece (async)
+    TestVerifyContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = 0;
+
+    assembler.verify(&loop, &on_test_verify_complete, &ctx);
+
+    // Run event loop (callback should be called immediately)
+    while (!ctx.completed && loop.is_alive())
     {
-        // Expected to fail
-        return;
+        loop.run_once();
     }
-    assert(false, "Should fail to verify incomplete piece");
+
+    assert(ctx.completed, "Verification callback should be called");
+    assert(!ctx.verified, "Should fail to verify incomplete piece");
 }
 
 fn void test_verify_multiple_blocks() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     // Create two blocks of known data
     char[32768] full_data;
     for (usz i = 0; i < full_data.len; i++) full_data[i] = (char)(i & 0xFF);
@@ -234,9 +289,21 @@ fn void test_verify_multiple_blocks() @test
     assembler.add_block(0, block1[..])!!;
     assembler.add_block(16384, block2[..])!!;
 
-    // Verify
-    fault? result = assembler.verify();
-    result!!; // Should succeed
+    // Verify (async)
+    TestVerifyContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = 0;
+
+    assembler.verify(&loop, &on_test_verify_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    assert(ctx.completed, "Verification callback should be called");
+    assert(ctx.verified, "Should verify successfully");
 }
 
 // ============================================================================
@@ -325,6 +392,9 @@ fn void test_is_complete() @test
 
 fn void test_single_block_piece() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[8192] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)(i & 0xFF);
 
@@ -338,12 +408,28 @@ fn void test_single_block_piece() @test
     assembler.add_block(0, data[..])!!;
     assert(assembler.is_complete(), "Should be complete");
 
-    fault? result = assembler.verify();
-    result!!; // Should succeed
+    // Verify (async)
+    TestVerifyContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = 0;
+
+    assembler.verify(&loop, &on_test_verify_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    assert(ctx.completed, "Verification callback should be called");
+    assert(ctx.verified, "Should verify successfully");
 }
 
 fn void test_last_block_shorter() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     // 2.5 blocks (40KB)
     char[40960] full_data;
     for (usz i = 0; i < full_data.len; i++) full_data[i] = (char)(i & 0xFF);
@@ -370,8 +456,21 @@ fn void test_last_block_shorter() @test
 
     assert(assembler.is_complete(), "Should be complete");
 
-    fault? result = assembler.verify();
-    result!!; // Should succeed with last block shorter
+    // Verify (async)
+    TestVerifyContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = 0;
+
+    assembler.verify(&loop, &on_test_verify_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    assert(ctx.completed, "Verification callback should be called");
+    assert(ctx.verified, "Should succeed with last block shorter");
 }
 
 fn void test_large_piece() @test

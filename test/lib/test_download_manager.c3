@@ -1,6 +1,7 @@
 module libtorrent::download_manager::test;
 
 import libtorrent::download_manager;
+import libtorrent::event_loop;
 import libtorrent::block_manager;
 import std::hash::sha1;
 import std::io;
@@ -11,12 +12,15 @@ import std::io;
 
 fn void test_create_manager() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     // Create 5 pieces, 256KB each, max 2 concurrent
     char[100] hashes; // 5 pieces * 20 bytes
     for (usz i = 0; i < 100; i++) hashes[i] = (char)i;
 
     download_manager::DownloadManager manager = download_manager::create(
-        5, 262144, 262144, hashes[..], 2, 16384);
+        &loop, 5, 262144, 262144, hashes[..], 2, 16384);
     defer download_manager::free(&manager);
 
     assert(manager.num_pieces == 5, "Should track 5 pieces");
@@ -26,10 +30,13 @@ fn void test_create_manager() @test
 
 fn void test_create_with_shorter_last_piece() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes; // 3 pieces * 20 bytes
 
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 131072, hashes[..], 1, 16384);
+        &loop, 3, 262144, 131072, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     assert(manager.last_piece_length == 131072, "Last piece should be 128KB");
@@ -41,9 +48,12 @@ fn void test_create_with_shorter_last_piece() @test
 
 fn void test_update_peer_bitfield() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 262144, hashes[..], 1, 16384);
+        &loop, 3, 262144, 262144, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     bool[3] bitfield = {true, false, true};
@@ -56,9 +66,12 @@ fn void test_update_peer_bitfield() @test
 
 fn void test_update_bitfield_wrong_size() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 262144, hashes[..], 1, 16384);
+        &loop, 3, 262144, 262144, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     bool[5] wrong_size = {true, false, true, false, true};
@@ -74,9 +87,12 @@ fn void test_update_bitfield_wrong_size() @test
 
 fn void test_peer_has_piece() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 262144, hashes[..], 1, 16384);
+        &loop, 3, 262144, 262144, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     manager.peer_has_piece(1)!!;
@@ -89,9 +105,12 @@ fn void test_peer_has_piece() @test
 
 fn void test_start_piece_download() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 262144, hashes[..], 2, 16384);
+        &loop, 3, 262144, 262144, hashes[..], 2, 16384);
     defer download_manager::free(&manager);
 
     // Peer has all pieces
@@ -112,9 +131,12 @@ fn void test_start_piece_download() @test
 
 fn void test_start_multiple_pieces() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 262144, hashes[..], 2, 16384);
+        &loop, 3, 262144, 262144, hashes[..], 2, 16384);
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -135,9 +157,12 @@ fn void test_start_multiple_pieces() @test
 
 fn void test_start_exceeds_max_concurrent() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 262144, hashes[..], 1, 16384);  // Max 1 concurrent
+        &loop, 3, 262144, 262144, hashes[..], 1, 16384);  // Max 1 concurrent
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -158,9 +183,12 @@ fn void test_start_exceeds_max_concurrent() @test
 
 fn void test_start_no_pieces_available() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 262144, 262144, hashes[..], 1, 16384);
+        &loop, 3, 262144, 262144, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     // Peer has no pieces
@@ -182,9 +210,12 @@ fn void test_start_no_pieces_available() @test
 
 fn void test_get_next_block_request() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 32768, 32768, hashes[..], 1, 16384);  // Small pieces for testing
+        &loop, 3, 32768, 32768, hashes[..], 1, 16384);  // Small pieces for testing
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -202,9 +233,12 @@ fn void test_get_next_block_request() @test
 
 fn void test_get_multiple_block_requests() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 49152, 49152, hashes[..], 1, 16384);  // 3 blocks per piece
+        &loop, 3, 49152, 49152, hashes[..], 1, 16384);  // 3 blocks per piece
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -222,9 +256,12 @@ fn void test_get_multiple_block_requests() @test
 
 fn void test_no_blocks_available() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);  // 1 block pieces
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);  // 1 block pieces
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -251,9 +288,12 @@ fn void test_no_blocks_available() @test
 
 fn void test_receive_block() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -276,9 +316,12 @@ fn void test_receive_block() @test
 
 fn void test_receive_block_not_downloading() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     char[16384] data;
@@ -296,8 +339,29 @@ fn void test_receive_block_not_downloading() @test
 // Complete Piece Tests
 // ============================================================================
 
+// Context for async completion tests
+struct TestCompletionContext
+{
+    bool completed;
+    char[] piece_data;
+    bool success;
+    uint expected_piece_index;
+}
+
+fn void on_test_piece_complete(uint piece_index, char[] piece_data, bool success, void* user_data)
+{
+    TestCompletionContext* ctx = (TestCompletionContext*)user_data;
+    ctx.completed = true;
+    ctx.piece_data = piece_data;
+    ctx.success = success;
+    assert(piece_index == ctx.expected_piece_index, "Piece index should match");
+}
+
 fn void test_complete_piece_success() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     // Create data and calculate hash
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)(i & 0xFF);
@@ -308,7 +372,7 @@ fn void test_complete_piece_success() @test
     for (usz i = 0; i < 20; i++) hashes[i] = hash[i];
 
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -329,18 +393,33 @@ fn void test_complete_piece_success() @test
     // Receive block
     manager.receive_block(piece_index, 0, data[..])!!;
 
-    // Complete piece
-    char[]? piece_opt = manager.complete_piece(piece_index);
-    piece_opt!!;
-    char[] piece = piece_opt!!;
-    defer free(piece);
+    // Complete piece (async)
+    TestCompletionContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = piece_index;
 
-    assert(piece.len == 16384, "Piece should be 16KB");
+    manager.complete_piece(piece_index, &on_test_piece_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    assert(ctx.completed, "Completion callback should be called");
+    assert(ctx.success, "Completion should succeed");
+    assert(ctx.piece_data.len == 16384, "Piece should be 16KB");
     assert(manager.have_piece(piece_index), "Piece should be marked complete");
+
+    // Clean up piece data
+    if (ctx.piece_data.len > 0) free(ctx.piece_data);
 }
 
 fn void test_complete_piece_hash_fail() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     // Create data
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)(i & 0xFF);
@@ -350,7 +429,7 @@ fn void test_complete_piece_hash_fail() @test
     for (usz i = 0; i < 20; i++) hashes[i] = (char)0xFF;
 
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -369,30 +448,47 @@ fn void test_complete_piece_hash_fail() @test
 
     manager.receive_block(piece_index, 0, data[..])!!;
 
-    // Try to complete with wrong hash
-    char[]? result = manager.complete_piece(piece_index);
-    if (catch excuse = result)
+    // Try to complete with wrong hash (async)
+    TestCompletionContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = piece_index;
+
+    manager.complete_piece(piece_index, &on_test_piece_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
     {
-        // Expected to fail
-        return;
+        loop.run_once();
     }
-    assert(false, "Should fail with hash mismatch");
+
+    assert(ctx.completed, "Completion callback should be called");
+    assert(!ctx.success, "Should fail with hash mismatch");
 }
 
 fn void test_complete_piece_not_downloading() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
-    char[]? result = manager.complete_piece(99);
-    if (catch excuse = result)
+    TestCompletionContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = 99;
+
+    manager.complete_piece(99, &on_test_piece_complete, &ctx);
+
+    // Run event loop (callback should be called immediately)
+    while (!ctx.completed && loop.is_alive())
     {
-        // Expected to fail
-        return;
+        loop.run_once();
     }
-    assert(false, "Should fail when piece not downloading");
+
+    assert(ctx.completed, "Completion callback should be called");
+    assert(!ctx.success, "Should fail when piece not downloading");
 }
 
 // ============================================================================
@@ -401,9 +497,12 @@ fn void test_complete_piece_not_downloading() @test
 
 fn void test_fail_piece() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 2, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 2, 16384);
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -433,9 +532,12 @@ fn void test_fail_piece() @test
 
 fn void test_fail_piece_not_downloading() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     fault? result = manager.fail_piece(99);
@@ -453,9 +555,12 @@ fn void test_fail_piece_not_downloading() @test
 
 fn void test_get_progress() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 2, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 2, 16384);
     defer download_manager::free(&manager);
 
     usz total, complete, downloading;
@@ -475,6 +580,9 @@ fn void test_get_progress() @test
 
 fn void test_is_complete() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     // Fill with valid hashes
     char[16384] piece_data;
@@ -489,7 +597,7 @@ fn void test_is_complete() @test
     }
 
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 3, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 3, 16384);
     defer download_manager::free(&manager);
 
     assert(!manager.is_complete(), "Should not be complete initially");
@@ -503,26 +611,46 @@ fn void test_is_complete() @test
         manager.start_piece_download(peer_pieces[..])!!;
     }
 
-    // Find and complete each piece
+    // Find and complete each piece (async)
+    usz completed_count = 0;
     for (usz slot = 0; slot < 3; slot++)
     {
         if (manager.active_downloads[slot].active)
         {
             uint piece_idx = manager.active_downloads[slot].piece_index;
             manager.receive_block(piece_idx, 0, piece_data[..])!!;
-            char[] piece = manager.complete_piece(piece_idx)!!;
-            free(piece);
+
+            TestCompletionContext ctx;
+            ctx.completed = false;
+            ctx.expected_piece_index = piece_idx;
+
+            manager.complete_piece(piece_idx, &on_test_piece_complete, &ctx);
+
+            // Run event loop until this piece completes
+            while (!ctx.completed && loop.is_alive())
+            {
+                loop.run_once();
+            }
+
+            assert(ctx.completed, "Piece should complete");
+            assert(ctx.success, "Piece should verify");
+            if (ctx.piece_data.len > 0) free(ctx.piece_data);
+            completed_count++;
         }
     }
 
+    assert(completed_count == 3, "Should have completed all 3 pieces");
     assert(manager.is_complete(), "Should be complete after all pieces");
 }
 
 fn void test_get_piece_progress() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 49152, 49152, hashes[..], 1, 16384);  // 3 blocks per piece
+        &loop, 3, 49152, 49152, hashes[..], 1, 16384);  // 3 blocks per piece
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -551,9 +679,12 @@ fn void test_get_piece_progress() @test
 
 fn void test_is_piece_downloading() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -575,6 +706,9 @@ fn void test_is_piece_downloading() @test
 
 fn void test_have_piece() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[16384] piece_data;
     for (usz i = 0; i < 16384; i++) piece_data[i] = (char)i;
     char[20] piece_hash = sha1::hash(piece_data[..]);
@@ -583,7 +717,7 @@ fn void test_have_piece() @test
     for (usz i = 0; i < 20; i++) hashes[i] = piece_hash[i];
 
     download_manager::DownloadManager manager = download_manager::create(
-        3, 16384, 16384, hashes[..], 1, 16384);
+        &loop, 3, 16384, 16384, hashes[..], 1, 16384);
     defer download_manager::free(&manager);
 
     bool[3] peer_pieces = {true, true, true};
@@ -594,8 +728,22 @@ fn void test_have_piece() @test
     assert(!manager.have_piece(piece_index), "Should not have piece initially");
 
     manager.receive_block(piece_index, 0, piece_data[..])!!;
-    char[] piece = manager.complete_piece(piece_index)!!;
-    defer free(piece);
+
+    TestCompletionContext ctx;
+    ctx.completed = false;
+    ctx.expected_piece_index = piece_index;
+
+    manager.complete_piece(piece_index, &on_test_piece_complete, &ctx);
+
+    // Run event loop until completion
+    while (!ctx.completed && loop.is_alive())
+    {
+        loop.run_once();
+    }
+
+    assert(ctx.completed, "Completion callback should be called");
+    assert(ctx.success, "Completion should succeed");
+    if (ctx.piece_data.len > 0) free(ctx.piece_data);
 
     assert(manager.have_piece(piece_index), "Should have piece after completion");
 }
@@ -606,6 +754,9 @@ fn void test_have_piece() @test
 
 fn void test_last_piece_shorter() @test
 {
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
     char[16384] piece_data;
     for (usz i = 0; i < 16384; i++) piece_data[i] = (char)i;
     char[20] piece_hash = sha1::hash(piece_data[..]);
@@ -619,7 +770,7 @@ fn void test_last_piece_shorter() @test
     for (usz i = 0; i < 20; i++) hashes[20 + i] = last_hash[i];
 
     download_manager::DownloadManager manager = download_manager::create(
-        2, 16384, 8192, hashes[..], 2, 16384);  // Last piece is 8KB
+        &loop, 2, 16384, 8192, hashes[..], 2, 16384);  // Last piece is 8KB
     defer download_manager::free(&manager);
 
     bool[2] peer_pieces = {true, true};
@@ -637,10 +788,24 @@ fn void test_last_piece_shorter() @test
         {
             // Receive last piece (8KB)
             manager.receive_block(1, 0, last_piece_data[..])!!;
-            char[] piece = manager.complete_piece(1)!!;
-            defer free(piece);
 
-            assert(piece.len == 8192, "Last piece should be 8KB");
+            TestCompletionContext ctx;
+            ctx.completed = false;
+            ctx.expected_piece_index = 1;
+
+            manager.complete_piece(1, &on_test_piece_complete, &ctx);
+
+            // Run event loop until completion
+            while (!ctx.completed && loop.is_alive())
+            {
+                loop.run_once();
+            }
+
+            assert(ctx.completed, "Completion callback should be called");
+            assert(ctx.success, "Completion should succeed");
+            assert(ctx.piece_data.len == 8192, "Last piece should be 8KB");
+            if (ctx.piece_data.len > 0) free(ctx.piece_data);
+
             return;
         }
     }

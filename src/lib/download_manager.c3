@@ -3,6 +3,7 @@ module libtorrent::download_manager;
 import libtorrent::piece_picker;
 import libtorrent::block_manager;
 import libtorrent::piece_assembler;
+import libtorrent::event_loop;
 import std::io;
 
 <*
@@ -14,11 +15,11 @@ import std::io;
  This is the top-level download coordination layer that:
  - Uses PiecePicker to select which pieces to download (rarest-first)
  - Manages multiple concurrent piece downloads with BlockManager
- - Assembles and verifies completed pieces with PieceAssembler
+ - Assembles and verifies completed pieces with PieceAssembler (async)
  - Handles failures and retries
 
  Usage:
-   DownloadManager manager = create(num_pieces, piece_length, last_piece_length,
+   DownloadManager manager = create(loop, num_pieces, piece_length, last_piece_length,
                                      piece_hashes, max_concurrent, block_size);
    defer free(&manager);
 
@@ -39,10 +40,14 @@ import std::io;
    // Receive block from peer
    manager.receive_block(piece_index, offset, block_data)!!;
 
-   // Complete piece when all blocks received
-   char[]? piece_data = manager.complete_piece(piece_index);
-   if (piece_data) {
-       // Piece verified! Write to disk
+   // Complete piece when all blocks received (async verification)
+   manager.complete_piece(piece_index, &on_piece_complete, user_data);
+
+   // Callback receives verified piece data
+   fn void on_piece_complete(uint piece_index, char[] piece_data, bool success, void* user_data) {
+       if (success) {
+           // Piece verified! Write to disk
+       }
    }
 *>
 
@@ -52,6 +57,19 @@ faultdef NO_PIECES_TO_REQUEST;
 faultdef PIECE_NOT_DOWNLOADING;
 faultdef PIECE_ALREADY_DOWNLOADING;
 faultdef INVALID_BITFIELD_SIZE;
+
+// Callback for async piece completion
+alias CompletePieceCallback = fn void(uint piece_index, char[] piece_data, bool success, void* user_data);
+
+// Context for async piece completion
+struct CompletePieceContext
+{
+    DownloadManager* manager;
+    uint piece_index;
+    usz download_slot;           // Index in active_downloads array
+    CompletePieceCallback callback;
+    void* user_data;
+}
 
 // Information about a piece currently being downloaded
 struct DownloadingPiece
@@ -65,6 +83,7 @@ struct DownloadingPiece
 // Download manager - coordinates piece downloads
 struct DownloadManager
 {
+    event_loop::EventLoop* loop;              // Event loop for async operations
     piece_picker::PiecePicker picker;         // Piece selection strategy
     DownloadingPiece[] active_downloads;      // Concurrent downloads
     usz max_concurrent_pieces;                // Max pieces to download at once
@@ -78,6 +97,7 @@ struct DownloadManager
 <*
  Create a download manager.
 
+ @param loop : "Event loop for async operations"
  @param num_pieces : "Total number of pieces"
  @param piece_length : "Standard piece length in bytes"
  @param last_piece_length : "Last piece length (may be shorter)"
@@ -86,10 +106,11 @@ struct DownloadManager
  @param block_size : "Block size in bytes (typically 16384)"
  @return "Initialized download manager"
 *>
-fn DownloadManager create(uint num_pieces, uint piece_length, uint last_piece_length,
+fn DownloadManager create(event_loop::EventLoop* loop, uint num_pieces, uint piece_length, uint last_piece_length,
                            char[] piece_hashes, usz max_concurrent, uint block_size) @public
 {
     DownloadManager manager;
+    manager.loop = loop;
     manager.num_pieces = num_pieces;
     manager.piece_length = piece_length;
     manager.last_piece_length = last_piece_length;
@@ -318,15 +339,63 @@ fn fault? DownloadManager.receive_block(&self, uint piece_index, uint offset, ch
 }
 
 <*
- Complete a piece download (verify hash and return data).
+ Internal callback - called when piece verification completes.
+*>
+fn void on_piece_verify_complete(uint piece_index, bool verified, void* user_data)
+{
+    CompletePieceContext* ctx = (CompletePieceContext*)user_data;
+
+    if (!verified)
+    {
+        // Hash mismatch - call user callback with failure
+        if (ctx.callback)
+        {
+            char[] empty;
+            ctx.callback(piece_index, empty, false, ctx.user_data);
+        }
+        std::core::mem::free(ctx);
+        return;
+    }
+
+    // Get piece data (make a copy for caller to own)
+    char[] source_data = ctx.manager.active_downloads[ctx.download_slot].assembler.get_data();
+    char[] piece_data = mem::new_array(char, source_data.len);
+    for (usz j = 0; j < source_data.len; j++)
+    {
+        piece_data[j] = source_data[j];
+    }
+
+    // Mark piece as complete in picker
+    ctx.manager.picker.mark_complete(piece_index)!!;
+
+    // Free download resources (this frees source_data)
+    block_manager::free(&ctx.manager.active_downloads[ctx.download_slot].blocks);
+    piece_assembler::free(&ctx.manager.active_downloads[ctx.download_slot].assembler);
+    ctx.manager.active_downloads[ctx.download_slot].active = false;
+
+    // Call user callback with success
+    if (ctx.callback)
+    {
+        ctx.callback(piece_index, piece_data, true, ctx.user_data);
+    }
+
+    std::core::mem::free(ctx);
+}
+
+<*
+ Complete a piece download asynchronously (verify hash and return data).
 
  This should be called when all blocks for a piece have been received.
- It verifies the SHA-1 hash and returns the assembled piece data.
+ It verifies the SHA-1 hash in a background thread and calls the callback
+ with the assembled piece data when verification completes.
 
  @param piece_index : "Piece index to complete"
- @return "Piece data if verification succeeds, fault otherwise"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
 *>
-fn char[]? DownloadManager.complete_piece(&self, uint piece_index) @public
+fn void DownloadManager.complete_piece(&self, uint piece_index,
+                                        CompletePieceCallback callback,
+                                        void* user_data) @public
 {
     // Find active download for this piece
     for (usz i = 0; i < self.max_concurrent_pieces; i++)
@@ -334,33 +403,28 @@ fn char[]? DownloadManager.complete_piece(&self, uint piece_index) @public
         if (self.active_downloads[i].active &&
             self.active_downloads[i].piece_index == piece_index)
         {
-            // Verify piece hash
-            if (catch excuse = self.active_downloads[i].assembler.verify())
-            {
-                return excuse?;
-            }
+            // Create context
+            CompletePieceContext* ctx = mem::new(CompletePieceContext);
+            ctx.manager = (DownloadManager*)self;
+            ctx.piece_index = piece_index;
+            ctx.download_slot = i;
+            ctx.callback = callback;
+            ctx.user_data = user_data;
 
-            // Get piece data (make a copy for caller to own)
-            char[] source_data = self.active_downloads[i].assembler.get_data();
-            char[] piece_data = mem::new_array(char, source_data.len);
-            for (usz j = 0; j < source_data.len; j++)
-            {
-                piece_data[j] = source_data[j];
-            }
-
-            // Mark piece as complete in picker
-            self.picker.mark_complete(piece_index)!!;
-
-            // Free download resources (this frees source_data)
-            block_manager::free(&self.active_downloads[i].blocks);
-            piece_assembler::free(&self.active_downloads[i].assembler);
-            self.active_downloads[i].active = false;
-
-            return piece_data;
+            // Verify piece hash asynchronously
+            self.active_downloads[i].assembler.verify(self.loop,
+                                                       &on_piece_verify_complete,
+                                                       ctx);
+            return;
         }
     }
 
-    return PIECE_NOT_DOWNLOADING?;
+    // Piece not downloading - call callback with error
+    if (callback)
+    {
+        char[] empty;
+        callback(piece_index, empty, false, user_data);
+    }
 }
 
 <*

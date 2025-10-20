@@ -1,33 +1,52 @@
 module libtorrent::piece_assembler;
 
 import std::hash::sha1;
+import libtorrent::async_work;
+import libtorrent::event_loop;
 import std::io;
 
 <*
  Piece Assembler and Verifier
  =============================
- Assembles blocks into a complete piece and verifies the SHA-1 hash.
+ Assembles blocks into a complete piece and verifies the SHA-1 hash asynchronously.
 
  Usage:
-   PieceAssembler assembler = create(piece_index, piece_length, expected_hash);
+   PieceAssembler assembler = create(piece_index, piece_length, expected_hash, block_size);
    defer free(&assembler);
 
    assembler.add_block(offset, data);
    assembler.add_block(offset2, data2);
 
    if (assembler.is_complete()) {
-       fault? result = assembler.verify();
-       if (!result) {
+       // Verify asynchronously (SHA-1 runs in thread pool)
+       assembler.verify(loop, &on_verify_complete, user_data);
+   }
+
+   // Callback receives verification result
+   fn void on_verify_complete(uint piece_index, bool verified, void* user_data) {
+       if (verified) {
            // Hash verified! Piece is valid
-           char[] piece_data = assembler.get_data();
        }
    }
 *>
 
 // Faults
-faultdef PIECE_NOT_COMPLETE;
-faultdef PIECE_HASH_MISMATCH;
 faultdef BLOCK_INVALID_OFFSET;
+
+// Callback for async verification
+alias VerifyCallback = fn void(uint piece_index, bool verified, void* user_data);
+
+// Context for async verification
+struct VerifyContext
+{
+    uint piece_index;
+    char[] piece_data;         // Copy of data to hash
+    char[20] expected_hash;
+    char[20] actual_hash;      // Result computed in thread pool
+    VerifyCallback callback;
+    void* user_data;
+    async_work::WorkContext* work_ctx;
+}
 
 <*
  Piece assembler state.
@@ -156,32 +175,130 @@ fn bool PieceAssembler.is_complete(&self) @public
 }
 
 <*
- Verify the piece SHA-1 hash.
-
- Must only be called when is_complete() returns true.
-
- @return "Empty on success, fault if not complete or hash mismatch"
+ Work function - runs in thread pool.
+ Computes SHA-1 hash of piece data.
 *>
-fn fault? PieceAssembler.verify(&self) @public
+fn void do_verify_work(void* input, void** output)
 {
-    if (!self.is_complete())
+    VerifyContext* ctx = (VerifyContext*)input;
+
+    // Compute SHA-1 hash (CPU-intensive, but we're in thread pool!)
+    ctx.actual_hash = sha1::hash(ctx.piece_data);
+
+    *output = ctx;
+}
+
+<*
+ Completion callback - runs in event loop.
+ Compares hashes and calls user callback.
+*>
+fn void on_verify_complete(void* output, int status, void* user_data)
+{
+    VerifyContext* ctx = (VerifyContext*)output;
+
+    if (status < 0)
     {
-        return PIECE_NOT_COMPLETE?;
+        // Thread pool error
+        if (ctx.callback)
+        {
+            ctx.callback(ctx.piece_index, false, ctx.user_data);
+        }
+        std::core::mem::free(ctx.piece_data);
+        if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
+        std::core::mem::free(ctx);
+        return;
     }
 
-    // Calculate SHA-1 hash
-    char[20] actual_hash = sha1::hash(self.data);
-
     // Compare hashes
+    bool verified = true;
     for (usz i = 0; i < 20; i++)
     {
-        if (actual_hash[i] != self.expected_hash[i])
+        if (ctx.actual_hash[i] != ctx.expected_hash[i])
         {
-            return PIECE_HASH_MISMATCH?;
+            verified = false;
+            break;
         }
     }
 
-    return {};
+    // Call user callback
+    if (ctx.callback)
+    {
+        ctx.callback(ctx.piece_index, verified, ctx.user_data);
+    }
+
+    // Clean up
+    std::core::mem::free(ctx.piece_data);
+    if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
+    std::core::mem::free(ctx);
+}
+
+<*
+ Verify the piece SHA-1 hash asynchronously using thread pool.
+
+ The SHA-1 computation runs in a background thread, keeping the event loop responsive.
+ The callback is invoked in the event loop when verification completes.
+
+ Must only be called when is_complete() returns true.
+
+ @param loop : "Event loop"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
+*>
+fn void PieceAssembler.verify(&self, event_loop::EventLoop* loop,
+                               VerifyCallback callback, void* user_data) @public
+{
+    if (!self.is_complete())
+    {
+        // Immediately call callback with failure
+        if (callback)
+        {
+            callback(self.piece_index, false, user_data);
+        }
+        return;
+    }
+
+    // Create verification context
+    VerifyContext* ctx = mem::new(VerifyContext);
+    ctx.piece_index = self.piece_index;
+    ctx.callback = callback;
+    ctx.user_data = user_data;
+
+    // Copy expected hash
+    for (usz i = 0; i < 20; i++)
+    {
+        ctx.expected_hash[i] = self.expected_hash[i];
+    }
+
+    // Copy piece data (thread pool will access this)
+    ctx.piece_data = mem::new_array(char, self.data.len);
+    for (usz i = 0; i < self.data.len; i++)
+    {
+        ctx.piece_data[i] = self.data[i];
+    }
+
+    // Create async work context
+    async_work::WorkContext* work_ctx = mem::new(async_work::WorkContext);
+    work_ctx.input = ctx;
+    work_ctx.work_fn = &do_verify_work;
+    work_ctx.callback = &on_verify_complete;
+    work_ctx.user_data = user_data;
+    ctx.work_ctx = work_ctx;
+
+    // Queue work
+    int result = async_work::queue_work(loop, work_ctx);
+    if (result != 0)
+    {
+        // Failed to queue - call callback with error
+        if (callback)
+        {
+            callback(self.piece_index, false, user_data);
+        }
+
+        // Clean up
+        std::core::mem::free(ctx.piece_data);
+        std::core::mem::free(work_ctx);
+        std::core::mem::free(ctx);
+    }
 }
 
 <*

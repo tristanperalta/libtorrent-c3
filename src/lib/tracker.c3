@@ -4,8 +4,7 @@ import libtorrent::http;
 import libtorrent::bencode;
 import libtorrent::torrent;
 import libtorrent::udp_tracker;
-import libtorrent::udp_tracker_async;
-import libtorrent::http_tracker_async;
+import libtorrent::http_tracker;
 import libtorrent::event_loop;
 import std::net::url;
 import std::time;
@@ -362,52 +361,12 @@ fn void HttpTracker.free(HttpTracker* self) @dynamic
     free(self);
 }
 
-<*
- Create a tracker instance based on URL scheme.
-
- @param url : "Tracker URL (http://, https://, or udp://)"
- @return "Tracker instance or fault"
-*>
-fn Tracker? create_tracker(String url) @public
-{
-    if (url.starts_with("udp://")) {
-        udp_tracker::UdpTracker* tracker = mem::new(udp_tracker::UdpTracker);
-        return (Tracker)tracker;
-    } else if (url.starts_with("http://") || url.starts_with("https://")) {
-        HttpTracker* tracker = mem::new(HttpTracker);
-        return (Tracker)tracker;
-    } else {
-        return TRACKER_URL_INVALID?;
-    }
-}
+// Announce callback type
+alias AnnounceCallback = fn void(TrackerResponse* response, int status, void* user_data);
 
 <*
- Announce to tracker and get peer list (convenience function).
- Creates appropriate tracker based on URL and announces.
-
- @param torrent : "The torrent file"
- @param our_port : "Our listening port"
- @param event : "Event type (started/stopped/completed or empty string)"
- @return "Tracker response with peer list or fault"
-*>
-fn TrackerResponse? announce(torrent::TorrentFile* torrent, ushort our_port,
-                              String event = "") @public
-{
-    Tracker? tracker = create_tracker(torrent.announce);
-    if (catch err = tracker) {
-        return err?;
-    }
-    defer tracker.free();
-
-    return tracker.announce(torrent, our_port, event);
-}
-
-// Async announce callback type
-alias AsyncAnnounceCallback = fn void(TrackerResponse* response, int status, void* user_data);
-
-<*
- Announce to tracker asynchronously (non-blocking).
- Routes to HTTP or UDP tracker async implementation based on URL.
+ Announce to tracker (non-blocking).
+ Routes to HTTP or UDP tracker implementation based on URL.
 
  @param loop : "Event loop"
  @param torrent : "The torrent file"
@@ -416,26 +375,26 @@ alias AsyncAnnounceCallback = fn void(TrackerResponse* response, int status, voi
  @param callback : "Completion callback"
  @param user_data : "User data passed to callback"
 *>
-fn void async_announce(event_loop::EventLoop* loop,
-                       torrent::TorrentFile* torrent,
-                       ushort our_port,
-                       String event,
-                       AsyncAnnounceCallback callback,
-                       void* user_data) @public
+fn void announce(event_loop::EventLoop* loop,
+                 torrent::TorrentFile* torrent,
+                 ushort our_port,
+                 String event,
+                 AnnounceCallback callback,
+                 void* user_data) @public
 {
     String url = torrent.announce;
 
     if (url.starts_with("udp://"))
     {
         // Use UDP tracker async
-        udp_tracker_async::async_announce(loop, torrent, our_port, event,
-                                           callback, user_data);
+        udp_tracker::async_announce(loop, torrent, our_port, event,
+                                     callback, user_data);
     }
     else if (url.starts_with("http://") || url.starts_with("https://"))
     {
         // Use HTTP tracker async (thread pool)
-        http_tracker_async::async_announce(loop, torrent, our_port, event,
-                                             callback, user_data);
+        http_tracker::async_announce(loop, torrent, our_port, event,
+                                      callback, user_data);
     }
     else
     {

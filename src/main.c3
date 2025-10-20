@@ -389,10 +389,10 @@ fn int cmd_announce(String torrent_path)
     ctx.response = null;
     ctx.status = 0;
 
-    // Announce to tracker (async - doesn't block!)
+    // Announce to tracker (non-blocking)
     ushort our_port = 6881;
-    tracker::async_announce(&loop, torrent, our_port, "started",
-                            &on_announce_complete, &ctx);
+    tracker::announce(&loop, torrent, our_port, "started",
+                      &on_announce_complete, &ctx);
 
     // Run event loop until announce completes
     while (!ctx.completed && loop.is_alive())

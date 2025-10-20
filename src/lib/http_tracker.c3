@@ -1,4 +1,4 @@
-module libtorrent::http_tracker_async;
+module libtorrent::http_tracker;
 
 import libtorrent::http;
 import libtorrent::event_loop;

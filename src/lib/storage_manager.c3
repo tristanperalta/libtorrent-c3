@@ -1,6 +1,7 @@
 module libtorrent::storage_manager;
 
 import libtorrent::async_file;
+import libtorrent::async_work;
 import libtorrent::event_loop;
 import libtorrent::torrent;
 import std::io;
@@ -637,6 +638,76 @@ struct VerifyContext
     void* user_data;
 }
 
+// Context for SHA-1 computation in thread pool
+struct Sha1WorkContext
+{
+    uint piece_index;
+    char[] piece_data;          // Data to hash
+    char[20] expected_hash;
+    char[20] actual_hash;       // Result computed in thread pool
+    VerifyCompleteCallback cb;
+    void* user_data;
+    async_work::WorkContext* work_ctx;
+}
+
+<*
+ Work function - runs in thread pool.
+ Computes SHA-1 hash of piece data.
+*>
+fn void do_sha1_work(void* input, void** output)
+{
+    Sha1WorkContext* ctx = (Sha1WorkContext*)input;
+
+    // Compute SHA-1 hash (CPU-intensive, but we're in thread pool!)
+    ctx.actual_hash = sha1::hash(ctx.piece_data);
+
+    *output = ctx;
+}
+
+<*
+ Completion callback - runs in event loop.
+ Compares hashes and calls user callback.
+*>
+fn void on_sha1_complete(void* output, int status, void* user_data)
+{
+    Sha1WorkContext* ctx = (Sha1WorkContext*)output;
+
+    if (status < 0)
+    {
+        // Thread pool error
+        if (ctx.cb)
+        {
+            ctx.cb(ctx.piece_index, false, status, ctx.user_data);
+        }
+        std::core::mem::free(ctx.piece_data);
+        if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
+        std::core::mem::free(ctx);
+        return;
+    }
+
+    // Compare hashes
+    bool verified = true;
+    for (usz i = 0; i < 20; i++)
+    {
+        if (ctx.actual_hash[i] != ctx.expected_hash[i])
+        {
+            verified = false;
+            break;
+        }
+    }
+
+    // Call user callback
+    if (ctx.cb)
+    {
+        ctx.cb(ctx.piece_index, verified, 0, ctx.user_data);
+    }
+
+    // Clean up
+    std::core::mem::free(ctx.piece_data);
+    if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
+    std::core::mem::free(ctx);
+}
+
 fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status, void* user_data)
 {
     VerifyContext* ctx = (VerifyContext*)user_data;
@@ -652,29 +723,39 @@ fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status,
         return;
     }
 
-    // Compute hash
-    char[20] actual_hash = sha1::hash(piece_data);
+    // Create SHA-1 work context
+    Sha1WorkContext* sha1_ctx = mem::new(Sha1WorkContext);
+    sha1_ctx.piece_index = piece_index;
+    sha1_ctx.piece_data = piece_data;  // Transfer ownership to SHA-1 context
+    sha1_ctx.expected_hash = ctx.expected_hash;
+    sha1_ctx.cb = ctx.cb;
+    sha1_ctx.user_data = ctx.user_data;
 
-    // Compare hashes
-    bool verified = true;
-    for (usz i = 0; i < 20; i++)
+    // Create async work context
+    async_work::WorkContext* work_ctx = mem::new(async_work::WorkContext);
+    work_ctx.input = sha1_ctx;
+    work_ctx.work_fn = &do_sha1_work;
+    work_ctx.callback = &on_sha1_complete;
+    work_ctx.user_data = ctx.user_data;
+    sha1_ctx.work_ctx = work_ctx;
+
+    // Queue SHA-1 computation to thread pool
+    int result = async_work::queue_work(ctx.manager.loop, work_ctx);
+    if (result != 0)
     {
-        if (actual_hash[i] != ctx.expected_hash[i])
+        // Failed to queue - call callback with error
+        if (sha1_ctx.cb)
         {
-            verified = false;
-            break;
+            sha1_ctx.cb(piece_index, false, -1, sha1_ctx.user_data);
         }
+
+        // Clean up
+        std::core::mem::free(piece_data);
+        std::core::mem::free(work_ctx);
+        std::core::mem::free(sha1_ctx);
     }
 
-    // Clean up piece data
-    std::core::mem::free(piece_data);
-
-    // Call user callback
-    if (ctx.cb)
-    {
-        ctx.cb(piece_index, verified, 0, ctx.user_data);
-    }
-
+    // Clean up verify context (SHA-1 context takes over)
     std::core::mem::free(ctx);
 }
 
