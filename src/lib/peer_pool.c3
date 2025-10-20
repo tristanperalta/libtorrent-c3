@@ -797,3 +797,119 @@ fn void PeerPool.connect_to_peers(&self) @public
         self.update_candidate_cache();
     }
 }
+
+<*
+ Helper function to recalculate and update a single peer's rank.
+
+ @param peer : "Peer to update rank for"
+*>
+fn void update_peer_rank(PeerPool* pool, TorrentPeer* peer)
+{
+    peer.peer_rank = calculate_peer_rank(pool, peer);
+}
+
+<*
+ Update peer statistics after data transfer.
+
+ Updates the download and upload byte counters for a peer and recalculates
+ its rank. Should be called periodically during active transfers.
+
+ @param ip : "Peer IP address"
+ @param port : "Peer port"
+ @param bytes_downloaded : "Bytes downloaded from this peer"
+ @param bytes_uploaded : "Bytes uploaded to this peer"
+ @return "Fault if peer not found"
+*>
+fn fault? PeerPool.update_peer_stats(&self, char[4] ip, ushort port,
+                                      ulong bytes_downloaded, ulong bytes_uploaded) @public
+{
+    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    if (catch err = peer_opt)
+    {
+        return err?;
+    }
+
+    TorrentPeer* peer = peer_opt;
+
+    // Update statistics
+    peer.prev_amount_download = bytes_downloaded;
+    peer.prev_amount_upload = bytes_uploaded;
+
+    // Recalculate rank based on new statistics
+    update_peer_rank((PeerPool*)self, peer);
+
+    // Update candidate cache to reflect new ranking
+    self.update_candidate_cache();
+
+    return {};
+}
+
+<*
+ Mark a peer as having sent a bad piece (hash verification failed).
+
+ Increments the hash failure counter and penalizes the peer's rank.
+ Multiple hash failures will significantly reduce peer priority.
+
+ @param ip : "Peer IP address"
+ @param port : "Peer port"
+ @return "Fault if peer not found"
+*>
+fn fault? PeerPool.mark_hash_failure(&self, char[4] ip, ushort port) @public
+{
+    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    if (catch err = peer_opt)
+    {
+        return err?;
+    }
+
+    TorrentPeer* peer = peer_opt;
+
+    // Increment hash failure counter
+    peer.hashfails++;
+
+    io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked with hash failure (total: %d)",
+                peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port, peer.hashfails);
+
+    // Recalculate rank with penalty (-30 per hash failure)
+    update_peer_rank((PeerPool*)self, peer);
+
+    // Update candidate cache to reflect new ranking
+    self.update_candidate_cache();
+
+    return {};
+}
+
+<*
+ Mark a peer as a seed (has all pieces).
+
+ Sets the seed flag and boosts the peer's rank. Seed peers are prioritized
+ for connections as they can provide any piece we need.
+
+ @param ip : "Peer IP address"
+ @param port : "Peer port"
+ @return "Fault if peer not found"
+*>
+fn fault? PeerPool.mark_peer_seed(&self, char[4] ip, ushort port) @public
+{
+    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    if (catch err = peer_opt)
+    {
+        return err?;
+    }
+
+    TorrentPeer* peer = peer_opt;
+
+    // Mark as seed
+    peer.seed = true;
+
+    io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked as seed",
+                peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port);
+
+    // Recalculate rank with seed boost (+50)
+    update_peer_rank((PeerPool*)self, peer);
+
+    // Update candidate cache to reflect new ranking
+    self.update_candidate_cache();
+
+    return {};
+}

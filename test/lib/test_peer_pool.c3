@@ -702,3 +702,216 @@ fn void test_connection_limit() @test
     assert(pool.num_active_connections <= config.max_active_connections,
            "Should not exceed max_active_connections");
 }
+
+// ============================================================================
+// Phase 4: Statistics & Quality Tracking
+// ============================================================================
+
+<*
+ Test update_peer_stats updates download/upload counters and recalculates rank.
+*>
+fn void test_update_peer_stats() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer event_loop::free(&loop);
+
+    PeerPoolConfig config = default_config();
+    char[20] info_hash;
+    char[20] peer_id;
+    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
+    defer peer_pool::free(&pool);
+
+    // Add a peer
+    char[4] ip = { 192, 168, 1, 100 };
+    pool.add_peer(ip, 6881, true);
+
+    // Get initial rank
+    TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
+    int initial_rank = peer.peer_rank;
+
+    // Update stats with download data
+    pool.update_peer_stats(ip, 6881, 1024000, 512000)!!;
+
+    // Get updated rank
+    peer = pool.find_peer(ip, 6881)!!;
+
+    // Verify stats were updated
+    assert(peer.prev_amount_download == 1024000, "Download count should be updated");
+    assert(peer.prev_amount_upload == 512000, "Upload count should be updated");
+
+    // Verify rank increased (download history gives +100)
+    assert(peer.peer_rank > initial_rank, "Rank should increase with download history");
+    assert(peer.peer_rank >= initial_rank + 100, "Should get +100 bonus for download history");
+}
+
+<*
+ Test mark_hash_failure increments counter and penalizes rank.
+*>
+fn void test_mark_hash_failure() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer event_loop::free(&loop);
+
+    PeerPoolConfig config = default_config();
+    char[20] info_hash;
+    char[20] peer_id;
+    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
+    defer peer_pool::free(&pool);
+
+    // Add a peer
+    char[4] ip = { 192, 168, 1, 100 };
+    pool.add_peer(ip, 6881, true);
+
+    // Get initial rank
+    TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
+    int initial_rank = peer.peer_rank;
+
+    // Mark hash failure
+    pool.mark_hash_failure(ip, 6881)!!;
+
+    // Verify counter incremented
+    peer = pool.find_peer(ip, 6881)!!;
+    assert(peer.hashfails == 1, "Hash failure count should be 1");
+
+    // Verify rank decreased (penalty is -30 per failure)
+    assert(peer.peer_rank < initial_rank, "Rank should decrease after hash failure");
+    assert(peer.peer_rank <= initial_rank - 30, "Should get -30 penalty for hash failure");
+
+    // Mark another failure
+    pool.mark_hash_failure(ip, 6881)!!;
+    peer = pool.find_peer(ip, 6881)!!;
+    assert(peer.hashfails == 2, "Hash failure count should be 2");
+    assert(peer.peer_rank <= initial_rank - 60, "Should get -60 penalty for 2 hash failures");
+}
+
+<*
+ Test mark_peer_seed sets flag and boosts rank.
+*>
+fn void test_mark_peer_seed() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer event_loop::free(&loop);
+
+    PeerPoolConfig config = default_config();
+    char[20] info_hash;
+    char[20] peer_id;
+    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
+    defer peer_pool::free(&pool);
+
+    // Add a peer
+    char[4] ip = { 192, 168, 1, 100 };
+    pool.add_peer(ip, 6881, true);
+
+    // Get initial rank
+    TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
+    int initial_rank = peer.peer_rank;
+    assert(!peer.seed, "Peer should not be marked as seed initially");
+
+    // Mark as seed
+    pool.mark_peer_seed(ip, 6881)!!;
+
+    // Verify seed flag set
+    peer = pool.find_peer(ip, 6881)!!;
+    assert(peer.seed, "Peer should be marked as seed");
+
+    // Verify rank increased (seed boost is +50)
+    assert(peer.peer_rank > initial_rank, "Rank should increase when marked as seed");
+    assert(peer.peer_rank >= initial_rank + 50, "Should get +50 bonus for being seed");
+}
+
+<*
+ Test that statistics functions return error for non-existent peer.
+*>
+fn void test_stats_peer_not_found() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer event_loop::free(&loop);
+
+    PeerPoolConfig config = default_config();
+    char[20] info_hash;
+    char[20] peer_id;
+    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
+    defer peer_pool::free(&pool);
+
+    char[4] ip = { 192, 168, 1, 100 };
+
+    // Try to update stats for non-existent peer
+    if (catch excuse = pool.update_peer_stats(ip, 6881, 1000, 500))
+    {
+        // Expected - peer doesn't exist
+    }
+    else
+    {
+        assert(false, "Should return fault for non-existent peer");
+    }
+
+    // Try to mark hash failure for non-existent peer
+    if (catch excuse = pool.mark_hash_failure(ip, 6881))
+    {
+        // Expected - peer doesn't exist
+    }
+    else
+    {
+        assert(false, "Should return fault for non-existent peer");
+    }
+
+    // Try to mark as seed for non-existent peer
+    if (catch excuse = pool.mark_peer_seed(ip, 6881))
+    {
+        // Expected - peer doesn't exist
+    }
+    else
+    {
+        assert(false, "Should return fault for non-existent peer");
+    }
+}
+
+<*
+ Test that candidate cache updates after statistics changes.
+*>
+fn void test_stats_update_candidate_cache() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer event_loop::free(&loop);
+
+    PeerPoolConfig config = default_config();
+    char[20] info_hash;
+    char[20] peer_id;
+    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
+    defer peer_pool::free(&pool);
+
+    // Add two peers
+    char[4] ip1 = { 192, 168, 1, 100 };
+    char[4] ip2 = { 192, 168, 1, 101 };
+    pool.add_peer(ip1, 6881, true);
+    pool.add_peer(ip2, 6881, true);
+
+    // Initially both have similar ranks, check who is first
+    TorrentPeer* initial_best = pool.pick_best_candidate()!!;
+
+    // Mark ip2 as seed (should boost its rank significantly)
+    pool.mark_peer_seed(ip2, 6881)!!;
+
+    // Now ip2 should be the best candidate
+    TorrentPeer* new_best = pool.pick_best_candidate()!!;
+
+    // Verify ip2 is now best
+    assert(new_best.ip[0] == ip2[0] && new_best.ip[1] == ip2[1] &&
+           new_best.ip[2] == ip2[2] && new_best.ip[3] == ip2[3] &&
+           new_best.port == 6881,
+           "Seed peer should be ranked highest");
+
+    // Mark ip2 with hash failure multiple times (should tank its rank)
+    pool.mark_hash_failure(ip2, 6881)!!;
+    pool.mark_hash_failure(ip2, 6881)!!;
+    pool.mark_hash_failure(ip2, 6881)!!;
+
+    // Now ip1 should be better
+    new_best = pool.pick_best_candidate()!!;
+
+    // Verify ip1 is now best (ip2 has too many hash failures)
+    assert(new_best.ip[0] == ip1[0] && new_best.ip[1] == ip1[1] &&
+           new_best.ip[2] == ip1[2] && new_best.ip[3] == ip1[3] &&
+           new_best.port == 6881,
+           "Peer with hash failures should be ranked lower");
+}
