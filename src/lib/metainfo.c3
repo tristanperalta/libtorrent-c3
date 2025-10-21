@@ -280,16 +280,15 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
                     // Percent-encode spaces for BEP 19 compliance
                     String encoded_url = percent_encode_url(url_str);
+                    bool keep = false;
+                    defer if (!keep) free(encoded_url);
+
                     // Only add if not already seen and not empty
                     if (encoded_url.len > 0 && !seen_urls.contains(encoded_url))
                     {
                         seen_urls.add(encoded_url);
                         urls.push(encoded_url);
-                    }
-                    else
-                    {
-                        // Free the encoded URL if it's a duplicate or empty
-                        free(encoded_url);
+                        keep = true;  // Ownership transferred to collection
                     }
                 }
             }
@@ -307,14 +306,14 @@ fn TorrentFile*? parse(String data) @public => @pool()
             if (url_str.len > 0)
             {
                 String encoded_url = percent_encode_url(url_str);
+                bool keep = false;
+                defer if (!keep) free(encoded_url);
+
                 if (encoded_url.len > 0)
                 {
                     torrent.url_list = mem::new_array(String, 1);
                     torrent.url_list[0] = encoded_url;
-                }
-                else
-                {
-                    free(encoded_url);
+                    keep = true;  // Ownership transferred to array
                 }
             }
         }
@@ -350,16 +349,15 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
                 // Percent-encode spaces for BEP 17 compliance
                 String encoded_seed = percent_encode_url(seed_str);
+                bool keep = false;
+                defer if (!keep) free(encoded_seed);
+
                 // Only add if not already seen and not empty
                 if (encoded_seed.len > 0 && !seen_seeds.contains(encoded_seed))
                 {
                     seen_seeds.add(encoded_seed);
                     seeds.push(encoded_seed);
-                }
-                else
-                {
-                    // Free the encoded URL if it's a duplicate or empty
-                    free(encoded_seed);
+                    keep = true;  // Ownership transferred to collection
                 }
             }
         }
