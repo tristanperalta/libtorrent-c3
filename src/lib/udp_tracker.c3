@@ -11,6 +11,7 @@ import std::io;
 import std::net::url;
 import std::time;
 import std::math::random;
+import std::os::linux; // For htonl, htons, ntohl, ntohs
 
 <*
  Async UDP Tracker Implementation
@@ -54,75 +55,30 @@ const int EVENT_STOPPED = 3;
 const int UDP_INITIAL_TIMEOUT_SECONDS = 2;  // 2 * 2^n for retry n
 const int UDP_MAX_RETRIES = 3;                // Maximum n value
 
+// Protocol buffer sizes (BEP 15)
+const usz CONNECT_REQUEST_SIZE = 16;       // protocol_id(8) + action(4) + transaction_id(4)
+const usz CONNECT_RESPONSE_SIZE = 16;      // action(4) + transaction_id(4) + connection_id(8)
+const usz ANNOUNCE_REQUEST_SIZE = 98;      // Full announce request size
+const usz ANNOUNCE_RESPONSE_MIN_SIZE = 20; // Minimum response before peers
+
+// Field sizes
+const usz INFO_HASH_SIZE = 20;
+const usz PEER_ID_SIZE = 20;
+
 // Network byte order conversion functions.
 // UDP tracker protocol uses big-endian (network byte order).
-
-<*
- Convert 32-bit integer from host to network byte order.
-
- @param x : "Host byte order integer"
- @return "Network byte order (big-endian) integer"
-*>
-fn int htonl(int x) @inline
-{
-    // Check if we're on a little-endian system
-    char[4] test = {0x01, 0x02, 0x03, 0x04};
-    int test_int = *(int*)&test;
-
-    if (test_int == 0x04030201) {
-        // Little-endian: need to swap
-        return ((x & 0xFF) << 24) |
-               ((x & 0xFF00) << 8) |
-               ((x & 0xFF0000) >> 8) |
-               (int)((uint)x >> 24);
-    } else {
-        // Big-endian: no swap needed
-        return x;
-    }
-}
-
-<*
- Convert 32-bit integer from network to host byte order.
-*>
-fn int ntohl(int x) @inline
-{
-    return htonl(x);
-}
-
-<*
- Convert 16-bit integer from host to network byte order.
-*>
-fn ushort htons(ushort x) @inline
-{
-    char[2] test = {0x01, 0x02};
-    ushort test_short = *(ushort*)&test;
-
-    if (test_short == 0x0201) {
-        // Little-endian: need to swap
-        return ((x & 0xFF) << 8) | ((x & 0xFF00) >> 8);
-    } else {
-        // Big-endian: no swap needed
-        return x;
-    }
-}
-
-<*
- Convert 16-bit integer from network to host byte order.
-*>
-fn ushort ntohs(ushort x) @inline
-{
-    return htons(x);
-}
+// Note: htonl, htons, ntohl, ntohs are provided by std::os::linux
 
 <*
  Convert 64-bit integer from host to network byte order.
+ Uses inline endianness detection - the compiler should optimize this.
 *>
 fn long htonll(long x) @inline
 {
-    char[8] test = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
-    long test_long = *(long*)&test;
-
-    if (test_long == 0x0807060504030201L) {
+    // Check endianness inline - compiler will optimize this constant check
+    char[4] test = {0x01, 0x02, 0x03, 0x04};
+    if (*(int*)&test == 0x04030201)
+    {
         // Little-endian: need to swap
         return ((long)(x & 0xFF) << 56) |
                ((long)(x & 0xFF00) << 40) |
@@ -132,10 +88,9 @@ fn long htonll(long x) @inline
                ((long)(x & 0xFF0000000000) >> 24) |
                ((long)(x & 0xFF000000000000) >> 40) |
                ((ulong)x >> 56);
-    } else {
-        // Big-endian: no swap needed
-        return x;
     }
+    // Big-endian: no swap needed
+    return x;
 }
 
 <*
@@ -190,24 +145,87 @@ struct ErrorResponse {
     int transaction_id;
 }
 
+// ============================================================================
+// Pack/Unpack Helper Functions
+// ============================================================================
+
+<*
+ Pack 64-bit integer into buffer at offset in network byte order.
+*>
+fn void pack_int64(char[] buffer, usz offset, long value) @inline
+{
+    long net_value = htonll(value);
+    char* p = (char*)&net_value;
+    buffer[offset..offset+7] = p[0..7];
+}
+
+<*
+ Pack 32-bit integer into buffer at offset in network byte order.
+*>
+fn void pack_int32(char[] buffer, usz offset, int value) @inline
+{
+    int net_value = (int)linux::htonl((uint)value);
+    char* p = (char*)&net_value;
+    buffer[offset..offset+3] = p[0..3];
+}
+
+<*
+ Pack 16-bit integer into buffer at offset in network byte order.
+*>
+fn void pack_int16(char[] buffer, usz offset, ushort value) @inline
+{
+    ushort net_value = linux::htons(value);
+    char* p = (char*)&net_value;
+    buffer[offset..offset+1] = p[0..1];
+}
+
+<*
+ Unpack 64-bit integer from buffer at offset from network byte order.
+*>
+fn long unpack_int64(char[] buffer, usz offset) @inline
+{
+    long net_value;
+    char* p = (char*)&net_value;
+    p[0..7] = buffer[offset..offset+7];
+    return ntohll(net_value);
+}
+
+<*
+ Unpack 32-bit integer from buffer at offset from network byte order.
+*>
+fn int unpack_int32(char[] buffer, usz offset) @inline
+{
+    int net_value;
+    char* p = (char*)&net_value;
+    p[0..3] = buffer[offset..offset+3];
+    return (int)linux::ntohl((uint)net_value);
+}
+
+<*
+ Unpack 16-bit integer from buffer at offset from network byte order.
+*>
+fn ushort unpack_int16(char[] buffer, usz offset) @inline
+{
+    ushort net_value;
+    char* p = (char*)&net_value;
+    p[0..1] = buffer[offset..offset+1];
+    return linux::ntohs(net_value);
+}
+
+// ============================================================================
+// Protocol Message Packing/Unpacking
+// ============================================================================
+
 <*
  Pack connect request into byte buffer.
 *>
 fn void pack_connect_request(int transaction_id, char[] buffer) @public
 {
-    assert(buffer.len >= 16, "Buffer too small for connect request");
+    assert(buffer.len >= CONNECT_REQUEST_SIZE, "Buffer too small for connect request");
 
-    long protocol_id_net = htonll(UDP_PROTOCOL_ID);
-    char* p = (char*)&protocol_id_net;
-    buffer[0..7] = p[0..7];
-
-    int action_net = htonl(ACTION_CONNECT);
-    p = (char*)&action_net;
-    buffer[8..11] = p[0..3];
-
-    int tid_net = htonl(transaction_id);
-    p = (char*)&tid_net;
-    buffer[12..15] = p[0..3];
+    pack_int64(buffer, 0, UDP_PROTOCOL_ID);
+    pack_int32(buffer, 8, ACTION_CONNECT);
+    pack_int32(buffer, 12, transaction_id);
 }
 
 <*
@@ -215,33 +233,25 @@ fn void pack_connect_request(int transaction_id, char[] buffer) @public
 *>
 fn ConnectResponse? unpack_connect_response(char[] buffer) @public
 {
-    if (buffer.len < 16) {
+    if (buffer.len < CONNECT_RESPONSE_SIZE)
+    {
         return UDP_TRACKER_INVALID_RESPONSE?;
     }
 
     ConnectResponse response;
+    response.action = unpack_int32(buffer, 0);
 
-    int action_net;
-    char* p = (char*)&action_net;
-    p[0..3] = buffer[0..3];
-    response.action = ntohl(action_net);
-
-    if (response.action != ACTION_CONNECT) {
-        if (response.action == ACTION_ERROR) {
+    if (response.action != ACTION_CONNECT)
+    {
+        if (response.action == ACTION_ERROR)
+        {
             return UDP_TRACKER_PROTOCOL_ERROR?;
         }
         return UDP_TRACKER_INVALID_RESPONSE?;
     }
 
-    int tid_net;
-    p = (char*)&tid_net;
-    p[0..3] = buffer[4..7];
-    response.transaction_id = ntohl(tid_net);
-
-    long cid_net;
-    p = (char*)&cid_net;
-    p[0..7] = buffer[8..15];
-    response.connection_id = ntohll(cid_net);
+    response.transaction_id = unpack_int32(buffer, 4);
+    response.connection_id = unpack_int64(buffer, 8);
 
     return response;
 }
@@ -251,70 +261,47 @@ fn ConnectResponse? unpack_connect_response(char[] buffer) @public
 *>
 fn void pack_announce_request(AnnounceRequest* request, char[] buffer) @public
 {
-    assert(buffer.len >= 98, "Buffer too small for announce request");
+    assert(buffer.len >= ANNOUNCE_REQUEST_SIZE, "Buffer too small for announce request");
 
-    char* p;
     usz offset = 0;
 
-    long cid_net = htonll(request.connection_id);
-    p = (char*)&cid_net;
-    buffer[offset..offset+7] = p[0..7];
+    pack_int64(buffer, offset, request.connection_id);
     offset += 8;
 
-    int action_net = htonl(request.action);
-    p = (char*)&action_net;
-    buffer[offset..offset+3] = p[0..3];
+    pack_int32(buffer, offset, request.action);
     offset += 4;
 
-    int tid_net = htonl(request.transaction_id);
-    p = (char*)&tid_net;
-    buffer[offset..offset+3] = p[0..3];
+    pack_int32(buffer, offset, request.transaction_id);
     offset += 4;
 
-    buffer[offset..offset+19] = request.info_hash[0..19];
-    offset += 20;
+    buffer[offset..offset+INFO_HASH_SIZE-1] = request.info_hash[0..INFO_HASH_SIZE-1];
+    offset += INFO_HASH_SIZE;
 
-    buffer[offset..offset+19] = request.peer_id[0..19];
-    offset += 20;
+    buffer[offset..offset+PEER_ID_SIZE-1] = request.peer_id[0..PEER_ID_SIZE-1];
+    offset += PEER_ID_SIZE;
 
-    long downloaded_net = htonll(request.downloaded);
-    p = (char*)&downloaded_net;
-    buffer[offset..offset+7] = p[0..7];
+    pack_int64(buffer, offset, request.downloaded);
     offset += 8;
 
-    long left_net = htonll(request.left);
-    p = (char*)&left_net;
-    buffer[offset..offset+7] = p[0..7];
+    pack_int64(buffer, offset, request.left);
     offset += 8;
 
-    long uploaded_net = htonll(request.uploaded);
-    p = (char*)&uploaded_net;
-    buffer[offset..offset+7] = p[0..7];
+    pack_int64(buffer, offset, request.uploaded);
     offset += 8;
 
-    int event_net = htonl(request.event);
-    p = (char*)&event_net;
-    buffer[offset..offset+3] = p[0..3];
+    pack_int32(buffer, offset, request.event);
     offset += 4;
 
-    int ip_net = htonl(request.ip_address);
-    p = (char*)&ip_net;
-    buffer[offset..offset+3] = p[0..3];
+    pack_int32(buffer, offset, request.ip_address);
     offset += 4;
 
-    int key_net = htonl(request.key);
-    p = (char*)&key_net;
-    buffer[offset..offset+3] = p[0..3];
+    pack_int32(buffer, offset, request.key);
     offset += 4;
 
-    int num_want_net = htonl(request.num_want);
-    p = (char*)&num_want_net;
-    buffer[offset..offset+3] = p[0..3];
+    pack_int32(buffer, offset, request.num_want);
     offset += 4;
 
-    ushort port_net = htons(request.port);
-    p = (char*)&port_net;
-    buffer[offset..offset+1] = p[0..1];
+    pack_int16(buffer, offset, request.port);
 }
 
 <*
@@ -322,49 +309,34 @@ fn void pack_announce_request(AnnounceRequest* request, char[] buffer) @public
 *>
 fn AnnounceResponse? unpack_announce_response(char[] buffer, char[]* peers_out) @public
 {
-    if (buffer.len < 20) {
+    if (buffer.len < ANNOUNCE_RESPONSE_MIN_SIZE)
+    {
         return UDP_TRACKER_INVALID_RESPONSE?;
     }
 
     AnnounceResponse response;
+    response.action = unpack_int32(buffer, 0);
 
-    char* p;
-
-    int action_net;
-    p = (char*)&action_net;
-    p[0..3] = buffer[0..3];
-    response.action = ntohl(action_net);
-
-    if (response.action != ACTION_ANNOUNCE) {
-        if (response.action == ACTION_ERROR) {
+    if (response.action != ACTION_ANNOUNCE)
+    {
+        if (response.action == ACTION_ERROR)
+        {
             return UDP_TRACKER_PROTOCOL_ERROR?;
         }
         return UDP_TRACKER_INVALID_RESPONSE?;
     }
 
-    int tid_net;
-    p = (char*)&tid_net;
-    p[0..3] = buffer[4..7];
-    response.transaction_id = ntohl(tid_net);
+    response.transaction_id = unpack_int32(buffer, 4);
+    response.interval = unpack_int32(buffer, 8);
+    response.leechers = unpack_int32(buffer, 12);
+    response.seeders = unpack_int32(buffer, 16);
 
-    int interval_net;
-    p = (char*)&interval_net;
-    p[0..3] = buffer[8..11];
-    response.interval = ntohl(interval_net);
-
-    int leechers_net;
-    p = (char*)&leechers_net;
-    p[0..3] = buffer[12..15];
-    response.leechers = ntohl(leechers_net);
-
-    int seeders_net;
-    p = (char*)&seeders_net;
-    p[0..3] = buffer[16..19];
-    response.seeders = ntohl(seeders_net);
-
-    if (buffer.len > 20) {
-        *peers_out = buffer[20..buffer.len-1];
-    } else {
+    if (buffer.len > ANNOUNCE_RESPONSE_MIN_SIZE)
+    {
+        *peers_out = buffer[ANNOUNCE_RESPONSE_MIN_SIZE..buffer.len-1];
+    }
+    else
+    {
         char[] empty;
         *peers_out = empty;
     }
@@ -583,10 +555,7 @@ fn void on_announce_response(async_udp::UdpSocket* socket, char[] data, uv::Sock
 
     // Copy response data
     ctx.announce_response = mem::new_array(char, data.len);
-    for (usz i = 0; i < data.len; i++)
-    {
-        ctx.announce_response[i] = data[i];
-    }
+    ctx.announce_response[..] = data[..];
 
     // Parse announce response
     udp_tracker::AnnounceResponse? response = udp_tracker::unpack_announce_response(ctx.announce_response, (char[]*)&ctx.result.peers);
@@ -709,10 +678,7 @@ fn void on_connect_response(async_udp::UdpSocket* socket, char[] data, uv::Socka
     async_timer::stop(ctx.timeout_timer);
 
     // Copy response
-    for (usz i = 0; i < 16; i++)
-    {
-        ctx.connect_response[i] = data[i];
-    }
+    ctx.connect_response[..] = data[0..CONNECT_RESPONSE_SIZE-1];
 
     // Parse connect response
     udp_tracker::ConnectResponse? response = udp_tracker::unpack_connect_response(ctx.connect_response[..]);
