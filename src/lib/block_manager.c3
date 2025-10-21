@@ -140,6 +140,35 @@ fn void free(BlockManager* manager) @public
 }
 
 <*
+ Convert block offset to array index using direct calculation.
+
+ Blocks are at predictable offsets (multiples of STANDARD_BLOCK_SIZE),
+ so we can calculate the index in O(1) instead of linear search.
+
+ @param offset : "Block offset within piece"
+ @return "Block index, or fault if offset is invalid"
+*>
+fn usz? BlockManager.offset_to_index(&self, uint offset) @private
+{
+    // Validate offset is aligned to block boundary
+    if (offset % common::STANDARD_BLOCK_SIZE != 0)
+    {
+        return BLOCK_INVALID_OFFSET?;
+    }
+
+    // Calculate index from offset
+    usz index = offset / common::STANDARD_BLOCK_SIZE;
+
+    // Validate index is within bounds
+    if (index >= self.num_blocks)
+    {
+        return BLOCK_INVALID_OFFSET?;
+    }
+
+    return index;
+}
+
+<*
  Get the next block to request.
 
  Returns the next FREE block to request. If all blocks are requested
@@ -173,18 +202,10 @@ fn BlockRequest? BlockManager.get_next_block(&self) @public
 *>
 fn fault? BlockManager.mark_requested(&self, uint offset) @public
 {
-    // Find block with this offset
-    for (usz i = 0; i < self.num_blocks; i++)
-    {
-        if (self.blocks[i].offset == offset)
-        {
-            self.blocks[i].state = BlockState.REQUESTED;
-            self.blocks[i].request_time = (long)time::now().to_seconds();
-            return {};
-        }
-    }
-
-    return BLOCK_INVALID_OFFSET?;
+    usz index = self.offset_to_index(offset)!;
+    self.blocks[index].state = BlockState.REQUESTED;
+    self.blocks[index].request_time = (long)time::now().to_seconds();
+    return {};
 }
 
 <*
@@ -196,44 +217,37 @@ fn fault? BlockManager.mark_requested(&self, uint offset) @public
 *>
 fn fault? BlockManager.mark_received(&self, uint offset, char[] data) @public
 {
-    // Find block with this offset
-    for (usz i = 0; i < self.num_blocks; i++)
+    usz index = self.offset_to_index(offset)!;
+
+    // Check if already received
+    if (self.blocks[index].state == BlockState.RECEIVED)
     {
-        if (self.blocks[i].offset == offset)
-        {
-            // Check if already received
-            if (self.blocks[i].state == BlockState.RECEIVED)
-            {
-                return BLOCK_ALREADY_RECEIVED?;
-            }
-
-            // Verify data length matches expected length
-            if (data.len != self.blocks[i].length)
-            {
-                return BLOCK_INVALID_OFFSET?;
-            }
-
-            // Copy block data
-            self.blocks[i].data = mem::new_array(char, data.len);
-            for (usz j = 0; j < data.len; j++)
-            {
-                self.blocks[i].data[j] = data[j];
-            }
-
-            // Update state
-            BlockState old_state = self.blocks[i].state;
-            self.blocks[i].state = BlockState.RECEIVED;
-
-            if (old_state != BlockState.RECEIVED)
-            {
-                self.blocks_received++;
-            }
-
-            return {};
-        }
+        return BLOCK_ALREADY_RECEIVED?;
     }
 
-    return BLOCK_INVALID_OFFSET?;
+    // Verify data length matches expected length
+    if (data.len != self.blocks[index].length)
+    {
+        return BLOCK_INVALID_OFFSET?;
+    }
+
+    // Copy block data using foreach
+    self.blocks[index].data = mem::new_array(char, data.len);
+    foreach (j, byte : data)
+    {
+        self.blocks[index].data[j] = byte;
+    }
+
+    // Update state
+    BlockState old_state = self.blocks[index].state;
+    self.blocks[index].state = BlockState.RECEIVED;
+
+    if (old_state != BlockState.RECEIVED)
+    {
+        self.blocks_received++;
+    }
+
+    return {};
 }
 
 <*
@@ -263,15 +277,13 @@ fn char[]? BlockManager.assemble_piece(&self) @public
     // Allocate buffer for complete piece
     char[] piece = mem::new_array(char, self.piece_length);
 
-    // Copy blocks into piece
-    for (usz i = 0; i < self.num_blocks; i++)
+    // Copy blocks into piece using foreach
+    foreach (block : self.blocks)
     {
-        uint offset = self.blocks[i].offset;
-        char[] block_data = self.blocks[i].data;
-
-        for (usz j = 0; j < block_data.len; j++)
+        uint offset = block.offset;
+        foreach (j, byte : block.data)
         {
-            piece[offset + j] = block_data[j];
+            piece[offset + j] = byte;
         }
     }
 
@@ -298,14 +310,13 @@ fn void BlockManager.get_progress(&self, usz* total, usz* received) @public
 *>
 fn bool BlockManager.is_received(&self, uint offset) @public
 {
-    for (usz i = 0; i < self.num_blocks; i++)
+    usz? index_opt = self.offset_to_index(offset);
+    if (catch excuse = index_opt)
     {
-        if (self.blocks[i].offset == offset)
-        {
-            return self.blocks[i].state == BlockState.RECEIVED;
-        }
+        return false;
     }
-    return false;
+    usz index = index_opt;
+    return self.blocks[index].state == BlockState.RECEIVED;
 }
 
 <*
@@ -316,28 +327,22 @@ fn bool BlockManager.is_received(&self, uint offset) @public
 *>
 fn fault? BlockManager.reset_block(&self, uint offset) @public
 {
-    for (usz i = 0; i < self.num_blocks; i++)
-    {
-        if (self.blocks[i].offset == offset)
-        {
-            // Free data if it was received
-            if (self.blocks[i].data.len > 0)
-            {
-                if (self.blocks[i].state == BlockState.RECEIVED)
-                {
-                    self.blocks_received--;
-                }
-                std::core::mem::free(self.blocks[i].data);
-                self.blocks[i].data = {};
-            }
+    usz index = self.offset_to_index(offset)!;
 
-            self.blocks[i].state = BlockState.FREE;
-            self.blocks[i].request_time = 0;
-            return {};
+    // Free data if it was received
+    if (self.blocks[index].data.len > 0)
+    {
+        if (self.blocks[index].state == BlockState.RECEIVED)
+        {
+            self.blocks_received--;
         }
+        std::core::mem::free(self.blocks[index].data);
+        self.blocks[index].data = {};
     }
 
-    return BLOCK_INVALID_OFFSET?;
+    self.blocks[index].state = BlockState.FREE;
+    self.blocks[index].request_time = 0;
+    return {};
 }
 
 <*
@@ -348,18 +353,17 @@ fn fault? BlockManager.reset_block(&self, uint offset) @public
 *>
 fn long BlockManager.time_since_request(&self, uint offset) @public
 {
-    long now = (long)time::now().to_seconds();
-
-    for (usz i = 0; i < self.num_blocks; i++)
+    usz? index_opt = self.offset_to_index(offset);
+    if (catch excuse = index_opt)
     {
-        if (self.blocks[i].offset == offset)
-        {
-            if (self.blocks[i].state == BlockState.REQUESTED && self.blocks[i].request_time > 0)
-            {
-                return now - self.blocks[i].request_time;
-            }
-            return 0;
-        }
+        return 0;
+    }
+
+    usz index = index_opt;
+    if (self.blocks[index].state == BlockState.REQUESTED && self.blocks[index].request_time > 0)
+    {
+        long now = (long)time::now().to_seconds();
+        return now - self.blocks[index].request_time;
     }
 
     return 0;
