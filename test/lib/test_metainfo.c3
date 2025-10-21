@@ -70,8 +70,8 @@ fn void test_debug_torrent_structure() @test
     io::printfn("Root type: %d (DICT=%d)", root.type.ordinal, bencode::BencodeType.DICT.ordinal);
     if (root.type == bencode::BencodeType.DICT)
     {
-        io::printfn("Number of keys: %d", root.dict.len);
-        for (usz i = 0; i < root.dict.len; i++)
+        io::printfn("Number of keys: %d", root.dict.keys.size);
+        for (usz i = 0; i < root.dict.keys.size; i++)
         {
             io::printfn("  Key: '%s'", (String)root.dict.keys[i]);
         }
@@ -320,8 +320,8 @@ fn void test_inspect_real_torrent_numbers() @test
     io::printfn("=== numbers.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
     {
-        io::printfn("Top-level keys (%d):", root.dict.len);
-        for (usz i = 0; i < root.dict.len; i++)
+        io::printfn("Top-level keys (%d):", root.dict.keys.size);
+        for (usz i = 0; i < root.dict.keys.size; i++)
         {
             io::printfn("  - %s", (String)root.dict.keys[i]);
         }
@@ -1029,12 +1029,12 @@ fn void test_inspect_announce_list() @test
         io::printfn("announce-list found! Type: %d", announce_list.type.ordinal);
         if (announce_list.type == bencode::BencodeType.LIST)
         {
-            io::printfn("Tiers: %d", announce_list.list.len);
+            io::printfn("Tiers: %d", announce_list.list.size);
             foreach (i, tier : announce_list.list)
             {
                 if (tier.type == bencode::BencodeType.LIST)
                 {
-                    io::printfn("  Tier %d (%d trackers):", i, tier.list.len);
+                    io::printfn("  Tier %d (%d trackers):", i, tier.list.size);
                     foreach (tracker : tier.list)
                     {
                         if (tracker.type == bencode::BencodeType.STRING)
@@ -1063,8 +1063,8 @@ fn void test_inspect_announce_list() @test
     BencodeValue* info = bencode::dict_get(root, "info");
     if (info && info.type == bencode::BencodeType.DICT)
     {
-        io::printfn("Info dict keys (%d):", info.dict.len);
-        for (usz i = 0; i < info.dict.len; i++)
+        io::printfn("Info dict keys (%d):", info.dict.keys.size);
+        for (usz i = 0; i < info.dict.keys.size; i++)
         {
             String key = (String)info.dict.keys[i];
             BencodeValue* val = info.dict.values[i];
@@ -1072,7 +1072,7 @@ fn void test_inspect_announce_list() @test
 
             if (key == "files" && val.type == bencode::BencodeType.LIST)
             {
-                io::printfn("    Files list: %d files", val.list.len);
+                io::printfn("    Files list: %d files", val.list.size);
                 foreach (j, file : val.list)
                 {
                     if (file.type == bencode::BencodeType.DICT)
@@ -1138,8 +1138,8 @@ fn void test_inspect_creation_date() @test
     io::printfn("=== creation_date.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
     {
-        io::printfn("Top-level keys (%d):", root.dict.len);
-        for (usz i = 0; i < root.dict.len; i++)
+        io::printfn("Top-level keys (%d):", root.dict.keys.size);
+        for (usz i = 0; i < root.dict.keys.size; i++)
         {
             io::printfn("  - %s", (String)root.dict.keys[i]);
         }
@@ -1148,8 +1148,8 @@ fn void test_inspect_creation_date() @test
         BencodeValue* info = bencode::dict_get(root, "info");
         if (info && info.type == bencode::BencodeType.DICT)
         {
-            io::printfn("Info dict keys (%d):", info.dict.len);
-            for (usz i = 0; i < info.dict.len; i++)
+            io::printfn("Info dict keys (%d):", info.dict.keys.size);
+            for (usz i = 0; i < info.dict.keys.size; i++)
             {
                 io::printfn("  - %s", (String)info.dict.keys[i]);
             }
@@ -1169,8 +1169,8 @@ fn void test_inspect_url_seed() @test
     io::printfn("=== url_seed.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
     {
-        io::printfn("Top-level keys (%d):", root.dict.len);
-        for (usz i = 0; i < root.dict.len; i++)
+        io::printfn("Top-level keys (%d):", root.dict.keys.size);
+        for (usz i = 0; i < root.dict.keys.size; i++)
         {
             io::printfn("  - %s", (String)root.dict.keys[i]);
         }
@@ -1182,7 +1182,7 @@ fn void test_inspect_url_seed() @test
             io::printfn("url-list type: %d", url_list.type.ordinal);
             if (url_list.type == bencode::BencodeType.LIST)
             {
-                io::printfn("url-list count: %d", url_list.list.len);
+                io::printfn("url-list count: %d", url_list.list.size);
                 foreach (i, url_val : url_list.list)
                 {
                     if (url_val.type == bencode::BencodeType.STRING)
@@ -1211,8 +1211,8 @@ fn void test_inspect_httpseed() @test
     io::printfn("=== httpseed.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
     {
-        io::printfn("Top-level keys (%d):", root.dict.len);
-        for (usz i = 0; i < root.dict.len; i++)
+        io::printfn("Top-level keys (%d):", root.dict.keys.size);
+        for (usz i = 0; i < root.dict.keys.size; i++)
         {
             io::printfn("  - %s", (String)root.dict.keys[i]);
         }
@@ -1224,7 +1224,7 @@ fn void test_inspect_httpseed() @test
             io::printfn("httpseeds type: %d", httpseeds.type.ordinal);
             if (httpseeds.type == bencode::BencodeType.LIST)
             {
-                io::printfn("httpseeds count: %d", httpseeds.list.len);
+                io::printfn("httpseeds count: %d", httpseeds.list.size);
                 foreach (i, httpseed_val : httpseeds.list)
                 {
                     if (httpseed_val.type == bencode::BencodeType.STRING)

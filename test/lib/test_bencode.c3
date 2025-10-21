@@ -186,7 +186,7 @@ fn void test_decode_list_empty() @test
     defer bencode::free_bencode_value(val);
 
     assert(val.type == bencode::BencodeType.LIST, "Expected LIST type");
-    assert(val.list.len == 0, "Expected empty list");
+    assert(val.list.size == 0, "Expected empty list");
 }
 
 fn void test_decode_list_simple() @test
@@ -195,13 +195,13 @@ fn void test_decode_list_simple() @test
     defer bencode::free_bencode_value(val);
 
     assert(val.type == bencode::BencodeType.LIST, "Expected LIST type");
-    assert(val.list.len == 2, "Expected 2 items");
+    assert(val.list.size == 2, "Expected 2 items");
 
-    BencodeValue* item0 = val.list[0];
+    BencodeValue* item0 = val.list.get(0);
     assert(item0.type == bencode::BencodeType.STRING, "Expected STRING at index 0");
     assert((String)item0.string == "spam", "Expected 'spam'");
 
-    BencodeValue* item1 = val.list[1];
+    BencodeValue* item1 = val.list.get(1);
     assert(item1.type == bencode::BencodeType.INTEGER, "Expected INTEGER at index 1");
     assert(item1.integer == 42, "Expected 42");
 }
@@ -213,17 +213,17 @@ fn void test_decode_list_mixed_types() @test
     defer bencode::free_bencode_value(val);
 
     assert(val.type == bencode::BencodeType.LIST, "Expected LIST type");
-    assert(val.list.len == 3, "Expected 3 items");
+    assert(val.list.size == 3, "Expected 3 items");
 
-    BencodeValue* item0 = val.list[0];
+    BencodeValue* item0 = val.list.get(0);
     assert(item0.type == bencode::BencodeType.INTEGER, "Expected INTEGER at index 0");
     assert(item0.integer == 1, "Expected 1");
 
-    BencodeValue* item1 = val.list[1];
+    BencodeValue* item1 = val.list.get(1);
     assert(item1.type == bencode::BencodeType.LIST, "Expected LIST at index 1");
-    assert(item1.list.len == 1, "Expected nested list with 1 item");
+    assert(item1.list.size == 1, "Expected nested list with 1 item");
 
-    BencodeValue* item2 = val.list[2];
+    BencodeValue* item2 = val.list.get(2);
     assert(item2.type == bencode::BencodeType.INTEGER, "Expected INTEGER at index 2");
     assert(item2.integer == 3, "Expected 3");
 }
@@ -275,7 +275,7 @@ fn void test_decode_dict_empty() @test
     defer bencode::free_bencode_value(val);
 
     assert(val.type == bencode::BencodeType.DICT, "Expected DICT type");
-    assert(val.dict.len == 0, "Expected empty dict");
+    assert(val.dict.keys.size == 0, "Expected empty dict");
 }
 
 fn void test_decode_dict_simple() @test
@@ -284,7 +284,7 @@ fn void test_decode_dict_simple() @test
     defer bencode::free_bencode_value(val);
 
     assert(val.type == bencode::BencodeType.DICT, "Expected DICT type");
-    assert(val.dict.len == 2, "Expected 2 entries");
+    assert(val.dict.keys.size == 2, "Expected 2 entries");
 
     BencodeValue* cow_val = bencode::dict_get(val, "cow");
     assert(cow_val != null, "Expected 'cow' key to exist");
@@ -392,13 +392,13 @@ fn void test_blist_wrap_strings() @test
     defer bencode::free_bencode_value(list);
 
     assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
-    assert(list.list.len == 3, "Expected 3 items");
-    assert(list.list[0].type == bencode::BencodeType.STRING, "Expected STRING");
-    assert(list.list[1].type == bencode::BencodeType.STRING, "Expected STRING");
-    assert(list.list[2].type == bencode::BencodeType.STRING, "Expected STRING");
-    assert((String)list.list[0].string == "hello");
-    assert((String)list.list[1].string == "world");
-    assert((String)list.list[2].string == "test");
+    assert(list.list.size == 3, "Expected 3 items");
+    assert(list.list.get(0).type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list.get(1).type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list.get(2).type == bencode::BencodeType.STRING, "Expected STRING");
+    assert((String)list.list.get(0).string == "hello");
+    assert((String)list.list.get(1).string == "world");
+    assert((String)list.list.get(2).string == "test");
 }
 
 fn void test_blist_wrap_integers() @test
@@ -407,13 +407,13 @@ fn void test_blist_wrap_integers() @test
     defer bencode::free_bencode_value(list);
 
     assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
-    assert(list.list.len == 3, "Expected 3 items");
-    assert(list.list[0].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
-    assert(list.list[1].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
-    assert(list.list[2].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
-    assert(list.list[0].integer == 1);
-    assert(list.list[1].integer == 42);
-    assert(list.list[2].integer == 100);
+    assert(list.list.size == 3, "Expected 3 items");
+    assert(list.list.get(0).type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list.get(1).type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list.get(2).type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list.get(0).integer == 1);
+    assert(list.list.get(1).integer == 42);
+    assert(list.list.get(2).integer == 100);
 }
 
 fn void test_blist_wrap_mixed() @test
@@ -422,15 +422,15 @@ fn void test_blist_wrap_mixed() @test
     defer bencode::free_bencode_value(list);
 
     assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
-    assert(list.list.len == 4, "Expected 4 items");
-    assert(list.list[0].type == bencode::BencodeType.STRING, "Expected STRING");
-    assert(list.list[1].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
-    assert(list.list[2].type == bencode::BencodeType.STRING, "Expected STRING");
-    assert(list.list[3].type == bencode::BencodeType.INTEGER, "Expected INTEGER");
-    assert((String)list.list[0].string == "hello");
-    assert(list.list[1].integer == 42);
-    assert((String)list.list[2].string == "world");
-    assert(list.list[3].integer == 100);
+    assert(list.list.size == 4, "Expected 4 items");
+    assert(list.list.get(0).type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list.get(1).type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert(list.list.get(2).type == bencode::BencodeType.STRING, "Expected STRING");
+    assert(list.list.get(3).type == bencode::BencodeType.INTEGER, "Expected INTEGER");
+    assert((String)list.list.get(0).string == "hello");
+    assert(list.list.get(1).integer == 42);
+    assert((String)list.list.get(2).string == "world");
+    assert(list.list.get(3).integer == 100);
 }
 
 fn void test_bdict_wrap_basic() @test
@@ -442,7 +442,7 @@ fn void test_bdict_wrap_basic() @test
     defer bencode::free_bencode_value(dict);
 
     assert(dict.type == bencode::BencodeType.DICT, "Expected DICT type");
-    assert(dict.dict.len == 2, "Expected 2 keys");
+    assert(dict.dict.keys.size == 2, "Expected 2 keys");
 
     BencodeValue* name = bencode::dict_get(dict, "name");
     BencodeValue* size = bencode::dict_get(dict, "size");
@@ -466,7 +466,7 @@ fn void test_bdict_wrap_complex() @test
     defer bencode::free_bencode_value(dict);
 
     assert(dict.type == bencode::BencodeType.DICT, "Expected DICT type");
-    assert(dict.dict.len == 4, "Expected 4 keys");
+    assert(dict.dict.keys.size == 4, "Expected 4 keys");
 
     BencodeValue* name = bencode::dict_get(dict, "name");
     BencodeValue* count = bencode::dict_get(dict, "count");
@@ -486,10 +486,10 @@ fn void test_blist_wrap_with_prewrapped() @test
     BencodeValue* list = bencode::@blist_wrap("hello", wrapped, 42);
     defer bencode::free_bencode_value(list);
 
-    assert(list.list.len == 3, "Expected 3 items");
-    assert((String)list.list[0].string == "hello");
-    assert((String)list.list[1].string == "pre-wrapped");
-    assert(list.list[2].integer == 42);
+    assert(list.list.size == 3, "Expected 3 items");
+    assert((String)list.list.get(0).string == "hello");
+    assert((String)list.list.get(1).string == "pre-wrapped");
+    assert(list.list.get(2).integer == 42);
 }
 
 fn void test_bdict_wrap_with_prewrapped() @test

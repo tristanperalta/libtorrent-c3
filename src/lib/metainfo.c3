@@ -121,7 +121,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* announce_list_val = bencode::dict_get(root, "announce-list");
     if (announce_list_val && announce_list_val.type == bencode::BencodeType.LIST)
     {
-        usz num_tiers = announce_list_val.list.len;
+        usz num_tiers = announce_list_val.list.size;
         if (num_tiers > 0)
         {
             // Allocate array of tiers
@@ -129,10 +129,10 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
             for (usz i = 0; i < num_tiers; i++)
             {
-                BencodeValue* tier = announce_list_val.list[i];
+                BencodeValue* tier = announce_list_val.list.get(i);
                 if (tier.type == bencode::BencodeType.LIST)
                 {
-                    usz num_trackers = tier.list.len;
+                    usz num_trackers = tier.list.size;
                     if (num_trackers > 0)
                     {
                         // Allocate array of tracker URLs for this tier
@@ -140,7 +140,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
                         for (usz j = 0; j < num_trackers; j++)
                         {
-                            BencodeValue* tracker = tier.list[j];
+                            BencodeValue* tracker = tier.list.get(j);
                             if (tracker.type == bencode::BencodeType.STRING)
                             {
                                 // Trim whitespace from tracker URLs
@@ -157,19 +157,19 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* nodes_val = bencode::dict_get(root, "nodes");
     if (nodes_val && nodes_val.type == bencode::BencodeType.LIST)
     {
-        usz num_nodes = nodes_val.list.len;
+        usz num_nodes = nodes_val.list.size;
         if (num_nodes > 0)
         {
             torrent.nodes = mem::new_array(DhtNode, num_nodes);
 
             for (usz i = 0; i < num_nodes; i++)
             {
-                BencodeValue* node = nodes_val.list[i];
-                if (node.type == bencode::BencodeType.LIST && node.list.len == 2)
+                BencodeValue* node = nodes_val.list.get(i);
+                if (node.type == bencode::BencodeType.LIST && node.list.size == 2)
                 {
                     // Each node is [host_string, port_integer]
-                    BencodeValue* host = node.list[0];
-                    BencodeValue* port = node.list[1];
+                    BencodeValue* host = node.list.get(0);
+                    BencodeValue* port = node.list.get(1);
 
                     if (host.type == bencode::BencodeType.STRING &&
                         port.type == bencode::BencodeType.INTEGER)
@@ -187,13 +187,13 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* collections_val = bencode::dict_get(root, "collections");
     if (collections_val && collections_val.type == bencode::BencodeType.LIST)
     {
-        usz count = collections_val.list.len;
+        usz count = collections_val.list.size;
         if (count > 0)
         {
             torrent.collections = mem::new_array(String, count);
             for (usz i = 0; i < count; i++)
             {
-                BencodeValue* collection = collections_val.list[i];
+                BencodeValue* collection = collections_val.list.get(i);
                 if (collection.type == bencode::BencodeType.STRING)
                 {
                     torrent.collections[i] = copy_string(collection.string);
@@ -207,14 +207,14 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* similar_val = bencode::dict_get(root, "similar");
     if (similar_val && similar_val.type == bencode::BencodeType.LIST)
     {
-        usz count = similar_val.list.len;
+        usz count = similar_val.list.size;
         if (count > 0)
         {
             torrent.similar_count = count;
             torrent.similar = mem::new_array(char, count * 20);
             for (usz i = 0; i < count; i++)
             {
-                BencodeValue* info_hash = similar_val.list[i];
+                BencodeValue* info_hash = similar_val.list.get(i);
                 if (info_hash.type == bencode::BencodeType.STRING &&
                     info_hash.string.len == 20)
                 {
@@ -259,7 +259,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
         if (url_list_val.type == bencode::BencodeType.LIST)
         {
             // List of URL seeds - deduplicate
-            usz count = url_list_val.list.len;
+            usz count = url_list_val.list.size;
             if (count > 0)
             {
                 // Allocate maximum possible size
@@ -268,7 +268,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
                 for (usz i = 0; i < count; i++)
                 {
-                    BencodeValue* url = url_list_val.list[i];
+                    BencodeValue* url = url_list_val.list.get(i);
                     if (url.type == bencode::BencodeType.STRING)
                     {
                         String url_str = (String)url.string;
@@ -328,7 +328,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* httpseeds_val = bencode::dict_get(root, "httpseeds");
     if (httpseeds_val && httpseeds_val.type == bencode::BencodeType.LIST)
     {
-        usz count = httpseeds_val.list.len;
+        usz count = httpseeds_val.list.size;
         if (count > 0)
         {
             // Allocate maximum possible size
@@ -337,7 +337,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
             for (usz i = 0; i < count; i++)
             {
-                BencodeValue* seed = httpseeds_val.list[i];
+                BencodeValue* seed = httpseeds_val.list.get(i);
                 if (seed.type == bencode::BencodeType.STRING)
                 {
                     String seed_str = (String)seed.string;
@@ -510,7 +510,7 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
  */
 fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
 {
-    usz num_files = files_val.list.len;
+    usz num_files = files_val.list.size;
 
     // Validate: must have at least one file
     if (num_files == 0)
@@ -525,7 +525,7 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
     // Parse each file
     for (usz i = 0; i < num_files; i++)
     {
-        BencodeValue* file_dict = files_val.list[i];
+        BencodeValue* file_dict = files_val.list.get(i);
         if (file_dict.type != bencode::BencodeType.DICT)
         {
             return TORRENT_INVALID_INFO?;
@@ -552,13 +552,13 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         BencodeValue* path = bencode::dict_get_required(bencode::BencodeType.LIST, file_dict, "path", TORRENT_MISSING_FIELD)!;
 
         // Validate path has at least one component
-        if (path.list.len == 0)
+        if (path.list.size == 0)
         {
             return TORRENT_INVALID_INFO?;
         }
 
         // Allocate path array
-        file.path = mem::new_array(String, path.list.len);
+        file.path = mem::new_array(String, path.list.size);
 
         // Copy path components
         foreach (j, component : path.list)

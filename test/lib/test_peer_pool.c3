@@ -713,13 +713,13 @@ fn void test_connection_limit() @test
 fn void test_update_peer_stats() @test
 {
     event_loop::EventLoop loop = event_loop::create()!!;
-    defer event_loop::free(&loop);
+    defer loop.free();
 
-    PeerPoolConfig config = default_config();
     char[20] info_hash;
     char[20] peer_id;
-    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
-    defer peer_pool::free(&pool);
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
 
     // Add a peer
     char[4] ip = { 192, 168, 1, 100 };
@@ -750,13 +750,13 @@ fn void test_update_peer_stats() @test
 fn void test_mark_hash_failure() @test
 {
     event_loop::EventLoop loop = event_loop::create()!!;
-    defer event_loop::free(&loop);
+    defer loop.free();
 
-    PeerPoolConfig config = default_config();
     char[20] info_hash;
     char[20] peer_id;
-    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
-    defer peer_pool::free(&pool);
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
 
     // Add a peer
     char[4] ip = { 192, 168, 1, 100 };
@@ -790,13 +790,13 @@ fn void test_mark_hash_failure() @test
 fn void test_mark_peer_seed() @test
 {
     event_loop::EventLoop loop = event_loop::create()!!;
-    defer event_loop::free(&loop);
+    defer loop.free();
 
-    PeerPoolConfig config = default_config();
     char[20] info_hash;
     char[20] peer_id;
-    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
-    defer peer_pool::free(&pool);
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
 
     // Add a peer
     char[4] ip = { 192, 168, 1, 100 };
@@ -825,13 +825,13 @@ fn void test_mark_peer_seed() @test
 fn void test_stats_peer_not_found() @test
 {
     event_loop::EventLoop loop = event_loop::create()!!;
-    defer event_loop::free(&loop);
+    defer loop.free();
 
-    PeerPoolConfig config = default_config();
     char[20] info_hash;
     char[20] peer_id;
-    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
-    defer peer_pool::free(&pool);
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
 
     char[4] ip = { 192, 168, 1, 100 };
 
@@ -872,19 +872,22 @@ fn void test_stats_peer_not_found() @test
 fn void test_stats_update_candidate_cache() @test
 {
     event_loop::EventLoop loop = event_loop::create()!!;
-    defer event_loop::free(&loop);
+    defer loop.free();
 
-    PeerPoolConfig config = default_config();
     char[20] info_hash;
     char[20] peer_id;
-    PeerPool pool = peer_pool::create(&loop, &config, info_hash, peer_id);
-    defer peer_pool::free(&pool);
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
 
     // Add two peers
     char[4] ip1 = { 192, 168, 1, 100 };
     char[4] ip2 = { 192, 168, 1, 101 };
     pool.add_peer(ip1, 6881, true);
     pool.add_peer(ip2, 6881, true);
+
+    // Update candidate cache to make peers available
+    pool.update_candidate_cache();
 
     // Initially both have similar ranks, check who is first
     TorrentPeer* initial_best = pool.pick_best_candidate()!!;

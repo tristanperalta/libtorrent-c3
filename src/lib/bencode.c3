@@ -1,10 +1,9 @@
 module libtorrent::bencode;
 
 import std::io;
-import std::collections::list;
-import std::collections::map;
 import std::core::mem;
 import std::core::dstring;
+import std::collections::list;
 
 /**
  * Bencode Format Specification
@@ -38,6 +37,12 @@ import std::core::dstring;
 const int MAX_BENCODE_DEPTH = 100;
 
 /**
+ * Type aliases for the collections used in bencode structures.
+ */
+alias BencodeValueList = List{BencodeValue*};
+alias ByteStringList = List{char[]};
+
+/**
  * BencodeValue represents any bencode data type.
  * This is a tagged union that can hold integers, strings, lists, or dictionaries.
  */
@@ -56,9 +61,8 @@ enum BencodeType : char
  */
 struct BencodeDict
 {
-    char[][] keys;           // Array of string keys (sorted)
-    BencodeValue*[] values;  // Corresponding values
-    usz len;                 // Number of key-value pairs
+    ByteStringList keys;      // List of string keys (sorted)
+    BencodeValueList values;  // Corresponding values
 }
 
 /**
@@ -98,7 +102,7 @@ struct BencodeValue
     union {
         long integer;           // For INTEGER: the integer value
         char[] string;          // For STRING: raw byte data (not necessarily UTF-8!)
-        BencodeValue*[] list;   // For LIST: array of BencodeValue pointers
+        BencodeValueList list;  // For LIST: list of BencodeValue pointers
         BencodeDict dict;       // For DICT: dictionary structure
     }
 }
@@ -137,21 +141,21 @@ fn void encode_recursive(DString* buf, BencodeValue* value)
             buf.append(value.string);
         case LIST:
             buf.append('l');
-            foreach (item : value.list)
+            foreach (item : value.list.array_view())
             {
                 encode_recursive(buf, item);
             }
             buf.append('e');
         case DICT:
             buf.append('d');
-            for (usz i = 0; i < value.dict.len; i++)
+            foreach (entry : value.dict.entries())
             {
                 // Encode key (as a string)
-                write_integer(buf, (long)value.dict.keys[i].len);
+                write_integer(buf, (long)entry.key.len);
                 buf.append(':');
-                buf.append(value.dict.keys[i]);
+                buf.append(entry.key);
                 // Encode value (recursive)
-                encode_recursive(buf, value.dict.values[i]);
+                encode_recursive(buf, entry.value);
             }
             buf.append('e');
     }
@@ -437,11 +441,11 @@ fn BencodeValue* dict_get(BencodeValue* dict, String key) @public
 {
     if (dict.type != BencodeType.DICT) return null;
 
-    for (usz i = 0; i < dict.dict.len; i++)
+    foreach (entry : dict.dict.entries())
     {
-        if ((String)dict.dict.keys[i] == key)
+        if (entry.key == key)
         {
-            return dict.dict.values[i];
+            return entry.value;
         }
     }
 
@@ -482,22 +486,22 @@ fn void free_bencode_value(BencodeValue* value) @public
         case STRING:
             free(value.string);
         case LIST:
-            foreach (item : value.list)
+            foreach (item : value.list.array_view())
             {
                 free_bencode_value(item);
             }
-            free(value.list);
+            value.list.free();
         case DICT:
-            foreach (key : value.dict.keys)
+            foreach (key : value.dict.keys.array_view())
             {
                 free(key);
             }
-            free(value.dict.keys);
-            foreach (val : value.dict.values)
+            value.dict.keys.free();
+            foreach (val : value.dict.values.array_view())
             {
                 free_bencode_value(val);
             }
-            free(value.dict.values);
+            value.dict.values.free();
         case INTEGER:
             // No nested allocation
     }
@@ -561,7 +565,7 @@ fn BencodeValue* make_list() @public
 {
     BencodeValue* val = mem::new(BencodeValue);
     val.type = BencodeType.LIST;
-    val.list = {};  // Empty slice
+    val.list.init(mem);
     return val;
 }
 
@@ -579,9 +583,8 @@ fn BencodeValue* make_dict() @public
 {
     BencodeValue* val = mem::new(BencodeValue);
     val.type = BencodeType.DICT;
-    val.dict.keys = {};     // Empty slice
-    val.dict.values = {};   // Empty slice
-    val.dict.len = 0;
+    val.dict.keys.init(mem);
+    val.dict.values.init(mem);
     return val;
 }
 
@@ -593,27 +596,31 @@ fn BencodeValue* make_dict() @public
  */
 fn void list_append(BencodeValue* list, BencodeValue* value) @public
 {
-    // Grow the list array
-    usz old_len = list.list.len;
-    BencodeValue*[] new_list = mem::new_array(BencodeValue*, old_len + 1);
+    list.list.push(value);
+}
 
-    // Copy existing items
-    for (usz i = 0; i < old_len; i++)
+/**
+ * Compare two strings lexicographically (byte by byte).
+ * Returns: -1 if a < b, 0 if a == b, 1 if a > b
+ */
+fn int compare_strings_lexicographic(String a, String b)
+{
+    usz min_len = a.len < b.len ? a.len : b.len;
+    for (usz i = 0; i < min_len; i++)
     {
-        new_list[i] = list.list[i];
+        if (a[i] < b[i]) return -1;
+        if (a[i] > b[i]) return 1;
     }
-
-    // Add new item
-    new_list[old_len] = value;
-
-    // Free old array and update
-    if (old_len > 0) free(list.list);
-    list.list = new_list;
+    // All bytes equal up to min_len, shorter string comes first
+    if (a.len < b.len) return -1;
+    if (a.len > b.len) return 1;
+    return 0;
 }
 
 /**
  * Set a key-value pair in a bencode dictionary.
  * Keys must be added in lexicographically sorted order.
+ * This function validates that keys are inserted in sorted order.
  *
  * @param dict The dictionary to add to (must be a DICT type)
  * @param key The key (will be copied)
@@ -621,48 +628,100 @@ fn void list_append(BencodeValue* list, BencodeValue* value) @public
  */
 fn void dict_set(BencodeValue* dict, String key, BencodeValue* value) @public
 {
-    // Grow the arrays
-    usz old_len = dict.dict.len;
-    char[][] new_keys = mem::new_array(char[], old_len + 1);
-    BencodeValue*[] new_values = mem::new_array(BencodeValue*, old_len + 1);
-
-    // Copy existing items
-    for (usz i = 0; i < old_len; i++)
+    // Validate that key is lexicographically greater than last key
+    if (dict.dict.keys.size > 0)
     {
-        new_keys[i] = dict.dict.keys[i];
-        new_values[i] = dict.dict.values[i];
+        char[] last_key = dict.dict.keys.array_view()[dict.dict.keys.size - 1];
+        int cmp = compare_strings_lexicographic((String)last_key, key);
+        if (cmp >= 0)
+        {
+            // Keys not in sorted order - this violates BitTorrent spec
+            io::printfn("Warning: Dictionary keys must be in lexicographically sorted order!");
+            io::printfn("  Last key: %s", (String)last_key);
+            io::printfn("  New key: %s", key);
+        }
     }
 
-    // Copy and add new key
+    // Copy the key
     char[] key_copy = mem::new_array(char, key.len);
     foreach (i, c : key)
     {
         key_copy[i] = c;
     }
-    new_keys[old_len] = key_copy;
-    new_values[old_len] = value;
 
-    // Free old arrays and update
-    if (old_len > 0)
+    // Add key and value to lists
+    dict.dict.keys.push(key_copy);
+    dict.dict.values.push(value);
+}
+
+/**
+ * Recursively convert a BencodeValue to a human-readable string.
+ */
+fn void to_string_recursive(DString* buf, BencodeValue* value, int indent_level)
+{
+    // Create indent string manually
+    for (int i = 0; i < indent_level; i++)
     {
-        free(dict.dict.keys);
-        free(dict.dict.values);
+        buf.append("  ");
     }
-    dict.dict.keys = new_keys;
-    dict.dict.values = new_values;
-    dict.dict.len = old_len + 1;
+
+    switch (value.type)
+    {
+        case INTEGER:
+            buf.appendf("%d", value.integer);
+        case STRING:
+            // Try to print as UTF-8 string if valid, otherwise show hex
+            if (value.string.len < 64)
+            {
+                buf.appendf("\"%s\"", (String)value.string);
+            }
+            else
+            {
+                buf.appendf("<bytes[%d]>", value.string.len);
+            }
+        case LIST:
+            buf.append("[\n");
+            foreach (i, item : value.list.array_view())
+            {
+                for (int j = 0; j < indent_level + 1; j++) buf.append("  ");
+                to_string_recursive(buf, item, 0);
+                if (i < value.list.size - 1)
+                {
+                    buf.append(",");
+                }
+                buf.append("\n");
+            }
+            for (int i = 0; i < indent_level; i++) buf.append("  ");
+            buf.append("]");
+        case DICT:
+            buf.append("{\n");
+            foreach (i, entry : value.dict.entries())
+            {
+                for (int j = 0; j < indent_level + 1; j++) buf.append("  ");
+                buf.appendf("\"%s\": ", entry.key);
+                to_string_recursive(buf, entry.value, 0);
+                if (i < value.dict.keys.size - 1)
+                {
+                    buf.append(",");
+                }
+                buf.append("\n");
+            }
+            for (int i = 0; i < indent_level; i++) buf.append("  ");
+            buf.append("}");
+    }
 }
 
 /**
  * Convert a BencodeValue to a human-readable string for debugging.
  *
  * @param value The value to print
- * @return A formatted string representation
+ * @return A formatted string representation (caller must free)
  */
 fn String to_string(BencodeValue* value) @public
 {
-    // TODO: Implement pretty-printing
-    return "";
+    DString buf;
+    to_string_recursive(&buf, value, 0);
+    return buf.copy_str(mem);
 }
 
 /**
@@ -682,10 +741,10 @@ fn String to_string(BencodeValue* value) @public
  */
 fn BencodeDictEntry[] BencodeDict.entries(&self) @public
 {
-    BencodeDictEntry[] result = mem::temp_array(BencodeDictEntry, self.len);
-    for (usz i = 0; i < self.len; i++)
+    BencodeDictEntry[] result = mem::temp_array(BencodeDictEntry, self.keys.size);
+    foreach (i, key : self.keys.array_view())
     {
-        result[i] = { .key = (String)self.keys[i], .value = self.values[i] };
+        result[i] = { .key = (String)key, .value = self.values.array_view()[i] };
     }
     return result;
 }
