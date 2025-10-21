@@ -28,6 +28,17 @@ faultdef TRACKER_UNSUPPORTED_PROTOCOL;
 // Default number of peers to request from tracker (BEP 3 standard)
 const int DEFAULT_NUMWANT = 50;
 
+// Peer ID and hash size constants
+const usz PEER_ID_SIZE = 20;
+const usz PEER_ID_PREFIX_LENGTH = 8;
+const String PEER_ID_PREFIX = "-C30001-";
+const usz SHA1_HASH_SIZE = 20;
+
+// Compact peer format constants (BEP 3)
+const usz COMPACT_PEER_SIZE = 6;
+const usz IPV4_ADDR_SIZE = 4;
+const usz COMPACT_PEER_PORT_SIZE = 2;
+
 <*
  Tracker interface - all tracker implementations must implement this.
  Provides a unified way to announce to different tracker types (HTTP/UDP).
@@ -75,26 +86,22 @@ struct HttpTracker (Tracker) {
 
  @return "A 20-byte peer ID"
 *>
-fn char[20] generate_peer_id()
+fn char[PEER_ID_SIZE] generate_peer_id()
 {
-    char[20] peer_id;
+    char[PEER_ID_SIZE] peer_id;
 
     // Client ID prefix: -C30001-
-    peer_id[0] = '-';
-    peer_id[1] = 'C';
-    peer_id[2] = '3';
-    peer_id[3] = '0';
-    peer_id[4] = '0';
-    peer_id[5] = '0';
-    peer_id[6] = '1';
-    peer_id[7] = '-';
+    foreach (i, c : PEER_ID_PREFIX)
+    {
+        peer_id[i] = c;
+    }
 
-    // Generate 12 random bytes
-    // Seed random with current time
+    // Generate random bytes for remainder
     random::DefaultRandom rng;
     random::seed(&rng, (uint)time::now().to_seconds());
 
-    for (usz i = 8; i < 20; i++) {
+    for (usz i = PEER_ID_PREFIX_LENGTH; i < PEER_ID_SIZE; i++)
+    {
         peer_id[i] = (char)random::next_in_range(&rng, 0, 255);
     }
 
@@ -115,8 +122,8 @@ fn char[20] generate_peer_id()
  @param numwant : "Number of peers requested (default 50)"
  @return "Complete announce URL with query parameters"
 *>
-fn String build_announce_url(String tracker_url, char[20]* info_hash,
-                              char[20]* peer_id, ushort port,
+fn String build_announce_url(String tracker_url, char[SHA1_HASH_SIZE]* info_hash,
+                              char[PEER_ID_SIZE]* peer_id, ushort port,
                               long uploaded, long downloaded, long left,
                               String event, int numwant)
 {
@@ -131,14 +138,14 @@ fn String build_announce_url(String tracker_url, char[20]* info_hash,
         url.append_char('&');
     }
 
-    // Encode info_hash (20 bytes)
-    char[] hash_bytes = ((char*)info_hash)[:20];
+    // Encode info_hash
+    char[] hash_bytes = ((char*)info_hash)[:SHA1_HASH_SIZE];
     String encoded_hash = url::encode(mem, (String)hash_bytes, url::UrlEncodingMode.QUERY);
     defer free(encoded_hash);
     url.appendf("info_hash=%s", encoded_hash);
 
-    // Encode peer_id (20 bytes)
-    char[] peer_bytes = ((char*)peer_id)[:20];
+    // Encode peer_id
+    char[] peer_bytes = ((char*)peer_id)[:PEER_ID_SIZE];
     String encoded_peer = url::encode(mem, (String)peer_bytes, url::UrlEncodingMode.QUERY);
     defer free(encoded_peer);
     url.appendf("&peer_id=%s", encoded_peer);
@@ -168,12 +175,12 @@ fn String build_announce_url(String tracker_url, char[20]* info_hash,
 *>
 fn Peer[]? parse_compact_peers(char[] peer_data)
 {
-    // Validate length is multiple of 6
-    if (peer_data.len % 6 != 0) {
+    // Validate length is multiple of COMPACT_PEER_SIZE
+    if (peer_data.len % COMPACT_PEER_SIZE != 0) {
         return TRACKER_INVALID_RESPONSE?;
     }
 
-    usz count = peer_data.len / 6;
+    usz count = peer_data.len / COMPACT_PEER_SIZE;
     if (count == 0) {
         Peer[] empty;
         return empty;
@@ -181,18 +188,19 @@ fn Peer[]? parse_compact_peers(char[] peer_data)
 
     Peer[] peers = mem::new_array(Peer, count);
 
-    for (usz i = 0; i < count; i++) {
-        usz offset = i * 6;
+    for (usz i = 0; i < count; i++)
+    {
+        usz offset = i * COMPACT_PEER_SIZE;
 
-        // Copy 4 bytes for IP
-        peers[i].ip[0] = peer_data[offset];
-        peers[i].ip[1] = peer_data[offset + 1];
-        peers[i].ip[2] = peer_data[offset + 2];
-        peers[i].ip[3] = peer_data[offset + 3];
+        // Copy IPv4 address (4 bytes)
+        foreach (j, byte : peer_data[offset:IPV4_ADDR_SIZE])
+        {
+            peers[i].ip[j] = byte;
+        }
 
-        // Parse 2 bytes for port (big-endian / network byte order)
-        char byte_high = peer_data[offset + 4];
-        char byte_low = peer_data[offset + 5];
+        // Parse port (2 bytes, big-endian / network byte order)
+        char byte_high = peer_data[offset + IPV4_ADDR_SIZE];
+        char byte_low = peer_data[offset + IPV4_ADDR_SIZE + 1];
         peers[i].port = (((ushort)byte_high & 0xFF) << 8) | ((ushort)byte_low & 0xFF);
     }
 
@@ -217,44 +225,52 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     TrackerResponse response = {};
 
     // Check for failure first
-    if (BencodeValue* failure = bencode::dict_get(root, "failure reason")) {
-        if (failure.type == bencode::BencodeType.STRING) {
+    if (BencodeValue* failure = bencode::dict_get(root, "failure reason"))
+    {
+        if (failure.type == bencode::BencodeType.STRING)
+        {
             response.failure_reason = ((String)failure.string).copy(mem);
             return response;
         }
     }
 
-    // Extract interval (required)
-    if (BencodeValue* interval = bencode::dict_get(root, "interval")) {
-        if (interval.type == bencode::BencodeType.INTEGER) {
+    // Extract tracker response fields
+    if (BencodeValue* interval = bencode::dict_get(root, "interval"))
+    {
+        if (interval.type == bencode::BencodeType.INTEGER)
+        {
             response.interval = interval.integer;
         }
     }
 
-    // Extract min_interval (optional)
-    if (BencodeValue* min_interval = bencode::dict_get(root, "min interval")) {
-        if (min_interval.type == bencode::BencodeType.INTEGER) {
+    if (BencodeValue* min_interval = bencode::dict_get(root, "min interval"))
+    {
+        if (min_interval.type == bencode::BencodeType.INTEGER)
+        {
             response.min_interval = min_interval.integer;
         }
     }
 
-    // Extract complete (seeders)
-    if (BencodeValue* complete = bencode::dict_get(root, "complete")) {
-        if (complete.type == bencode::BencodeType.INTEGER) {
+    if (BencodeValue* complete = bencode::dict_get(root, "complete"))
+    {
+        if (complete.type == bencode::BencodeType.INTEGER)
+        {
             response.complete = complete.integer;
         }
     }
 
-    // Extract incomplete (leechers)
-    if (BencodeValue* incomplete = bencode::dict_get(root, "incomplete")) {
-        if (incomplete.type == bencode::BencodeType.INTEGER) {
+    if (BencodeValue* incomplete = bencode::dict_get(root, "incomplete"))
+    {
+        if (incomplete.type == bencode::BencodeType.INTEGER)
+        {
             response.incomplete = incomplete.integer;
         }
     }
 
-    // Extract warning message (optional)
-    if (BencodeValue* warning = bencode::dict_get(root, "warning message")) {
-        if (warning.type == bencode::BencodeType.STRING) {
+    if (BencodeValue* warning = bencode::dict_get(root, "warning message"))
+    {
+        if (warning.type == bencode::BencodeType.STRING)
+        {
             response.warning_message = ((String)warning.string).copy(mem);
         }
     }
@@ -283,7 +299,7 @@ fn TrackerResponse? HttpTracker.announce(HttpTracker* self, metainfo::TorrentFil
                                           String event) @dynamic
 {
     // Generate peer ID
-    char[20] peer_id = generate_peer_id();
+    char[PEER_ID_SIZE] peer_id = generate_peer_id();
 
     // Parse tracker URL
     Url? tracker_url_parsed = url::parse(mem, torrent.announce);
