@@ -4,8 +4,15 @@ import std::io;
 import std::hash::sha1;
 import std::encoding::hex;
 import std::net::url;
+import std::collections::list;
+import std::collections::set;
 import libtorrent::bencode;
 import libtorrent::path_sanitize;
+
+/**
+ * SHA1 hash size in bytes (used for info_hash and piece hashes)
+ */
+const usz SHA1_HASH_SIZE = 20;
 
 /**
  * Torrent File Parser
@@ -211,18 +218,18 @@ fn TorrentFile*? parse(String data) @public => @pool()
         if (count > 0)
         {
             torrent.similar_count = count;
-            torrent.similar = mem::new_array(char, count * 20);
+            torrent.similar = mem::new_array(char, count * SHA1_HASH_SIZE);
             for (usz i = 0; i < count; i++)
             {
                 BencodeValue* info_hash = similar_val.list.get(i);
                 if (info_hash.type == bencode::BencodeType.STRING &&
-                    info_hash.string.len == 20)
+                    info_hash.string.len == SHA1_HASH_SIZE)
                 {
-                    // Copy 20-byte info-hash to flat array
-                    usz offset = i * 20;
-                    for (usz j = 0; j < 20; j++)
+                    // Copy SHA1 hash to flat array
+                    usz offset = i * SHA1_HASH_SIZE;
+                    foreach (j, byte : info_hash.string)
                     {
-                        torrent.similar[offset + j] = info_hash.string[j];
+                        torrent.similar[offset + j] = byte;
                     }
                 }
             }
@@ -258,49 +265,43 @@ fn TorrentFile*? parse(String data) @public => @pool()
     {
         if (url_list_val.type == bencode::BencodeType.LIST)
         {
-            // List of URL seeds - deduplicate
-            usz count = url_list_val.list.size;
-            if (count > 0)
+            // List of URL seeds - deduplicate using HashSet
+            HashSet{String} seen_urls;
+            seen_urls.init(mem);
+            defer seen_urls.free();
+
+            List{String} urls;
+            urls.init(mem);
+            defer urls.free();  // Always free List's internal storage
+
+            foreach (url_val : url_list_val.list.array_view())
             {
-                // Allocate maximum possible size
-                String[] temp_urls = mem::new_array(String, count);
-                usz unique_count = 0;
-
-                for (usz i = 0; i < count; i++)
+                if (url_val.type == bencode::BencodeType.STRING)
                 {
-                    BencodeValue* url = url_list_val.list.get(i);
-                    if (url.type == bencode::BencodeType.STRING)
-                    {
-                        String url_str = (String)url.string;
-                        // Skip empty strings
-                        if (url_str.len == 0) continue;
+                    String url_str = (String)url_val.string;
+                    // Skip empty strings
+                    if (url_str.len == 0) continue;
 
-                        // Percent-encode spaces for BEP 19 compliance
-                        String encoded_url = percent_encode_url(url_str);
-                        // Only add if not already in list and not empty
-                        if (encoded_url.len > 0 && !is_url_in_list(temp_urls, unique_count, encoded_url))
-                        {
-                            temp_urls[unique_count] = encoded_url;
-                            unique_count++;
-                        }
-                        else
-                        {
-                            // Free the encoded URL if it's a duplicate or empty
-                            free(encoded_url);
-                        }
+                    // Percent-encode spaces for BEP 19 compliance
+                    String encoded_url = percent_encode_url(url_str);
+                    // Only add if not already seen and not empty
+                    if (encoded_url.len > 0 && !seen_urls.contains(encoded_url))
+                    {
+                        seen_urls.add(encoded_url);
+                        urls.push(encoded_url);
+                    }
+                    else
+                    {
+                        // Free the encoded URL if it's a duplicate or empty
+                        free(encoded_url);
                     }
                 }
+            }
 
-                // Allocate final array with actual size
-                if (unique_count > 0)
-                {
-                    torrent.url_list = mem::new_array(String, unique_count);
-                    for (usz i = 0; i < unique_count; i++)
-                    {
-                        torrent.url_list[i] = temp_urls[i];
-                    }
-                }
-                free(temp_urls);
+            // Convert List to array (to_array copies, so we still need to free List)
+            if (urls.size > 0)
+            {
+                torrent.url_list = urls.to_array(mem);
             }
         }
         else if (url_list_val.type == bencode::BencodeType.STRING)
@@ -328,50 +329,49 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* httpseeds_val = bencode::dict_get(root, "httpseeds");
     if (httpseeds_val && httpseeds_val.type == bencode::BencodeType.LIST)
     {
-        usz count = httpseeds_val.list.size;
-        if (count > 0)
+        // Use HashSet for deduplication
+        HashSet{String} seen_seeds;
+        seen_seeds.init(mem);
+        defer seen_seeds.free();
+
+        // Pre-populate with url_list URLs to avoid cross-list duplicates
+        foreach (url : torrent.url_list)
         {
-            // Allocate maximum possible size
-            String[] temp_seeds = mem::new_array(String, count);
-            usz unique_count = 0;
+            seen_seeds.add(url);
+        }
 
-            for (usz i = 0; i < count; i++)
+        List{String} seeds;
+        seeds.init(mem);
+        defer seeds.free();  // Always free List's internal storage
+
+        foreach (seed_val : httpseeds_val.list.array_view())
+        {
+            if (seed_val.type == bencode::BencodeType.STRING)
             {
-                BencodeValue* seed = httpseeds_val.list.get(i);
-                if (seed.type == bencode::BencodeType.STRING)
-                {
-                    String seed_str = (String)seed.string;
-                    // Skip empty strings
-                    if (seed_str.len == 0) continue;
+                String seed_str = (String)seed_val.string;
+                // Skip empty strings
+                if (seed_str.len == 0) continue;
 
-                    // Percent-encode spaces for BEP 17 compliance
-                    String encoded_seed = percent_encode_url(seed_str);
-                    // Check against both httpseeds and url_list for duplicates
-                    if (encoded_seed.len > 0 &&
-                        !is_url_in_list(temp_seeds, unique_count, encoded_seed) &&
-                        !is_url_in_list(torrent.url_list, torrent.url_list.len, encoded_seed))
-                    {
-                        temp_seeds[unique_count] = encoded_seed;
-                        unique_count++;
-                    }
-                    else
-                    {
-                        // Free the encoded URL if it's a duplicate or empty
-                        free(encoded_seed);
-                    }
+                // Percent-encode spaces for BEP 17 compliance
+                String encoded_seed = percent_encode_url(seed_str);
+                // Only add if not already seen and not empty
+                if (encoded_seed.len > 0 && !seen_seeds.contains(encoded_seed))
+                {
+                    seen_seeds.add(encoded_seed);
+                    seeds.push(encoded_seed);
+                }
+                else
+                {
+                    // Free the encoded URL if it's a duplicate or empty
+                    free(encoded_seed);
                 }
             }
+        }
 
-            // Allocate final array with actual size
-            if (unique_count > 0)
-            {
-                torrent.httpseeds = mem::new_array(String, unique_count);
-                for (usz i = 0; i < unique_count; i++)
-                {
-                    torrent.httpseeds[i] = temp_seeds[i];
-                }
-            }
-            free(temp_seeds);
+        // Convert List to array (to_array copies, so we still need to free List)
+        if (seeds.size > 0)
+        {
+            torrent.httpseeds = seeds.to_array(mem);
         }
     }
 
@@ -490,8 +490,8 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     // Extract 'pieces' (required)
     BencodeValue* pieces_val = bencode::dict_get_required(bencode::BencodeType.STRING, info_val, "pieces", TORRENT_MISSING_FIELD)!;
 
-    // Validate pieces length (must be multiple of 20)
-    if (pieces_val.string.len % 20 != 0)
+    // Validate pieces length (must be multiple of SHA1_HASH_SIZE)
+    if (pieces_val.string.len % SHA1_HASH_SIZE != 0)
     {
         return TORRENT_INVALID_INFO?;
     }
@@ -585,18 +585,6 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
     }
 
     return {};  // Success
-}
-
-/**
- * Helper: Check if a URL already exists in a list (for deduplication).
- */
-fn bool is_url_in_list(String[] list, usz count, String url)
-{
-    for (usz i = 0; i < count; i++)
-    {
-        if (list[i] == url) return true;
-    }
-    return false;
 }
 
 /**
@@ -713,19 +701,16 @@ fn void free_torrent_file(TorrentFile* torrent) @public
     // Free announce-list (multi-tracker)
     if (torrent.announce_list.len > 0)
     {
-        for (usz i = 0; i < torrent.announce_list.len; i++)
+        foreach (tier : torrent.announce_list)
         {
-            if (torrent.announce_list[i].len > 0)
+            if (tier.len > 0)
             {
                 // Free each tracker URL in this tier
-                for (usz j = 0; j < torrent.announce_list[i].len; j++)
+                foreach (url : tier)
                 {
-                    if (torrent.announce_list[i][j].len > 0)
-                    {
-                        free(torrent.announce_list[i][j]);
-                    }
+                    if (url.len > 0) free(url);
                 }
-                free(torrent.announce_list[i]);
+                free(tier);
             }
         }
         free(torrent.announce_list);
@@ -734,12 +719,9 @@ fn void free_torrent_file(TorrentFile* torrent) @public
     // Free DHT nodes
     if (torrent.nodes.len > 0)
     {
-        for (usz i = 0; i < torrent.nodes.len; i++)
+        foreach (node : torrent.nodes)
         {
-            if (torrent.nodes[i].host.len > 0)
-            {
-                free(torrent.nodes[i].host);
-            }
+            if (node.host.len > 0) free(node.host);
         }
         free(torrent.nodes);
     }
@@ -747,12 +729,9 @@ fn void free_torrent_file(TorrentFile* torrent) @public
     // Free collections (BEP 38)
     if (torrent.collections.len > 0)
     {
-        for (usz i = 0; i < torrent.collections.len; i++)
+        foreach (collection : torrent.collections)
         {
-            if (torrent.collections[i].len > 0)
-            {
-                free(torrent.collections[i]);
-            }
+            if (collection.len > 0) free(collection);
         }
         free(torrent.collections);
     }
@@ -769,18 +748,18 @@ fn void free_torrent_file(TorrentFile* torrent) @public
     // Free web seeds
     if (torrent.url_list.len > 0)
     {
-        for (usz i = 0; i < torrent.url_list.len; i++)
+        foreach (url : torrent.url_list)
         {
-            if (torrent.url_list[i].len > 0) free(torrent.url_list[i]);
+            if (url.len > 0) free(url);
         }
         free(torrent.url_list);
     }
 
     if (torrent.httpseeds.len > 0)
     {
-        for (usz i = 0; i < torrent.httpseeds.len; i++)
+        foreach (seed : torrent.httpseeds)
         {
-            if (torrent.httpseeds[i].len > 0) free(torrent.httpseeds[i]);
+            if (seed.len > 0) free(seed);
         }
         free(torrent.httpseeds);
     }
@@ -791,15 +770,14 @@ fn void free_torrent_file(TorrentFile* torrent) @public
     // Free multi-file data
     if (torrent.info.is_multi_file && torrent.info.files.len > 0)
     {
-        for (usz i = 0; i < torrent.info.files.len; i++)
+        foreach (file : torrent.info.files)
         {
-            FileEntry* file = &torrent.info.files[i];
             if (file.path.len > 0)
             {
                 // Free each path component
-                for (usz j = 0; j < file.path.len; j++)
+                foreach (path_component : file.path)
                 {
-                    if (file.path[j].len > 0) free(file.path[j]);
+                    if (path_component.len > 0) free(path_component);
                 }
                 free(file.path);
             }
@@ -815,7 +793,7 @@ fn void free_torrent_file(TorrentFile* torrent) @public
  */
 fn usz get_num_pieces(TorrentFile* torrent) @public
 {
-    return torrent.info.pieces.len / 20;
+    return torrent.info.pieces.len / SHA1_HASH_SIZE;
 }
 
 /**
@@ -823,18 +801,18 @@ fn usz get_num_pieces(TorrentFile* torrent) @public
  *
  * @param torrent The torrent file
  * @param index Piece index (0-based)
- * @return 20-byte SHA1 hash or fault if index out of bounds
+ * @return SHA1_HASH_SIZE-byte SHA1 hash or fault if index out of bounds
  */
 fn char[]? get_piece_hash(TorrentFile* torrent, usz index) @public
 {
     usz num_pieces = get_num_pieces(torrent);
     if (index >= num_pieces) return TORRENT_INDEX_OUT_OF_BOUNDS?;
 
-    usz offset = index * 20;
-    char[20] hash;
-    for (usz i = 0; i < 20; i++)
+    usz offset = index * SHA1_HASH_SIZE;
+    char[SHA1_HASH_SIZE] hash;
+    foreach (i, byte : torrent.info.pieces[offset:SHA1_HASH_SIZE])
     {
-        hash[i] = torrent.info.pieces[offset + i];
+        hash[i] = byte;
     }
     return hash[..];
 }
