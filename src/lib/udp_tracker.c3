@@ -1,5 +1,6 @@
 module libtorrent::udp_tracker;
 
+import libtorrent::common;
 import libtorrent::async_dns;
 import libtorrent::async_udp;
 import libtorrent::async_timer;
@@ -61,10 +62,6 @@ const usz CONNECT_RESPONSE_SIZE = 16;      // action(4) + transaction_id(4) + co
 const usz ANNOUNCE_REQUEST_SIZE = 98;      // Full announce request size
 const usz ANNOUNCE_RESPONSE_MIN_SIZE = 20; // Minimum response before peers
 
-// Field sizes
-const usz INFO_HASH_SIZE = 20;
-const usz PEER_ID_SIZE = 20;
-
 // Network byte order conversion functions.
 // UDP tracker protocol uses big-endian (network byte order).
 // Note: htonl, htons, ntohl, ntohs are provided by std::os::linux
@@ -119,8 +116,8 @@ struct AnnounceRequest {
     long connection_id;
     int action;
     int transaction_id;
-    char[20] info_hash;
-    char[20] peer_id;
+    common::InfoHash info_hash;
+    common::PeerId peer_id;
     long downloaded;
     long left;
     long uploaded;
@@ -274,11 +271,11 @@ fn void pack_announce_request(AnnounceRequest* request, char[] buffer) @public
     pack_int32(buffer, offset, request.transaction_id);
     offset += 4;
 
-    buffer[offset..offset+INFO_HASH_SIZE-1] = request.info_hash[0..INFO_HASH_SIZE-1];
-    offset += INFO_HASH_SIZE;
+    buffer[offset..offset+common::SHA1_HASH_SIZE-1] = request.info_hash[0..common::SHA1_HASH_SIZE-1];
+    offset += common::SHA1_HASH_SIZE;
 
-    buffer[offset..offset+PEER_ID_SIZE-1] = request.peer_id[0..PEER_ID_SIZE-1];
-    offset += PEER_ID_SIZE;
+    buffer[offset..offset+common::PEER_ID_SIZE-1] = request.peer_id[0..common::PEER_ID_SIZE-1];
+    offset += common::PEER_ID_SIZE;
 
     pack_int64(buffer, offset, request.downloaded);
     offset += 8;

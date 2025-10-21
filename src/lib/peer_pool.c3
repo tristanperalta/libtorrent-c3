@@ -1,5 +1,6 @@
 module libtorrent::peer_pool;
 
+import libtorrent::common;
 import libtorrent::event_loop;
 import libtorrent::tracker;
 import libtorrent::peer_connection;
@@ -7,6 +8,7 @@ import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import std::io;
 import std::time;
+import std::sort;
 
 <*
  Peer Pool - Async Peer Management
@@ -63,9 +65,9 @@ enum PeerState : const char
 struct TorrentPeer
 {
     // Identity
-    char[4] ip;                  // IPv4 address
+    common::Ipv4Addr ip;         // IPv4 address
     ushort port;                 // Port number
-    char[20] peer_id;            // Peer ID (empty until handshake)
+    common::PeerId peer_id;      // Peer ID (empty until handshake)
 
     // Connection
     peer_connection::PeerConnection* connection;  // Active connection (null if not connected)
@@ -96,11 +98,11 @@ struct TorrentPeer
 
 // Callbacks
 alias PeerConnectedCallback = fn void(peer_connection::PeerConnection* peer,
-                                       char[4] ip, ushort port, void* user_data);
+                                       common::Ipv4Addr ip, ushort port, void* user_data);
 alias PeerMessageCallback = fn void(peer_connection::PeerConnection* peer,
                                      peer_wire::Message* msg,
-                                     char[4] ip, ushort port, void* user_data);
-alias PeerDisconnectedCallback = fn void(char[4] ip, ushort port,
+                                     common::Ipv4Addr ip, ushort port, void* user_data);
+alias PeerDisconnectedCallback = fn void(common::Ipv4Addr ip, ushort port,
                                           bool was_error, void* user_data);
 
 // Main peer pool
@@ -121,8 +123,8 @@ struct PeerPool
     usz num_active_connections;     // Current number of active connections
 
     // Torrent info (needed for peer connections)
-    char[20] info_hash;           // Torrent info hash
-    char[20] our_peer_id;         // Our peer ID
+    common::InfoHash info_hash;   // Torrent info hash
+    common::PeerId our_peer_id;   // Our peer ID
 
     // Callbacks (user-provided)
     PeerConnectedCallback on_connected;       // Called when peer connects successfully
@@ -258,19 +260,16 @@ fn int compare_peers_by_rank(TorrentPeer* a, TorrentPeer* b)
 *>
 fn PeerPool* create(event_loop::EventLoop* loop,
                     PeerPoolConfig config,
-                    char[20]* info_hash,
-                    char[20]* our_peer_id) @public
+                    common::InfoHash* info_hash,
+                    common::PeerId* our_peer_id) @public
 {
     PeerPool* pool = mem::new(PeerPool);
     pool.loop = loop;
     pool.config = config;
 
     // Copy info hash and peer ID
-    for (usz i = 0; i < 20; i++)
-    {
-        pool.info_hash[i] = (*info_hash)[i];
-        pool.our_peer_id[i] = (*our_peer_id)[i];
-    }
+    pool.info_hash[..] = (*info_hash)[..];
+    pool.our_peer_id[..] = (*our_peer_id)[..];
 
     // Initialize empty peer list
     pool.peers = {};
@@ -386,21 +385,8 @@ fn void PeerPool.update_candidate_cache(&self) @public
         }
     }
 
-    // Sort cache by rank (highest first)
-    // Simple bubble sort - good enough for typical candidate counts
-    for (usz i = 0; i < self.candidate_cache.len; i++)
-    {
-        for (usz j = i + 1; j < self.candidate_cache.len; j++)
-        {
-            if (compare_peers_by_rank(self.candidate_cache[i], self.candidate_cache[j]) > 0)
-            {
-                // Swap
-                TorrentPeer* temp = self.candidate_cache[i];
-                self.candidate_cache[i] = self.candidate_cache[j];
-                self.candidate_cache[j] = temp;
-            }
-        }
-    }
+    // Sort cache by rank (highest first) using quicksort (O(n log n))
+    sort::quicksort(self.candidate_cache, &compare_peers_by_rank);
 }
 
 <*
@@ -568,10 +554,7 @@ fn void PeerPool.add_peer(&self, char[4] ip, ushort port, bool from_tracker) @pu
     peer.from_tracker = from_tracker;
 
     // Initialize peer_id to zeros
-    for (usz i = 0; i < 20; i++)
-    {
-        peer.peer_id[i] = 0;
-    }
+    peer.peer_id = {};
 
     // Initialize empty bitfield (will be set when we receive BITFIELD message)
     peer.pieces = {};

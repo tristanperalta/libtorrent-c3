@@ -1,5 +1,6 @@
 module libtorrent::tracker;
 
+import libtorrent::common;
 import libtorrent::http;
 import libtorrent::bencode;
 import libtorrent::metainfo;
@@ -28,15 +29,12 @@ faultdef TRACKER_UNSUPPORTED_PROTOCOL;
 // Default number of peers to request from tracker (BEP 3 standard)
 const int DEFAULT_NUMWANT = 50;
 
-// Peer ID and hash size constants
-const usz PEER_ID_SIZE = 20;
+// Peer ID prefix constants
 const usz PEER_ID_PREFIX_LENGTH = 8;
 const String PEER_ID_PREFIX = "-C30001-";
-const usz SHA1_HASH_SIZE = 20;
 
 // Compact peer format constants (BEP 3)
 const usz COMPACT_PEER_SIZE = 6;
-const usz IPV4_ADDR_SIZE = 4;
 const usz COMPACT_PEER_PORT_SIZE = 2;
 
 <*
@@ -54,8 +52,8 @@ interface Tracker
  Contains IPv4 address and port number.
 *>
 struct Peer {
-    char[4] ip;      // IPv4 address in network byte order
-    ushort port;     // Port number
+    common::Ipv4Addr ip;  // IPv4 address in network byte order
+    ushort port;          // Port number
 }
 
 <*
@@ -86,9 +84,9 @@ struct HttpTracker (Tracker) {
 
  @return "A 20-byte peer ID"
 *>
-fn char[PEER_ID_SIZE] generate_peer_id()
+fn common::PeerId generate_peer_id()
 {
-    char[PEER_ID_SIZE] peer_id;
+    common::PeerId peer_id;
 
     // Client ID prefix: -C30001-
     foreach (i, c : PEER_ID_PREFIX)
@@ -100,7 +98,7 @@ fn char[PEER_ID_SIZE] generate_peer_id()
     random::DefaultRandom rng;
     random::seed(&rng, (uint)time::now().to_seconds());
 
-    for (usz i = PEER_ID_PREFIX_LENGTH; i < PEER_ID_SIZE; i++)
+    for (usz i = PEER_ID_PREFIX_LENGTH; i < common::PEER_ID_SIZE; i++)
     {
         peer_id[i] = (char)random::next_in_range(&rng, 0, 255);
     }
@@ -122,8 +120,8 @@ fn char[PEER_ID_SIZE] generate_peer_id()
  @param numwant : "Number of peers requested (default 50)"
  @return "Complete announce URL with query parameters"
 *>
-fn String build_announce_url(String tracker_url, char[SHA1_HASH_SIZE]* info_hash,
-                              char[PEER_ID_SIZE]* peer_id, ushort port,
+fn String build_announce_url(String tracker_url, common::InfoHash* info_hash,
+                              common::PeerId* peer_id, ushort port,
                               long uploaded, long downloaded, long left,
                               String event, int numwant)
 {
@@ -139,13 +137,13 @@ fn String build_announce_url(String tracker_url, char[SHA1_HASH_SIZE]* info_hash
     }
 
     // Encode info_hash
-    char[] hash_bytes = ((char*)info_hash)[:SHA1_HASH_SIZE];
+    char[] hash_bytes = ((char*)info_hash)[:common::SHA1_HASH_SIZE];
     String encoded_hash = url::encode(mem, (String)hash_bytes, url::UrlEncodingMode.QUERY);
     defer free(encoded_hash);
     url.appendf("info_hash=%s", encoded_hash);
 
     // Encode peer_id
-    char[] peer_bytes = ((char*)peer_id)[:PEER_ID_SIZE];
+    char[] peer_bytes = ((char*)peer_id)[:common::PEER_ID_SIZE];
     String encoded_peer = url::encode(mem, (String)peer_bytes, url::UrlEncodingMode.QUERY);
     defer free(encoded_peer);
     url.appendf("&peer_id=%s", encoded_peer);
@@ -193,14 +191,14 @@ fn Peer[]? parse_compact_peers(char[] peer_data)
         usz offset = i * COMPACT_PEER_SIZE;
 
         // Copy IPv4 address (4 bytes)
-        foreach (j, byte : peer_data[offset:IPV4_ADDR_SIZE])
+        foreach (j, byte : peer_data[offset:common::IPV4_ADDR_SIZE])
         {
             peers[i].ip[j] = byte;
         }
 
         // Parse port (2 bytes, big-endian / network byte order)
-        char byte_high = peer_data[offset + IPV4_ADDR_SIZE];
-        char byte_low = peer_data[offset + IPV4_ADDR_SIZE + 1];
+        char byte_high = peer_data[offset + common::IPV4_ADDR_SIZE];
+        char byte_low = peer_data[offset + common::IPV4_ADDR_SIZE + 1];
         peers[i].port = (((ushort)byte_high & 0xFF) << 8) | ((ushort)byte_low & 0xFF);
     }
 
@@ -299,7 +297,7 @@ fn TrackerResponse? HttpTracker.announce(HttpTracker* self, metainfo::TorrentFil
                                           String event) @dynamic
 {
     // Generate peer ID
-    char[PEER_ID_SIZE] peer_id = generate_peer_id();
+    common::PeerId peer_id = generate_peer_id();
 
     // Parse tracker URL
     Url? tracker_url_parsed = url::parse(mem, torrent.announce);
