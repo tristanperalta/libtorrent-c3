@@ -8,11 +8,7 @@ import std::collections::list;
 import std::collections::set;
 import libtorrent::bencode;
 import libtorrent::path_sanitize;
-
-/**
- * SHA1 hash size in bytes (used for info_hash and piece hashes)
- */
-const usz SHA1_HASH_SIZE = 20;
+import libtorrent::common;
 
 /**
  * Torrent File Parser
@@ -218,15 +214,15 @@ fn TorrentFile*? parse(String data) @public => @pool()
         if (count > 0)
         {
             torrent.similar_count = count;
-            torrent.similar = mem::new_array(char, count * SHA1_HASH_SIZE);
+            torrent.similar = mem::new_array(char, count * common::SHA1_HASH_SIZE);
             for (usz i = 0; i < count; i++)
             {
                 BencodeValue* info_hash = similar_val.list.get(i);
                 if (info_hash.type == bencode::BencodeType.STRING &&
-                    info_hash.string.len == SHA1_HASH_SIZE)
+                    info_hash.string.len == common::SHA1_HASH_SIZE)
                 {
                     // Copy SHA1 hash to flat array
-                    usz offset = i * SHA1_HASH_SIZE;
+                    usz offset = i * common::SHA1_HASH_SIZE;
                     foreach (j, byte : info_hash.string)
                     {
                         torrent.similar[offset + j] = byte;
@@ -491,7 +487,7 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     BencodeValue* pieces_val = bencode::dict_get_required(bencode::BencodeType.STRING, info_val, "pieces", TORRENT_MISSING_FIELD)!;
 
     // Validate pieces length (must be multiple of SHA1_HASH_SIZE)
-    if (pieces_val.string.len % SHA1_HASH_SIZE != 0)
+    if (pieces_val.string.len % common::SHA1_HASH_SIZE != 0)
     {
         return TORRENT_INVALID_INFO?;
     }
@@ -793,7 +789,7 @@ fn void free_torrent_file(TorrentFile* torrent) @public
  */
 fn usz get_num_pieces(TorrentFile* torrent) @public
 {
-    return torrent.info.pieces.len / SHA1_HASH_SIZE;
+    return torrent.info.pieces.len / common::SHA1_HASH_SIZE;
 }
 
 /**
@@ -808,9 +804,9 @@ fn char[]? get_piece_hash(TorrentFile* torrent, usz index) @public
     usz num_pieces = get_num_pieces(torrent);
     if (index >= num_pieces) return TORRENT_INDEX_OUT_OF_BOUNDS?;
 
-    usz offset = index * SHA1_HASH_SIZE;
-    char[SHA1_HASH_SIZE] hash;
-    foreach (i, byte : torrent.info.pieces[offset:SHA1_HASH_SIZE])
+    usz offset = index * common::SHA1_HASH_SIZE;
+    char[common::SHA1_HASH_SIZE] hash;
+    foreach (i, byte : torrent.info.pieces[offset:common::SHA1_HASH_SIZE])
     {
         hash[i] = byte;
     }

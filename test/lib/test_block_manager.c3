@@ -1,6 +1,7 @@
 module libtorrent::block_manager::test;
 
 import libtorrent::block_manager;
+import libtorrent::common;
 import std::io;
 
 // ============================================================================
@@ -27,8 +28,8 @@ fn void test_block_sizes() @test
 
     for (usz i = 0; i < manager.num_blocks; i++)
     {
-        assert(manager.blocks[i].length == block_manager::BLOCK_SIZE, "Block should be 16KB");
-        assert(manager.blocks[i].offset == (uint)(i * block_manager::BLOCK_SIZE), "Block offset should be correct");
+        assert(manager.blocks[i].length == common::STANDARD_BLOCK_SIZE, "Block should be 16KB");
+        assert(manager.blocks[i].offset == (uint)(i * common::STANDARD_BLOCK_SIZE), "Block offset should be correct");
     }
 }
 
@@ -44,7 +45,7 @@ fn void test_last_block_shorter() @test
     // First 16 blocks should be full size
     for (usz i = 0; i < 16; i++)
     {
-        assert(manager.blocks[i].length == block_manager::BLOCK_SIZE, "Block should be 16KB");
+        assert(manager.blocks[i].length == common::STANDARD_BLOCK_SIZE, "Block should be 16KB");
     }
 
     // Last block should be 8KB
@@ -77,7 +78,7 @@ fn void test_get_next_block() @test
 
     assert(req.piece_index == 0, "Should be piece 0");
     assert(req.offset == 0, "First request should be offset 0");
-    assert(req.length == block_manager::BLOCK_SIZE, "Should be 16KB");
+    assert(req.length == common::STANDARD_BLOCK_SIZE, "Should be 16KB");
 }
 
 fn void test_get_next_block_sequential() @test
@@ -97,15 +98,15 @@ fn void test_get_next_block_sequential() @test
     block_manager::BlockRequest? req2_opt = manager.get_next_block();
     req2_opt!!;
     block_manager::BlockRequest req2 = req2_opt!!;
-    assert(req2.offset == block_manager::BLOCK_SIZE, "Second block offset");
+    assert(req2.offset == common::STANDARD_BLOCK_SIZE, "Second block offset");
 
-    manager.mark_requested(block_manager::BLOCK_SIZE)!!;
+    manager.mark_requested(common::STANDARD_BLOCK_SIZE)!!;
 
     // Get third block
     block_manager::BlockRequest? req3_opt = manager.get_next_block();
     req3_opt!!;
     block_manager::BlockRequest req3 = req3_opt!!;
-    assert(req3.offset == block_manager::BLOCK_SIZE * 2, "Third block offset");
+    assert(req3.offset == common::STANDARD_BLOCK_SIZE * 2, "Third block offset");
 }
 
 fn void test_get_next_block_none_available() @test
@@ -220,10 +221,10 @@ fn void test_mark_received_multiple_blocks() @test
     manager.mark_received(0, data[..])!!;
     assert(manager.blocks_received == 1, "Should have 1 received");
 
-    manager.mark_received(block_manager::BLOCK_SIZE, data[..])!!;
+    manager.mark_received(common::STANDARD_BLOCK_SIZE, data[..])!!;
     assert(manager.blocks_received == 2, "Should have 2 received");
 
-    manager.mark_received(block_manager::BLOCK_SIZE * 2, data[..])!!;
+    manager.mark_received(common::STANDARD_BLOCK_SIZE * 2, data[..])!!;
     assert(manager.blocks_received == 3, "Should have 3 received");
 }
 
@@ -242,7 +243,7 @@ fn void test_is_complete() @test
     manager.mark_received(0, data[..])!!;
     assert(!manager.is_complete(), "Should not be complete with 1/2 blocks");
 
-    manager.mark_received(block_manager::BLOCK_SIZE, data[..])!!;
+    manager.mark_received(common::STANDARD_BLOCK_SIZE, data[..])!!;
     assert(manager.is_complete(), "Should be complete with all blocks");
 }
 
@@ -261,7 +262,7 @@ fn void test_assemble_piece() @test
     }
 
     manager.mark_received(0, data1[..])!!;
-    manager.mark_received(block_manager::BLOCK_SIZE, data2[..])!!;
+    manager.mark_received(common::STANDARD_BLOCK_SIZE, data2[..])!!;
 
     char[]? piece_opt = manager.assemble_piece();
     piece_opt!!;
@@ -316,8 +317,8 @@ fn void test_assemble_last_block_shorter() @test
     for (usz i = 0; i < 8192; i++) data_last[i] = (char)0xBB;
 
     manager.mark_received(0, data_full[..])!!;
-    manager.mark_received(block_manager::BLOCK_SIZE, data_full[..])!!;
-    manager.mark_received(block_manager::BLOCK_SIZE * 2, data_last[..])!!;
+    manager.mark_received(common::STANDARD_BLOCK_SIZE, data_full[..])!!;
+    manager.mark_received(common::STANDARD_BLOCK_SIZE * 2, data_last[..])!!;
 
     char[]? piece_opt = manager.assemble_piece();
     piece_opt!!;
@@ -365,7 +366,7 @@ fn void test_is_received() @test
     manager.mark_received(0, data[..])!!;
 
     assert(manager.is_received(0), "Block should be received");
-    assert(!manager.is_received(block_manager::BLOCK_SIZE), "Other block should not be received");
+    assert(!manager.is_received(common::STANDARD_BLOCK_SIZE), "Other block should not be received");
 }
 
 // ============================================================================
@@ -437,11 +438,11 @@ fn void test_empty_piece() @test
 fn void test_exact_block_boundary() @test
 {
     // Exactly 1 block
-    block_manager::BlockManager manager = block_manager::create(0, block_manager::BLOCK_SIZE);
+    block_manager::BlockManager manager = block_manager::create(0, common::STANDARD_BLOCK_SIZE);
     defer block_manager::free(&manager);
 
     assert(manager.num_blocks == 1, "Should have exactly 1 block");
-    assert(manager.blocks[0].length == block_manager::BLOCK_SIZE, "Block should be full size");
+    assert(manager.blocks[0].length == common::STANDARD_BLOCK_SIZE, "Block should be full size");
 }
 
 fn void test_large_piece() @test

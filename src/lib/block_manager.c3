@@ -2,6 +2,7 @@ module libtorrent::block_manager;
 
 import std::io;
 import std::time;
+import libtorrent::common;
 
 <*
  Block Manager - Request and Assembly
@@ -26,9 +27,6 @@ import std::time;
        char[] piece = manager.assemble_piece();
    }
 *>
-
-// Constants
-const uint BLOCK_SIZE = 16384;  // 16KB standard block size (2^14)
 
 // Faults
 faultdef BLOCK_ALREADY_RECEIVED;
@@ -87,7 +85,7 @@ fn BlockManager create(uint piece_index, uint piece_length) @public
     manager.blocks_received = 0;
 
     // Calculate number of blocks
-    manager.num_blocks = (usz)((piece_length + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    manager.num_blocks = (usz)((piece_length + common::STANDARD_BLOCK_SIZE - 1) / common::STANDARD_BLOCK_SIZE);
 
     // Allocate blocks
     manager.blocks = mem::new_array(BlockInfo, manager.num_blocks);
@@ -95,8 +93,8 @@ fn BlockManager create(uint piece_index, uint piece_length) @public
     // Initialize blocks
     for (usz i = 0; i < manager.num_blocks; i++)
     {
-        uint offset = (uint)(i * BLOCK_SIZE);
-        uint length = BLOCK_SIZE;
+        uint offset = (uint)(i * common::STANDARD_BLOCK_SIZE);
+        uint length = (uint)common::STANDARD_BLOCK_SIZE;
 
         // Last block may be shorter
         if (offset + length > piece_length)

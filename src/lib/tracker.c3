@@ -33,10 +33,6 @@ const int DEFAULT_NUMWANT = 50;
 const usz PEER_ID_PREFIX_LENGTH = 8;
 const String PEER_ID_PREFIX = "-C30001-";
 
-// Compact peer format constants (BEP 3)
-const usz COMPACT_PEER_SIZE = 6;
-const usz COMPACT_PEER_PORT_SIZE = 2;
-
 <*
  Tracker interface - all tracker implementations must implement this.
  Provides a unified way to announce to different tracker types (HTTP/UDP).
@@ -174,11 +170,11 @@ fn String build_announce_url(String tracker_url, common::InfoHash* info_hash,
 fn Peer[]? parse_compact_peers(char[] peer_data)
 {
     // Validate length is multiple of COMPACT_PEER_SIZE
-    if (peer_data.len % COMPACT_PEER_SIZE != 0) {
+    if (peer_data.len % common::COMPACT_PEER_SIZE != 0) {
         return TRACKER_INVALID_RESPONSE?;
     }
 
-    usz count = peer_data.len / COMPACT_PEER_SIZE;
+    usz count = peer_data.len / common::COMPACT_PEER_SIZE;
     if (count == 0) {
         Peer[] empty;
         return empty;
@@ -188,7 +184,7 @@ fn Peer[]? parse_compact_peers(char[] peer_data)
 
     for (usz i = 0; i < count; i++)
     {
-        usz offset = i * COMPACT_PEER_SIZE;
+        usz offset = i * common::COMPACT_PEER_SIZE;
 
         // Copy IPv4 address (4 bytes)
         foreach (j, byte : peer_data[offset:common::IPV4_ADDR_SIZE])
