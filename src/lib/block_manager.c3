@@ -34,6 +34,9 @@ faultdef BLOCK_INVALID_OFFSET;
 faultdef PIECE_NOT_COMPLETE;
 faultdef NO_BLOCKS_AVAILABLE;
 
+// Module-specific type alias
+typedef BlockIndex = usz;         // Array indices for blocks array
+
 // Block state
 enum BlockState : const char
 {
@@ -58,6 +61,23 @@ struct BlockRequest
     uint piece_index;    // Piece index
     uint offset;         // Block offset within piece
     uint length;         // Block length
+}
+
+// Comparison operators for BlockRequest
+// Note: C3 0.7.x only supports == and != operator overloading for comparison
+fn bool BlockRequest.equals(&self, BlockRequest other) @operator(==)
+{
+    return self.piece_index == other.piece_index
+        && self.offset == other.offset;
+}
+
+// Lexicographic comparison function (< operator not overloadable in C3)
+fn bool block_request_less_than(BlockRequest* a, BlockRequest* b)
+{
+    // Lexicographic ordering: piece first, then offset
+    if (a.piece_index < b.piece_index) return true;
+    if (a.piece_index == b.piece_index) return a.offset < b.offset;
+    return false;
 }
 
 // Block manager for one piece
@@ -367,4 +387,32 @@ fn long BlockManager.time_since_request(&self, uint offset) @public
     }
 
     return 0;
+}
+
+<*
+ Convert byte offset to block index.
+
+ Useful for thinking in "block numbers" rather than byte offsets.
+ Example: offset 32768 → block index 2
+
+ @param offset : "Byte offset within piece"
+ @return "Block index (0, 1, 2...)"
+*>
+fn usz offset_to_block_index(uint offset) @public
+{
+    return offset / common::STANDARD_BLOCK_SIZE;
+}
+
+<*
+ Convert block index to byte offset.
+
+ Useful for converting from "block numbers" to protocol byte offsets.
+ Example: block index 2 → offset 32768
+
+ @param index : "Block index (0, 1, 2...)"
+ @return "Byte offset within piece"
+*>
+fn uint block_index_to_offset(usz index) @public
+{
+    return (uint)(index * common::STANDARD_BLOCK_SIZE);
 }

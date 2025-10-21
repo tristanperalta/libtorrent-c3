@@ -453,3 +453,158 @@ fn void test_large_piece() @test
 
     assert(manager.num_blocks == 1024, "Should have 1024 blocks");
 }
+
+// ============================================================================
+// Comparison Operator Tests
+// ============================================================================
+
+fn void test_block_request_equality() @test
+{
+    block_manager::BlockRequest req1 = {
+        .piece_index = 5,
+        .offset = 16384,
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    block_manager::BlockRequest req2 = {
+        .piece_index = 5,
+        .offset = 16384,
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    block_manager::BlockRequest req3 = {
+        .piece_index = 5,
+        .offset = 32768,  // Different offset
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    block_manager::BlockRequest req4 = {
+        .piece_index = 6,  // Different piece
+        .offset = 16384,
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    // Test equality operator
+    assert(req1 == req2, "Same piece and offset should be equal");
+    assert(!(req1 == req3), "Different offset should not be equal");
+    assert(!(req1 == req4), "Different piece should not be equal");
+
+    // Test inequality operator (generated automatically by C3)
+    assert(!(req1 != req2), "Same piece and offset should not be unequal");
+    assert(req1 != req3, "Different offset should be unequal");
+    assert(req1 != req4, "Different piece should be unequal");
+}
+
+fn void test_block_request_equality_ignores_length() @test
+{
+    block_manager::BlockRequest req1 = {
+        .piece_index = 5,
+        .offset = 16384,
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    block_manager::BlockRequest req2 = {
+        .piece_index = 5,
+        .offset = 16384,
+        .length = 8192  // Different length (last block scenario)
+    };
+
+    // Length should be ignored in comparison (like libtorrent)
+    assert(req1 == req2, "Different length should still be equal");
+}
+
+fn void test_block_request_less_than() @test
+{
+    block_manager::BlockRequest req1 = {
+        .piece_index = 3,
+        .offset = 0,
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    block_manager::BlockRequest req2 = {
+        .piece_index = 3,
+        .offset = 16384,
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    block_manager::BlockRequest req3 = {
+        .piece_index = 5,
+        .offset = 0,
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    // Same piece, different offset
+    assert(block_manager::block_request_less_than(&req1, &req2),
+           "Lower offset should be less than higher offset");
+    assert(!block_manager::block_request_less_than(&req2, &req1),
+           "Higher offset should not be less than lower offset");
+
+    // Different piece (piece takes precedence)
+    assert(block_manager::block_request_less_than(&req1, &req3),
+           "Lower piece should be less than higher piece");
+    assert(!block_manager::block_request_less_than(&req3, &req1),
+           "Higher piece should not be less than lower piece");
+
+    // Same piece and offset
+    assert(!block_manager::block_request_less_than(&req1, &req1),
+           "Request should not be less than itself");
+}
+
+fn void test_block_request_lexicographic_ordering() @test
+{
+    // Test that piece takes precedence over offset
+    block_manager::BlockRequest low_piece_high_offset = {
+        .piece_index = 1,
+        .offset = 65536,  // High offset
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    block_manager::BlockRequest high_piece_low_offset = {
+        .piece_index = 5,
+        .offset = 0,  // Low offset
+        .length = common::STANDARD_BLOCK_SIZE
+    };
+
+    // Lower piece should win even with higher offset
+    assert(block_manager::block_request_less_than(&low_piece_high_offset, &high_piece_low_offset),
+           "Piece index should take precedence over offset in ordering");
+}
+
+// ============================================================================
+// Conversion Helper Tests
+// ============================================================================
+
+fn void test_offset_to_block_index() @test
+{
+    assert(block_manager::offset_to_block_index(0) == 0,
+           "Offset 0 should be block 0");
+    assert(block_manager::offset_to_block_index(16384) == 1,
+           "Offset 16384 should be block 1");
+    assert(block_manager::offset_to_block_index(32768) == 2,
+           "Offset 32768 should be block 2");
+    assert(block_manager::offset_to_block_index(65536) == 4,
+           "Offset 65536 should be block 4");
+}
+
+fn void test_block_index_to_offset() @test
+{
+    assert(block_manager::block_index_to_offset(0) == 0,
+           "Block 0 should be offset 0");
+    assert(block_manager::block_index_to_offset(1) == 16384,
+           "Block 1 should be offset 16384");
+    assert(block_manager::block_index_to_offset(2) == 32768,
+           "Block 2 should be offset 32768");
+    assert(block_manager::block_index_to_offset(4) == 65536,
+           "Block 4 should be offset 65536");
+}
+
+fn void test_conversion_roundtrip() @test
+{
+    // Test that converting back and forth works
+    uint offset = 49152;  // Block 3
+    usz block_index = block_manager::offset_to_block_index(offset);
+    uint converted_back = block_manager::block_index_to_offset(block_index);
+
+    assert(converted_back == offset, "Roundtrip conversion should preserve value");
+    assert(block_index == 3, "Offset 49152 should be block 3");
+}

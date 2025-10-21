@@ -31,3 +31,7 @@ const usz COMPACT_PEER_PORT_SIZE = 2;     // Port size in compact format
 alias InfoHash = char[SHA1_HASH_SIZE];     // Torrent info hash
 alias PeerId = char[PEER_ID_SIZE];         // BitTorrent peer ID
 alias Ipv4Addr = char[IPV4_ADDR_SIZE];     // IPv4 address in network byte order
+
+// Type aliases for block/piece indexing (used across multiple modules)
+typedef PieceIndex = uint;
+typedef BlockOffset = uint;
