@@ -534,19 +534,19 @@ fn void test_block_request_less_than() @test
     };
 
     // Same piece, different offset
-    assert(block_manager::block_request_less_than(&req1, &req2),
+    assert(req1.less_than(req2),
            "Lower offset should be less than higher offset");
-    assert(!block_manager::block_request_less_than(&req2, &req1),
+    assert(!req2.less_than(req1),
            "Higher offset should not be less than lower offset");
 
     // Different piece (piece takes precedence)
-    assert(block_manager::block_request_less_than(&req1, &req3),
+    assert(req1.less_than(req3),
            "Lower piece should be less than higher piece");
-    assert(!block_manager::block_request_less_than(&req3, &req1),
+    assert(!req3.less_than(req1),
            "Higher piece should not be less than lower piece");
 
     // Same piece and offset
-    assert(!block_manager::block_request_less_than(&req1, &req1),
+    assert(!req1.less_than(req1),
            "Request should not be less than itself");
 }
 
@@ -566,7 +566,7 @@ fn void test_block_request_lexicographic_ordering() @test
     };
 
     // Lower piece should win even with higher offset
-    assert(block_manager::block_request_less_than(&low_piece_high_offset, &high_piece_low_offset),
+    assert(low_piece_high_offset.less_than(high_piece_low_offset),
            "Piece index should take precedence over offset in ordering");
 }
 

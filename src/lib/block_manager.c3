@@ -71,12 +71,12 @@ fn bool BlockRequest.equals(&self, BlockRequest other) @operator(==)
         && self.offset == other.offset;
 }
 
-// Lexicographic comparison function (< operator not overloadable in C3)
-fn bool block_request_less_than(BlockRequest* a, BlockRequest* b)
+// Lexicographic comparison method (< operator not overloadable in C3)
+fn bool BlockRequest.less_than(&self, BlockRequest other)
 {
     // Lexicographic ordering: piece first, then offset
-    if (a.piece_index < b.piece_index) return true;
-    if (a.piece_index == b.piece_index) return a.offset < b.offset;
+    if (self.piece_index < other.piece_index) return true;
+    if (self.piece_index == other.piece_index) return self.offset < other.offset;
     return false;
 }
 
