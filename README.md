@@ -35,8 +35,6 @@ A BitTorrent library implementation written in C3, providing torrent file parsin
 
 ## Targets
 
-This project has two build targets:
-
 1. **libtorrent** - Dynamic library (`libtorrent.so`)
    - Core torrent parsing and bencode functionality
    - Built with PIC (Position Independent Code)
@@ -171,59 +169,6 @@ fn void bencode_example()
 }
 ```
 
-### Path Sanitization
-
-```c3
-import libmetainfo::path_sanitize;
-
-fn void sanitize_example()
-{
-    // Sanitize a potentially malicious path
-    String? safe_path = path_sanitize::sanitize_torrent_path("../../../etc/passwd");
-
-    if (safe_path)
-    {
-        io::printfn("Sanitized: %s", safe_path);  // Output: "etc/passwd"
-    }
-}
-```
-
-### Async TCP Networking
-
-```c3
-import libmetainfo::event_loop;
-import libmetainfo::async_tcp;
-
-fn void on_connect(async_tcp::TcpConnection* conn, int status, void* user_data)
-{
-    if (status != 0)
-    {
-        io::printfn("Connection failed");
-        return;
-    }
-
-    io::printfn("Connected!");
-
-    // Write some data
-    char[] data = "GET / HTTP/1.0\r\n\r\n";
-    conn.write(data, &on_write)!;
-}
-
-fn void async_example()
-{
-    // Create event loop
-    event_loop::EventLoop loop = event_loop::create()!!;
-    defer loop.free();
-
-    // Connect to server
-    async_tcp::TcpConnection* conn = async_tcp::connect(
-        &loop, "example.com", 80, &on_connect
-    )!!;
-
-    // Run event loop
-    loop.run()!;
-}
-```
 
 ### Peer Wire Protocol (BEP 3)
 
@@ -332,10 +277,3 @@ fn void test_parse_valid_torrent() @test
     assert(torrent.info.name.len > 0, "Expected valid torrent name");
 }
 ```
-
-### Memory Management
-
-This project leverages C3's memory management features:
-- **Temp allocator** (`@pool()`): Automatic cleanup for short-lived allocations
-- **`defer`**: Ensures cleanup happens even on early returns
-- **Explicit `free()`**: For long-lived heap allocations
