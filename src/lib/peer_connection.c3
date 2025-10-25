@@ -63,6 +63,16 @@ struct PeerConnection
     bool peer_choking;       // Peer is choking us
     bool peer_interested;    // Peer is interested in us
 
+    // Extension protocol support (BEP 10)
+    bool supports_extensions;     // Peer supports extension protocol
+    bool sent_ext_handshake;      // We've sent extension handshake
+    bool received_ext_handshake;  // We've received extension handshake
+
+    // PEX (Peer Exchange) support (BEP 11)
+    bool supports_pex;       // Peer supports ut_pex
+    char peer_pex_msg_id;    // Peer's message ID for ut_pex (0 = disabled)
+    char our_pex_msg_id;     // Our message ID for ut_pex (fixed at 1)
+
     // Message buffering
     DString recv_buffer;     // Accumulates TCP chunks
 
@@ -106,6 +116,16 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.am_interested = false;
     peer.peer_choking = true;
     peer.peer_interested = false;
+
+    // Initialize extension protocol state (BEP 10)
+    peer.supports_extensions = false;
+    peer.sent_ext_handshake = false;
+    peer.received_ext_handshake = false;
+
+    // Initialize PEX state (BEP 11)
+    peer.supports_pex = false;
+    peer.peer_pex_msg_id = 0;
+    peer.our_pex_msg_id = 1;  // Fixed message ID for ut_pex
 
     // Initialize callbacks
     peer.msg_cb = msg_cb;
@@ -297,12 +317,21 @@ fn void process_handshake(PeerConnection* peer)
         peer.remote_peer_id[i] = handshake.peer_id[i];
     }
 
+    // Check if peer supports extension protocol (BEP 10)
+    peer.supports_extensions = peer_wire::handshake_supports_extensions(&handshake);
+
     // Remove handshake from buffer
     peer.recv_buffer.delete(0, 68);
 
     // Handshake complete - ready for messages
     peer.state = PeerState.READY;
     if (peer.state_cb) peer.state_cb(peer, PeerState.READY, peer.user_data);
+
+    // Send extension handshake if supported
+    if (peer.supports_extensions && !peer.sent_ext_handshake)
+    {
+        send_extension_handshake(peer);
+    }
 
     // Process any messages that came with the handshake
     if (peer.recv_buffer.len() > 0)
@@ -377,6 +406,9 @@ fn void handle_state_message(PeerConnection* peer, peer_wire::Message* msg)
             peer.peer_interested = true;
         case peer_wire::MessageType.NOT_INTERESTED:
             peer.peer_interested = false;
+        case peer_wire::MessageType.EXTENDED:
+            // Handle extension protocol messages (BEP 10)
+            handle_extension_message(peer, msg.payload);
         default:
             // Other messages don't change state
     }
@@ -548,4 +580,96 @@ fn fault? PeerConnection.send_keepalive(&self) @public
     char[] msg = peer_wire::encode_keepalive();
     defer free(msg);
     return send_message(self, msg);
+}
+
+// ============================================================================
+// Extension Protocol (BEP 10)
+// ============================================================================
+
+<*
+ Send extension handshake to peer (BEP 10).
+
+ Called automatically after BitTorrent handshake if peer supports extensions.
+*>
+fn void send_extension_handshake(PeerConnection* peer) @private
+{
+    peer_wire::ExtensionHandshake ext_hs;
+    ext_hs.ut_pex_id = peer.our_pex_msg_id;  // Advertise ut_pex support
+    ext_hs.port = 6881;  // Our listen port (TODO: make configurable)
+    ext_hs.client_name = "libtorrent-c3 0.1.0";
+    ext_hs.reqq = 250;  // Max outstanding requests
+
+    char[] msg = peer_wire::encode_extension_handshake(&ext_hs);
+    defer free(msg);
+
+    if (catch excuse = send_message(peer, msg))
+    {
+        io::printfn("Failed to send extension handshake");
+        return;
+    }
+
+    peer.sent_ext_handshake = true;
+    io::printfn("[EXT] Sent extension handshake (ut_pex: %d)", peer.our_pex_msg_id);
+}
+
+<*
+ Handle extension handshake from peer (BEP 10).
+*>
+fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @private
+{
+    peer_wire::ExtensionHandshake? ext_hs_opt = peer_wire::decode_extension_handshake(payload);
+    if (catch excuse = ext_hs_opt)
+    {
+        io::printfn("[EXT] Failed to decode extension handshake");
+        return;
+    }
+
+    peer_wire::ExtensionHandshake ext_hs = ext_hs_opt;
+    defer if (ext_hs.client_name.len > 0) free(ext_hs.client_name);
+
+    peer.received_ext_handshake = true;
+
+    // Check if peer supports ut_pex
+    if (ext_hs.ut_pex_id > 0)
+    {
+        peer.supports_pex = true;
+        peer.peer_pex_msg_id = ext_hs.ut_pex_id;
+        io::printfn("[EXT] Peer supports PEX (msg_id: %d)", peer.peer_pex_msg_id);
+    }
+
+    if (ext_hs.client_name.len > 0)
+    {
+        io::printfn("[EXT] Peer client: %s", ext_hs.client_name);
+    }
+}
+
+<*
+ Handle extension protocol messages (BEP 10).
+*>
+fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
+{
+    peer_wire::ExtensionMessage? ext_msg_opt = peer_wire::decode_extension_message(payload);
+    if (catch excuse = ext_msg_opt)
+    {
+        io::printfn("[EXT] Failed to decode extension message");
+        return;
+    }
+
+    peer_wire::ExtensionMessage ext_msg = ext_msg_opt;
+    defer if (ext_msg.payload.len > 0) free(ext_msg.payload);
+
+    if (ext_msg.ext_msg_id == peer_wire::EXTENSION_HANDSHAKE_ID)
+    {
+        // Extension handshake
+        handle_extension_handshake(peer, ext_msg.payload);
+    }
+    else if (ext_msg.ext_msg_id == peer.our_pex_msg_id)
+    {
+        // PEX message (will be implemented in Phase 2)
+        io::printfn("[PEX] Received PEX message (not yet implemented)");
+    }
+    else
+    {
+        io::printfn("[EXT] Unknown extension message ID: %d", ext_msg.ext_msg_id);
+    }
 }

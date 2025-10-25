@@ -1,6 +1,7 @@
 module libtorrent::peer_wire;
 
 import std::io;
+import libtorrent::bencode;
 
 <*
  BitTorrent Peer Wire Protocol (BEP 3)
@@ -39,7 +40,8 @@ enum MessageType : const char
     REQUEST = 6,
     PIECE = 7,
     CANCEL = 8,
-    PORT = 9  // DHT extension
+    PORT = 9,      // DHT extension
+    EXTENDED = 20  // Extension protocol (BEP 10)
 }
 
 <*
@@ -142,8 +144,10 @@ fn char[] encode_handshake(char[20] info_hash, char[20] peer_id) @public
     String pstr = "BitTorrent protocol";
     foreach (i, c : pstr) msg[i + 1] = c;
 
-    // Reserved bytes (all zeros)
+    // Reserved bytes - set extension protocol support bit (BEP 10)
+    // Byte 5, bit 0x10 (bit 20 from right) indicates extension protocol support
     for (usz i = 20; i < 28; i++) msg[i] = 0;
+    msg[25] |= 0x10;  // Enable extension protocol (BEP 10)
 
     // Info hash
     foreach (i, b : info_hash) msg[i + 28] = b;
@@ -196,6 +200,58 @@ fn HandshakeMsg? decode_handshake(char[] data) @public
     for (usz i = 0; i < 20; i++) msg.peer_id[i] = data[i + 48];
 
     return msg;
+}
+
+<*
+ Check if a handshake indicates extension protocol support (BEP 10).
+
+ @param handshake : "Decoded handshake message"
+ @return "True if peer supports extension protocol"
+*>
+fn bool handshake_supports_extensions(HandshakeMsg* handshake) @public
+{
+    // Check bit 20 (byte 5, bit 0x10)
+    return (handshake.reserved[5] & 0x10) != 0;
+}
+
+// ============================================================================
+// Extension Protocol (BEP 10)
+// ============================================================================
+
+// Extension message IDs
+const char EXTENSION_HANDSHAKE_ID = 0;
+
+<*
+ Extension handshake payload (bencoded dictionary).
+
+ The extension handshake is sent immediately after the BT handshake
+ if both peers support extensions (bit 20 in reserved bytes).
+*>
+struct ExtensionHandshake
+{
+    // m: Dictionary mapping extension names to message IDs
+    // For PEX: { "ut_pex": <our_msg_id> }
+    char ut_pex_id;  // Our local message ID for ut_pex (0 = disabled)
+
+    // Optional fields
+    ushort port;          // Our TCP listen port (0 = unknown)
+    String client_name;   // Client name and version (e.g., "libtorrent-c3 0.1")
+    uint reqq;            // Max outstanding requests (default 250)
+}
+
+<*
+ Extension message structure.
+
+ Format: <length:4><id:1=20><ext_msg_id:1><payload:variable>
+ - length: Total message length minus 4 bytes
+ - id: Always 20 (EXTENDED)
+ - ext_msg_id: 0 for handshake, >0 for specific extensions
+ - payload: Bencoded dictionary
+*>
+struct ExtensionMessage
+{
+    char ext_msg_id;    // 0 = handshake, 1+ = extension-specific
+    char[] payload;      // Bencoded data (caller must free)
 }
 
 // ============================================================================
@@ -353,6 +409,115 @@ fn char[] encode_port(ushort port) @public
     return msg;
 }
 
+<*
+ Encode an extension handshake message (BEP 10).
+
+ Format: <length:4><id:1=20><ext_msg_id:1=0><bencoded_dict>
+
+ @param handshake : "Extension handshake data"
+ @return "Encoded extension handshake message (caller must free)"
+*>
+fn char[] encode_extension_handshake(ExtensionHandshake* handshake) @public
+{
+    // Build bencoded dictionary
+    // Format: d1:md6:ut_pexi<id>ee1:pi<port>e1:v<len>:<client>e4:reqqi<reqq>ee
+    DString builder;
+
+    builder.append("d");  // Start dictionary
+
+    // m: { "ut_pex": <id> }
+    builder.append("1:md");
+    if (handshake.ut_pex_id > 0)
+    {
+        builder.append("6:ut_pexi");
+        builder.appendf("%d", (int)handshake.ut_pex_id);
+        builder.append("e");
+    }
+    builder.append("e");  // End 'm' dictionary
+
+    // p: port (if provided)
+    if (handshake.port > 0)
+    {
+        builder.append("1:pi");
+        builder.appendf("%d", (int)handshake.port);
+        builder.append("e");
+    }
+
+    // reqq: max outstanding requests
+    if (handshake.reqq > 0)
+    {
+        builder.append("4:reqqi");
+        builder.appendf("%d", handshake.reqq);
+        builder.append("e");
+    }
+
+    // v: client name/version
+    if (handshake.client_name.len > 0)
+    {
+        builder.append("1:v");
+        builder.appendf("%d:", handshake.client_name.len);
+        builder.append(handshake.client_name);
+    }
+
+    builder.append("e");  // End main dictionary
+
+    String bencoded = builder.str_view();
+
+    // Allocate message buffer: 4 (length) + 1 (id=20) + 1 (ext_id=0) + payload
+    usz total_len = 4 + 1 + 1 + bencoded.len;
+    char[] msg = mem::new_array(char, total_len);
+
+    // Write length (excluding length prefix itself)
+    write_u32_be(msg, 0, (uint)(total_len - 4));
+
+    // Write message ID (EXTENDED = 20)
+    msg[4] = (char)MessageType.EXTENDED;
+
+    // Write extension message ID (0 = handshake)
+    msg[5] = EXTENSION_HANDSHAKE_ID;
+
+    // Write bencoded payload
+    for (usz i = 0; i < bencoded.len; i++)
+    {
+        msg[6 + i] = bencoded[i];
+    }
+
+    return msg;
+}
+
+<*
+ Encode a generic extension message (BEP 10).
+
+ Format: <length:4><id:1=20><ext_msg_id:1><payload>
+
+ @param ext_msg_id : "Extension-specific message ID"
+ @param payload : "Bencoded payload data"
+ @return "Encoded extension message (caller must free)"
+*>
+fn char[] encode_extension_message(char ext_msg_id, char[] payload) @public
+{
+    // Allocate message: 4 (length) + 1 (id=20) + 1 (ext_id) + payload
+    usz total_len = 4 + 1 + 1 + payload.len;
+    char[] msg = mem::new_array(char, total_len);
+
+    // Write length (excluding length prefix)
+    write_u32_be(msg, 0, (uint)(total_len - 4));
+
+    // Write message ID (EXTENDED = 20)
+    msg[4] = (char)MessageType.EXTENDED;
+
+    // Write extension message ID
+    msg[5] = ext_msg_id;
+
+    // Write payload
+    for (usz i = 0; i < payload.len; i++)
+    {
+        msg[6 + i] = payload[i];
+    }
+
+    return msg;
+}
+
 // ============================================================================
 // Message Decoding
 // ============================================================================
@@ -468,6 +633,107 @@ fn uint? decode_have(char[] payload) @public
     }
 
     return read_u32_be(payload, 0);
+}
+
+<*
+ Decode an extension message (BEP 10).
+
+ Format: <length:4><id:1=20><ext_msg_id:1><payload>
+
+ @param payload : "Complete message payload (after message ID 20)"
+ @return "Decoded extension message or fault if invalid"
+*>
+fn ExtensionMessage? decode_extension_message(char[] payload) @public
+{
+    if (payload.len < 1)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+
+    ExtensionMessage msg;
+    msg.ext_msg_id = payload[0];
+
+    // Copy payload (bencoded data after ext_msg_id)
+    if (payload.len > 1)
+    {
+        msg.payload = mem::new_array(char, payload.len - 1);
+        for (usz i = 1; i < payload.len; i++)
+        {
+            msg.payload[i - 1] = payload[i];
+        }
+    }
+    else
+    {
+        msg.payload = {};
+    }
+
+    return msg;
+}
+
+<*
+ Decode an extension handshake message (BEP 10).
+
+ @param payload : "Bencoded dictionary payload"
+ @return "Decoded extension handshake or fault if invalid"
+*>
+fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
+{
+    // Parse bencoded dictionary
+    bencode::BencodeValue*? root_opt = bencode::decode((String)payload);
+    if (catch err = root_opt)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+
+    bencode::BencodeValue* root = root_opt;
+    defer bencode::free_bencode_value(root);
+
+    if (root.type != bencode::BencodeType.DICT)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+
+    ExtensionHandshake handshake;
+    handshake.ut_pex_id = 0;
+    handshake.port = 0;
+    handshake.client_name = "";
+    handshake.reqq = 0;
+
+    // Parse "m" dictionary (extension name -> message ID mappings)
+    bencode::BencodeValue* m_dict = bencode::dict_get(root, "m");
+    if (m_dict && m_dict.type == bencode::BencodeType.DICT)
+    {
+        // Look for "ut_pex" key
+        bencode::BencodeValue* pex_val = bencode::dict_get(m_dict, "ut_pex");
+        if (pex_val && pex_val.type == bencode::BencodeType.INTEGER)
+        {
+            handshake.ut_pex_id = (char)pex_val.integer;
+        }
+    }
+
+    // Parse "p" (port)
+    bencode::BencodeValue* p_val = bencode::dict_get(root, "p");
+    if (p_val && p_val.type == bencode::BencodeType.INTEGER)
+    {
+        handshake.port = (ushort)p_val.integer;
+    }
+
+    // Parse "v" (client version)
+    bencode::BencodeValue* v_val = bencode::dict_get(root, "v");
+    if (v_val && v_val.type == bencode::BencodeType.STRING)
+    {
+        // Copy the string
+        handshake.client_name = ((String)v_val.string).copy(mem);
+    }
+
+    // Parse "reqq" (max outstanding requests)
+    bencode::BencodeValue* reqq_val = bencode::dict_get(root, "reqq");
+    if (reqq_val && reqq_val.type == bencode::BencodeType.INTEGER)
+    {
+        handshake.reqq = (uint)reqq_val.integer;
+    }
+
+    return handshake;
 }
 
 <*

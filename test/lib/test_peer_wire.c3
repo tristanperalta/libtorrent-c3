@@ -75,10 +75,18 @@ fn void test_handshake_encode() @test
         assert(handshake[i + 1] == expected[i], "Protocol string should match");
     }
 
-    // Verify reserved bytes are zero
+    // Verify reserved bytes - byte 25 (index 5) should have extension bit set (BEP 10)
     for (usz i = 20; i < 28; i++)
     {
-        assert(handshake[i] == 0, "Reserved bytes should be zero");
+        if (i == 25)
+        {
+            // Byte 5 should have extension protocol bit (0x10) set
+            assert(handshake[i] == 0x10, "Reserved byte 5 should have extension bit set");
+        }
+        else
+        {
+            assert(handshake[i] == 0, "Other reserved bytes should be zero");
+        }
     }
 
     // Verify info hash
@@ -110,8 +118,21 @@ fn void test_handshake_decode() @test
 
     peer_wire::HandshakeMsg msg = msg_opt!!;
 
-    // Verify reserved bytes
-    foreach (b : msg.reserved) assert(b == 0, "Reserved should be zero");
+    // Verify reserved bytes - byte 5 should have extension bit (0x10) set
+    for (usz i = 0; i < 8; i++)
+    {
+        if (i == 5)
+        {
+            assert(msg.reserved[i] == 0x10, "Reserved byte 5 should have extension bit");
+        }
+        else
+        {
+            assert(msg.reserved[i] == 0, "Other reserved bytes should be zero");
+        }
+    }
+
+    // Verify extension support is detected
+    assert(peer_wire::handshake_supports_extensions(&msg), "Should support extensions");
 
     // Verify info hash
     for (usz i = 0; i < 20; i++)
