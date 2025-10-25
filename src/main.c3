@@ -1037,6 +1037,7 @@ struct DownloadContext
     tracker::TrackerResponse* tracker_response;
     async_timer::Timer* announce_timer;     // Periodic announce timer
     async_timer::Timer* retry_timer;        // Tracker retry backoff timer
+    async_timer::Timer* pex_timer;          // PEX update timer (every 60s)
     int announce_retry_count;               // For exponential backoff
     int announce_backoff_ms;                // Current backoff delay
     bool initial_announce_done;             // Has first announce succeeded?
@@ -1078,6 +1079,11 @@ fn void on_complete_download(DownloadContext* ctx)
     {
         async_timer::close(ctx.retry_timer);
         ctx.retry_timer = null;
+    }
+    if (ctx.pex_timer)
+    {
+        async_timer::close(ctx.pex_timer);
+        ctx.pex_timer = null;
     }
 
     // Close all peer connections (peer pool handles this)
@@ -1683,6 +1689,23 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         }
     }
 
+    // Start PEX timer if not already running (every 60 seconds)
+    if (!ctx.pex_timer)
+    {
+        async_timer::Timer*? timer_opt = async_timer::create(ctx.loop);
+        if (catch err = timer_opt)
+        {
+            io::eprintfn("  Warning: Failed to create PEX timer");
+        }
+        else
+        {
+            ctx.pex_timer = timer_opt;
+            // Start after 60 seconds, then repeat every 60 seconds
+            async_timer::start(ctx.pex_timer, 60000, 60000,
+                              &on_pex_timer_tick, ctx);
+        }
+    }
+
     // Call existing tracker completion handler
     on_download_tracker_complete(response, status, ctx);
 }
@@ -1706,6 +1729,25 @@ fn void on_announce_timer_tick(async_timer::Timer* timer, void* user_data)
     // Don't use retry logic for periodic announces - just try once
     tracker::announce(ctx.loop, ctx.torrent, 6881, "",
                       &on_download_tracker_complete, ctx);
+}
+
+<*
+ PEX timer callback - sends queued PEX updates to all connected peers.
+ Runs every 60 seconds per BEP 11 rate limiting.
+*>
+fn void on_pex_timer_tick(async_timer::Timer* timer, void* user_data)
+{
+    DownloadContext* ctx = (DownloadContext*)user_data;
+
+    if (ctx.dm.is_complete())
+    {
+        // Download complete - stop timer
+        async_timer::stop(timer);
+        return;
+    }
+
+    // Send queued PEX updates to all connected peers
+    ctx.peer_pool.send_pex_updates();
 }
 
 <*
@@ -1864,6 +1906,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.tracker_response = null;
     ctx.announce_timer = null;
     ctx.retry_timer = null;
+    ctx.pex_timer = null;
     ctx.announce_retry_count = 0;
     ctx.announce_backoff_ms = 0;
     ctx.initial_announce_done = false;

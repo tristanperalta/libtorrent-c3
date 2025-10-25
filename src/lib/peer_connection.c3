@@ -209,7 +209,7 @@ fn void on_tcp_connect(async_tcp::TcpConnection* conn, int status, void* user_da
 
     if (status != 0)
     {
-        io::printfn("Peer connection failed: status=%d", status);
+        // Connection failed - notify via callback
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -354,6 +354,10 @@ fn void process_handshake(PeerConnection* peer)
     if (peer.supports_extensions && !peer.sent_ext_handshake)
     {
         send_extension_handshake(peer);
+    }
+    else if (!peer.supports_extensions)
+    {
+        io::printfn("[EXT] Peer does not support extension protocol - PEX unavailable");
     }
 
     // Process any messages that came with the handshake

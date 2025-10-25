@@ -5,6 +5,100 @@ import libtorrent::common;
 import std::io;
 
 // ============================================================================
+// IP Address Validation Tests
+// ============================================================================
+
+fn void test_private_ip_10_0_0_0() @test
+{
+    common::Ipv4Addr ip = {10, 0, 0, 1};
+    assert(pex::is_private_or_reserved_ip(ip), "10.0.0.1 should be private");
+}
+
+fn void test_private_ip_192_168() @test
+{
+    common::Ipv4Addr ip = {192, 168, 1, 1};
+    assert(pex::is_private_or_reserved_ip(ip), "192.168.1.1 should be private");
+}
+
+fn void test_private_ip_172_16() @test
+{
+    common::Ipv4Addr ip = {172, 16, 0, 1};
+    assert(pex::is_private_or_reserved_ip(ip), "172.16.0.1 should be private");
+}
+
+fn void test_private_ip_172_31() @test
+{
+    common::Ipv4Addr ip = {172, 31, 255, 255};
+    assert(pex::is_private_or_reserved_ip(ip), "172.31.255.255 should be private");
+}
+
+fn void test_loopback_ip() @test
+{
+    common::Ipv4Addr ip = {127, 0, 0, 1};
+    assert(pex::is_private_or_reserved_ip(ip), "127.0.0.1 should be loopback");
+}
+
+fn void test_link_local_ip() @test
+{
+    common::Ipv4Addr ip = {169, 254, 1, 1};
+    assert(pex::is_private_or_reserved_ip(ip), "169.254.1.1 should be link-local");
+}
+
+fn void test_multicast_ip() @test
+{
+    common::Ipv4Addr ip = {224, 0, 0, 1};
+    assert(pex::is_private_or_reserved_ip(ip), "224.0.0.1 should be multicast");
+}
+
+fn void test_reserved_ip() @test
+{
+    common::Ipv4Addr ip = {240, 0, 0, 1};
+    assert(pex::is_private_or_reserved_ip(ip), "240.0.0.1 should be reserved");
+}
+
+fn void test_public_ip_8_8_8_8() @test
+{
+    common::Ipv4Addr ip = {8, 8, 8, 8};
+    assert(!pex::is_private_or_reserved_ip(ip), "8.8.8.8 should be public");
+}
+
+fn void test_public_ip_1_1_1_1() @test
+{
+    common::Ipv4Addr ip = {1, 1, 1, 1};
+    assert(!pex::is_private_or_reserved_ip(ip), "1.1.1.1 should be public");
+}
+
+fn void test_valid_pex_peer() @test
+{
+    pex::PexPeer peer;
+    peer.ip = {8, 8, 8, 8};
+    peer.port = 6881;
+    peer.flags = 0;
+
+    assert(pex::is_valid_pex_peer(&peer), "Public IP with valid port should be valid");
+}
+
+fn void test_invalid_pex_peer_private_ip() @test
+{
+    pex::PexPeer peer;
+    peer.ip = {192, 168, 1, 1};
+    peer.port = 6881;
+    peer.flags = 0;
+
+    assert(!pex::is_valid_pex_peer(&peer), "Private IP should be invalid");
+}
+
+fn void test_invalid_pex_peer_zero_port() @test
+{
+    pex::PexPeer peer;
+    peer.ip = {8, 8, 8, 8};
+    peer.port = 0;
+    peer.flags = 0;
+
+    assert(!pex::is_valid_pex_peer(&peer), "Zero port should be invalid");
+}
+
+// ============================================================================
 // Compact Format Tests
 // ============================================================================
 

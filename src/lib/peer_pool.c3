@@ -894,6 +894,8 @@ fn void PeerPool.connect_to_peers(&self) @public
  that disconnect. This function queues the peer update for all connected
  peers that support PEX.
 
+ Security: Does not broadcast private/reserved IP addresses.
+
  @param pool : "Peer pool"
  @param ip : "IP address of the peer to broadcast"
  @param port : "Port of the peer to broadcast"
@@ -901,6 +903,18 @@ fn void PeerPool.connect_to_peers(&self) @public
 *>
 fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, bool added) @private
 {
+    // Security: Don't broadcast private/reserved IPs
+    if (pex::is_private_or_reserved_ip(ip))
+    {
+        return;
+    }
+
+    // Validate port
+    if (port == 0)
+    {
+        return;
+    }
+
     // Determine PEX flags if this is an added peer
     char flags = 0;
     if (added)
@@ -985,15 +999,28 @@ fn void PeerPool.send_pex_updates(&self) @public
  This should be called when we receive a PEX message from a peer.
  New peers are added to the pool as DISCOVERED peers.
 
+ Security: Validates all peers before adding (rejects private IPs, invalid ports).
+
  @param pex_peers : "Array of peers from PEX message"
 *>
 fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
 {
+    usz added_count = 0;
+    usz rejected_count = 0;
+
     foreach (pex_peer : pex_peers)
     {
+        // Security: Validate peer before adding
+        if (!pex::is_valid_pex_peer(&pex_peer))
+        {
+            rejected_count++;
+            continue;
+        }
+
         // Add peer to pool (will be deduplicated if already exists)
         // from_tracker=false since this came from PEX
         self.add_peer(pex_peer.ip, pex_peer.port, false);
+        added_count++;
 
         // If the peer is marked as a seed, update our records
         if ((pex_peer.flags & (char)pex::PexFlags.SEED) != 0)
@@ -1009,9 +1036,17 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
         }
     }
 
+    if (rejected_count > 0)
+    {
+        io::printfn("[PEX] Added %d peers, rejected %d invalid peers", added_count, rejected_count);
+    }
+
     // After adding new peers, update candidate cache and try to connect
-    self.update_candidate_cache();
-    self.connect_to_peers();
+    if (added_count > 0)
+    {
+        self.update_candidate_cache();
+        self.connect_to_peers();
+    }
 }
 
 <*

@@ -66,6 +66,83 @@ struct PexMessage
 }
 
 // ============================================================================
+// IP Address Validation (Security)
+// ============================================================================
+
+<*
+ Check if an IPv4 address is in a private/reserved range.
+
+ BEP 11 Security: We should not accept or broadcast peers with private or
+ reserved IP addresses to prevent network abuse and security issues.
+
+ Private/Reserved ranges:
+ - 0.0.0.0/8        (current network)
+ - 10.0.0.0/8       (private)
+ - 127.0.0.0/8      (loopback)
+ - 169.254.0.0/16   (link-local)
+ - 172.16.0.0/12    (private)
+ - 192.168.0.0/16   (private)
+ - 224.0.0.0/4      (multicast)
+ - 240.0.0.0/4      (reserved)
+
+ @param ip : "IPv4 address to check"
+ @return "True if the IP is private/reserved and should be rejected"
+*>
+fn bool is_private_or_reserved_ip(common::Ipv4Addr ip) @public
+{
+    char first = ip[0];
+    char second = ip[1];
+
+    // 0.0.0.0/8 - Current network
+    if (first == 0) return true;
+
+    // 10.0.0.0/8 - Private network
+    if (first == 10) return true;
+
+    // 127.0.0.0/8 - Loopback
+    if (first == 127) return true;
+
+    // 169.254.0.0/16 - Link-local
+    if (first == 169 && second == 254) return true;
+
+    // 172.16.0.0/12 - Private network (172.16.0.0 - 172.31.255.255)
+    if (first == 172 && second >= 16 && second <= 31) return true;
+
+    // 192.168.0.0/16 - Private network
+    if (first == 192 && second == 168) return true;
+
+    // 224.0.0.0/4 - Multicast (224-239)
+    if (first >= 224 && first <= 239) return true;
+
+    // 240.0.0.0/4 - Reserved (240-255)
+    if (first >= 240) return true;
+
+    // Public IP address
+    return false;
+}
+
+<*
+ Validate a peer for security before accepting from PEX.
+
+ Checks:
+ - IP address is not private/reserved
+ - Port is valid (non-zero)
+
+ @param peer : "Peer to validate"
+ @return "True if peer is valid and safe to use"
+*>
+fn bool is_valid_pex_peer(PexPeer* peer) @public
+{
+    // Check for invalid port
+    if (peer.port == 0) return false;
+
+    // Check for private/reserved IP
+    if (is_private_or_reserved_ip(peer.ip)) return false;
+
+    return true;
+}
+
+// ============================================================================
 // Compact Format Conversion (BEP 23)
 // ============================================================================
 
