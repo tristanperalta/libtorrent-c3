@@ -47,6 +47,10 @@ alias MessageCallback = fn void(PeerConnection* peer, peer_wire::Message* msg, v
 // Parameters: peer (connection), state (new state), user_data (context)
 alias StateCallback = fn void(PeerConnection* peer, PeerState state, void* user_data);
 
+// Callback for when PEX message is received.
+// Parameters: peer (connection), pex_message (decoded PEX message), user_data (context)
+alias PexCallback = fn void(PeerConnection* peer, pex::PexMessage* pex_msg, void* user_data);
+
 // Peer connection structure.
 // Manages the connection to a single peer.
 struct PeerConnection
@@ -88,6 +92,7 @@ struct PeerConnection
     // Callbacks
     MessageCallback msg_cb;
     StateCallback state_cb;
+    PexCallback pex_cb;
     void* user_data;
 }
 
@@ -101,13 +106,14 @@ struct PeerConnection
  @param our_peer_id : "Our peer ID"
  @param msg_cb : "Callback for received messages"
  @param state_cb : "Callback for state changes (can be null)"
+ @param pex_cb : "Callback for PEX messages (can be null)"
  @param user_data : "User context for callbacks"
  @return "Peer connection or fault"
 *>
 fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort port,
                               char[20] info_hash, char[20] our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
-                              void* user_data) @public
+                              PexCallback pex_cb, void* user_data) @public
 {
     PeerConnection* peer = mem::new(PeerConnection);
     peer.loop = loop;
@@ -142,6 +148,7 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     // Initialize callbacks
     peer.msg_cb = msg_cb;
     peer.state_cb = state_cb;
+    peer.pex_cb = pex_cb;
     peer.user_data = user_data;
 
     // Connect to peer
@@ -707,13 +714,10 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
 
     io::printfn("[PEX] Received %d added, %d dropped peers", pex_msg.added.len, pex_msg.dropped.len);
 
-    // TODO: In Phase 3, we'll add these peers to the peer pool
-    // For now, just log them
-    foreach (peer_info : pex_msg.added)
+    // Notify user callback (e.g., peer_pool) to add these peers
+    if (peer.pex_cb)
     {
-        io::printfn("[PEX]   Added: %d.%d.%d.%d:%d (flags: 0x%02x)",
-                    peer_info.ip[0], peer_info.ip[1], peer_info.ip[2], peer_info.ip[3],
-                    peer_info.port, peer_info.flags);
+        peer.pex_cb(peer, &pex_msg, peer.user_data);
     }
 }
 

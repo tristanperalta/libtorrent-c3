@@ -6,6 +6,7 @@ import libtorrent::tracker;
 import libtorrent::peer_connection;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
+import libtorrent::pex;
 import std::io;
 import std::time;
 import std::sort;
@@ -438,6 +439,9 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             {
                 pool.on_connected(conn, peer_info.ip, peer_info.port, pool.user_data);
             }
+
+            // Broadcast this new peer to all other connected peers via PEX
+            broadcast_pex_update(pool, peer_info.ip, peer_info.port, true);
             return;
 
         case peer_connection::PeerState.CLOSED:
@@ -449,6 +453,9 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             {
                 pool.on_disconnected(peer_info.ip, peer_info.port, true, pool.user_data);
             }
+
+            // Broadcast this peer drop to all other connected peers via PEX
+            broadcast_pex_update(pool, peer_info.ip, peer_info.port, false);
 
             // Try to replace this connection
             pool.connect_to_peers();
@@ -488,6 +495,26 @@ fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
     {
         pool.on_message(conn, msg, peer_info.ip, peer_info.port, pool.user_data);
     }
+}
+
+<*
+ Internal bridge: Called when peer_connection receives PEX message.
+ Adds peers to pool automatically.
+*>
+fn void on_pex_message_internal(peer_connection::PeerConnection* conn,
+                                  pex::PexMessage* pex_msg,
+                                  void* user_data)
+{
+    PeerPool* pool = (PeerPool*)user_data;
+
+    // Add new peers from PEX to our pool
+    if (pex_msg.added.len > 0)
+    {
+        pool.add_peers_from_pex(pex_msg.added);
+    }
+
+    // Note: We ignore dropped peers for now - we'll let our own connection
+    // tracking determine when peers are actually disconnected
 }
 
 <*
@@ -819,6 +846,7 @@ fn void PeerPool.connect_to_peers(&self) @public
             self.our_peer_id,
             &on_peer_message_internal,  // Bridge: adds IP/port
             &on_peer_state_internal,    // Bridge: adds IP/port
+            &on_pex_message_internal,   // Bridge: adds PEX peers to pool
             (PeerPool*)self              // Pass pool as user_data for bridge
         );
 
@@ -853,6 +881,137 @@ fn void PeerPool.connect_to_peers(&self) @public
         // Update candidate cache to remove this peer from candidates
         self.update_candidate_cache();
     }
+}
+
+// ============================================================================
+// PEX (Peer Exchange) Integration
+// ============================================================================
+
+<*
+ Broadcast a peer addition/drop to all connected peers via PEX.
+
+ BEP 11: We should notify peers about new peers we connect to and peers
+ that disconnect. This function queues the peer update for all connected
+ peers that support PEX.
+
+ @param pool : "Peer pool"
+ @param ip : "IP address of the peer to broadcast"
+ @param port : "Port of the peer to broadcast"
+ @param added : "True if peer was added, false if dropped"
+*>
+fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, bool added) @private
+{
+    // Determine PEX flags if this is an added peer
+    char flags = 0;
+    if (added)
+    {
+        // Check if the added peer is a seed
+        TorrentPeer*? peer_opt = pool.find_peer(ip, port);
+        if (catch err = peer_opt)
+        {
+            // Peer not found, use default flags
+            flags = 0;
+        }
+        else
+        {
+            TorrentPeer* peer = peer_opt;
+            if (peer.seed)
+            {
+                flags |= (char)pex::PexFlags.SEED;
+            }
+            // TODO: Add other flags based on peer capabilities
+            // - PREFERS_ENCRYPTION
+            // - SUPPORTS_UTP
+            // - SUPPORTS_HOLEPUNCH
+            // - REACHABLE
+        }
+    }
+
+    // Broadcast to all connected peers that support PEX
+    for (usz i = 0; i < pool.peers.len; i++)
+    {
+        TorrentPeer* peer = pool.peers[i];
+
+        // Skip if not connected or no connection object
+        if (peer.state != PeerState.CONNECTED || !peer.connection)
+        {
+            continue;
+        }
+
+        // Don't broadcast a peer to itself
+        if (peer.ip[0] == ip[0] && peer.ip[1] == ip[1] &&
+            peer.ip[2] == ip[2] && peer.ip[3] == ip[3] &&
+            peer.port == port)
+        {
+            continue;
+        }
+
+        // Queue the PEX update for this peer
+        if (added)
+        {
+            peer_connection::add_pex_peer(peer.connection, ip, port, flags);
+        }
+        else
+        {
+            peer_connection::drop_pex_peer(peer.connection, ip, port);
+        }
+    }
+}
+
+<*
+ Send queued PEX messages to all connected peers.
+
+ Should be called periodically (e.g., every 60 seconds) to send accumulated
+ PEX updates while respecting rate limits.
+*>
+fn void PeerPool.send_pex_updates(&self) @public
+{
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        TorrentPeer* peer = self.peers[i];
+
+        if (peer.state == PeerState.CONNECTED && peer.connection)
+        {
+            // send_pex_message handles rate limiting internally
+            // Ignore any errors (peer may have disconnected, etc.)
+            (void)peer_connection::send_pex_message(peer.connection);
+        }
+    }
+}
+
+<*
+ Process PEX peers received from a peer and add them to our pool.
+
+ This should be called when we receive a PEX message from a peer.
+ New peers are added to the pool as DISCOVERED peers.
+
+ @param pex_peers : "Array of peers from PEX message"
+*>
+fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
+{
+    foreach (pex_peer : pex_peers)
+    {
+        // Add peer to pool (will be deduplicated if already exists)
+        // from_tracker=false since this came from PEX
+        self.add_peer(pex_peer.ip, pex_peer.port, false);
+
+        // If the peer is marked as a seed, update our records
+        if ((pex_peer.flags & (char)pex::PexFlags.SEED) != 0)
+        {
+            TorrentPeer*? peer_opt = self.find_peer(pex_peer.ip, pex_peer.port);
+            if (catch err = peer_opt)
+            {
+                // Peer not found (shouldn't happen since we just added it)
+                continue;
+            }
+            TorrentPeer* peer = peer_opt;
+            peer.seed = true;
+        }
+    }
+
+    // After adding new peers, update candidate cache and try to connect
+    self.update_candidate_cache();
+    self.connect_to_peers();
 }
 
 <*

@@ -780,6 +780,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
             our_peer_id,
             &on_connect_peer_message,
             &on_connect_peer_state,
+            null,  // No PEX callback for simple client
             ctx
         );
 
