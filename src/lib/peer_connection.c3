@@ -4,7 +4,10 @@ import libtorrent::async_tcp;
 import libtorrent::event_loop;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
+import libtorrent::pex;
+import libtorrent::common;
 import std::io;
+import std::time;
 
 <*
  Peer Connection State Machine
@@ -73,6 +76,12 @@ struct PeerConnection
     char peer_pex_msg_id;    // Peer's message ID for ut_pex (0 = disabled)
     char our_pex_msg_id;     // Our message ID for ut_pex (fixed at 1)
 
+    // PEX state tracking
+    pex::PexPeer[] added_peers;     // Peers to send in next PEX message
+    pex::PexPeer[] dropped_peers;   // Dropped peers to send in next PEX message
+    long last_pex_sent_sec;         // Timestamp of last PEX message sent in seconds (rate limiting)
+    bool pex_initialized;           // Whether last_pex_sent_sec has been initialized
+
     // Message buffering
     DString recv_buffer;     // Accumulates TCP chunks
 
@@ -126,6 +135,9 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.supports_pex = false;
     peer.peer_pex_msg_id = 0;
     peer.our_pex_msg_id = 1;  // Fixed message ID for ut_pex
+    peer.added_peers = {};
+    peer.dropped_peers = {};
+    peer.pex_initialized = false;
 
     // Initialize callbacks
     peer.msg_cb = msg_cb;
@@ -169,6 +181,10 @@ fn void close(PeerConnection* peer) @public
     {
         peer.recv_buffer.free();
     }
+
+    // Free PEX arrays
+    if (peer.added_peers.len > 0) free(peer.added_peers);
+    if (peer.dropped_peers.len > 0) free(peer.dropped_peers);
 
     free(peer);
 }
@@ -665,11 +681,185 @@ fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
     }
     else if (ext_msg.ext_msg_id == peer.our_pex_msg_id)
     {
-        // PEX message (will be implemented in Phase 2)
-        io::printfn("[PEX] Received PEX message (not yet implemented)");
+        // PEX message
+        handle_pex_message(peer, ext_msg.payload);
     }
     else
     {
         io::printfn("[EXT] Unknown extension message ID: %d", ext_msg.ext_msg_id);
     }
+}
+
+<*
+ Handle PEX message from peer (BEP 11).
+*>
+fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
+{
+    pex::PexMessage? pex_msg_opt = pex::decode_pex_message(payload);
+    if (catch excuse = pex_msg_opt)
+    {
+        io::printfn("[PEX] Failed to decode PEX message");
+        return;
+    }
+
+    pex::PexMessage pex_msg = pex_msg_opt;
+    defer pex::free_pex_message(&pex_msg);
+
+    io::printfn("[PEX] Received %d added, %d dropped peers", pex_msg.added.len, pex_msg.dropped.len);
+
+    // TODO: In Phase 3, we'll add these peers to the peer pool
+    // For now, just log them
+    foreach (peer_info : pex_msg.added)
+    {
+        io::printfn("[PEX]   Added: %d.%d.%d.%d:%d (flags: 0x%02x)",
+                    peer_info.ip[0], peer_info.ip[1], peer_info.ip[2], peer_info.ip[3],
+                    peer_info.port, peer_info.flags);
+    }
+}
+
+<*
+ Send PEX message to peer with current added/dropped peers.
+
+ BEP 11 rate limiting: Maximum 1 PEX message per minute per peer.
+
+ @param peer : "Peer to send PEX message to"
+ @return "void or fault"
+*>
+fn void? send_pex_message(PeerConnection* peer) @public
+{
+    if (!peer.supports_pex || peer.peer_pex_msg_id == 0)
+    {
+        return;  // Peer doesn't support PEX
+    }
+
+    // Rate limiting: enforce 1 message per minute (BEP 11)
+    if (peer.pex_initialized)
+    {
+        long now_sec = (long)time::now().to_seconds();
+        long elapsed_sec = now_sec - peer.last_pex_sent_sec;
+
+        if (elapsed_sec < 60)
+        {
+            // Too soon since last PEX message
+            return;
+        }
+    }
+
+    // Check if we have any peers to send
+    if (peer.added_peers.len == 0 && peer.dropped_peers.len == 0)
+    {
+        return;  // Nothing to send
+    }
+
+    // Build PEX message
+    pex::PexMessage pex_msg;
+    pex_msg.added = peer.added_peers;
+    pex_msg.dropped = peer.dropped_peers;
+
+    char[] pex_payload = pex::encode_pex_message(&pex_msg);
+    defer free(pex_payload);
+
+    // Encode as extension message
+    char[] ext_msg = peer_wire::encode_extension_message(peer.peer_pex_msg_id, pex_payload);
+    defer free(ext_msg);
+
+    // Send message
+    if (catch err = send_message(peer, ext_msg))
+    {
+        io::printfn("[PEX] Failed to send PEX message");
+        return err?;
+    }
+
+    io::printfn("[PEX] Sent %d added, %d dropped peers", peer.added_peers.len, peer.dropped_peers.len);
+
+    // Update rate limit timestamp
+    peer.last_pex_sent_sec = (long)time::now().to_seconds();
+    peer.pex_initialized = true;
+
+    // Clear the peer lists
+    if (peer.added_peers.len > 0)
+    {
+        free(peer.added_peers);
+        peer.added_peers = {};
+    }
+    if (peer.dropped_peers.len > 0)
+    {
+        free(peer.dropped_peers);
+        peer.dropped_peers = {};
+    }
+}
+
+<*
+ Add a peer to the PEX added list for this connection.
+
+ The peer will be sent in the next PEX message (subject to rate limiting).
+ BEP 11: Maximum 50 peers per PEX message.
+
+ @param peer : "Peer connection"
+ @param ip : "IPv4 address of peer to add"
+ @param port : "Port of peer to add"
+ @param flags : "PEX flags for this peer"
+*>
+fn void add_pex_peer(PeerConnection* peer, common::Ipv4Addr ip, ushort port, char flags) @public
+{
+    // BEP 11: Limit to 50 peers per message
+    if (peer.added_peers.len >= 50)
+    {
+        return;
+    }
+
+    // Allocate new array with space for one more peer
+    pex::PexPeer[] new_peers = mem::new_array(pex::PexPeer, peer.added_peers.len + 1);
+
+    // Copy existing peers
+    for (usz i = 0; i < peer.added_peers.len; i++)
+    {
+        new_peers[i] = peer.added_peers[i];
+    }
+
+    // Add new peer
+    new_peers[peer.added_peers.len].ip = ip;
+    new_peers[peer.added_peers.len].port = port;
+    new_peers[peer.added_peers.len].flags = flags;
+
+    // Replace old array
+    if (peer.added_peers.len > 0) free(peer.added_peers);
+    peer.added_peers = new_peers;
+}
+
+<*
+ Add a peer to the PEX dropped list for this connection.
+
+ The peer will be sent in the next PEX message (subject to rate limiting).
+ BEP 11: Maximum 50 peers per PEX message.
+
+ @param peer : "Peer connection"
+ @param ip : "IPv4 address of peer that dropped"
+ @param port : "Port of peer that dropped"
+*>
+fn void drop_pex_peer(PeerConnection* peer, common::Ipv4Addr ip, ushort port) @public
+{
+    // BEP 11: Limit to 50 peers per message
+    if (peer.dropped_peers.len >= 50)
+    {
+        return;
+    }
+
+    // Allocate new array with space for one more peer
+    pex::PexPeer[] new_peers = mem::new_array(pex::PexPeer, peer.dropped_peers.len + 1);
+
+    // Copy existing peers
+    for (usz i = 0; i < peer.dropped_peers.len; i++)
+    {
+        new_peers[i] = peer.dropped_peers[i];
+    }
+
+    // Add dropped peer (flags don't matter for dropped peers)
+    new_peers[peer.dropped_peers.len].ip = ip;
+    new_peers[peer.dropped_peers.len].port = port;
+    new_peers[peer.dropped_peers.len].flags = 0;
+
+    // Replace old array
+    if (peer.dropped_peers.len > 0) free(peer.dropped_peers);
+    peer.dropped_peers = new_peers;
 }
