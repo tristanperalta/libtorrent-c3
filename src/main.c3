@@ -16,6 +16,7 @@ import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::logger;
+import torrent_client::log_outputs;
 
 fn int main(int argc, ZString* argv)
 {
@@ -1898,71 +1899,6 @@ fn void on_download_load_complete(String data, int status, void* user_data)
 }
 
 // ============================================================================
-// Log Output Implementations
-// ============================================================================
-
-// File Log Output - Writes log messages to a file.
-struct FileLogOutput (logger::LogOutput)
-{
-    std::io::File file;
-    bool is_open;
-}
-
-fn void FileLogOutput.write_log(FileLogOutput* self, logger::LogLevel level, String message) @dynamic
-{
-    if (self.is_open)
-    {
-        DString buf;
-        buf.appendf("[%s] %s\n", logger::level_to_string(level), message);
-        self.file.write(buf.str_view())!!;
-        self.file.flush()!!;  // Ensure logs are written immediately
-    }
-}
-
-fn void FileLogOutput.close(FileLogOutput* self) @dynamic
-{
-    if (self.is_open)
-    {
-        self.file.close()!!;
-        self.is_open = false;
-    }
-}
-
-// Stderr Log Output - Writes log messages to stderr.
-struct StderrLogOutput (logger::LogOutput)
-{
-    char _dummy;  // C3 doesn't allow zero-sized structs
-}
-
-fn void StderrLogOutput.write_log(StderrLogOutput* self, logger::LogLevel level, String message) @dynamic
-{
-    io::eprintfn("[%s] %s", logger::level_to_string(level), message);
-}
-
-fn void StderrLogOutput.close(StderrLogOutput* self) @dynamic
-{
-    // No cleanup needed for stderr
-}
-
-// Log sink configuration for routing log messages to multiple destinations.
-struct LogSink
-{
-    logger::LogOutput[] outputs;  // Array of log output interfaces
-}
-
-// Log callback - routes library log messages to all registered outputs.
-fn void on_log_message(logger::LogLevel level, String message, void* user_data)
-{
-    LogSink* sink = (LogSink*)user_data;
-
-    // Write to all registered log outputs
-    foreach (output : sink.outputs)
-    {
-        output.write_log(level, message);
-    }
-}
-
-// ============================================================================
 // Download Command - Full torrent download with piece management
 // ============================================================================
 
@@ -1984,9 +1920,9 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     io::printfn("");
 
     // Set up multi-output logging system
-    LogSink log_sink;
-    FileLogOutput* file_out = null;
-    StderrLogOutput* stderr_out = null;
+    log_outputs::LogSink log_sink;
+    log_outputs::FileLogOutput* file_out = null;
+    log_outputs::StderrLogOutput* stderr_out = null;
 
     // Count outputs
     usz num_outputs = 0;
@@ -2002,7 +1938,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         // Add file output if requested
         if (log_file_path.len > 0)
         {
-            file_out = mem::new(FileLogOutput);
+            file_out = mem::new(log_outputs::FileLogOutput);
             file_out.file = file::open(log_file_path, "w")!!;
             file_out.is_open = true;
             log_sink.outputs[output_idx] = file_out;
@@ -2013,14 +1949,14 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         // Add stderr output if requested
         if (debug_mode)
         {
-            stderr_out = mem::new(StderrLogOutput);
+            stderr_out = mem::new(log_outputs::StderrLogOutput);
             log_sink.outputs[output_idx] = stderr_out;
             output_idx++;
             io::printfn("Debug logging to stderr enabled");
         }
 
         // Set callback
-        logger::set_log_callback(&on_log_message, &log_sink);
+        logger::set_log_callback(&log_outputs::on_log_message, &log_sink);
     }
 
     DownloadContext ctx;
