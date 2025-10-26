@@ -438,3 +438,154 @@ fn void test_rarest_first_deterministic() @test
     // Should pick piece 2 (lowest availability among available)
     assert(piece_opt!! == 2, "Should pick rarest available piece (piece 2)");
 }
+
+// ============================================================================
+// Regression Tests for Real-World Scenarios
+// ============================================================================
+
+<*
+ * Test the scenario that caused the "NO_PIECES_TO_REQUEST" bug:
+ * 1. Fresh download (no pieces verified - all FREE)
+ * 2. First peer connects and sends BITFIELD with all pieces
+ * 3. Try to pick pieces - should succeed
+ *
+ * This reproduces the exact conditions from the Fedora torrent download bug.
+ *>
+fn void test_pick_piece_after_empty_verification() @test
+{
+    // Create picker with realistic number of pieces (similar to Fedora ISO)
+    piece_picker::PiecePicker picker = piece_picker::create(9150);
+    defer piece_picker::free(&picker);
+
+    // Verify initial state (like after failed verification of all pieces)
+    assert(picker.pieces_complete == 0, "No pieces should be complete");
+    assert(picker.pieces_downloading == 0, "No pieces should be downloading");
+
+    // All pieces should be FREE with 0 availability
+    for (usz i = 0; i < 5; i++)
+    {
+        assert(picker.pieces[i].state == piece_picker::PieceState.FREE,
+               "Piece should be FREE after failed verification");
+        assert(picker.pieces[i].availability == 0,
+               "Piece should have 0 availability before any peers");
+    }
+
+    // Peer sends BITFIELD - has all pieces (like a seed)
+    bool[] peer_pieces = mem::new_array(bool, 9150);
+    defer free(peer_pieces);
+    for (usz i = 0; i < 9150; i++)
+    {
+        peer_pieces[i] = true;
+    }
+
+    // Update availability
+    picker.update_peer_bitfield(peer_pieces)!!;
+
+    // Verify availability was updated
+    for (usz i = 0; i < 5; i++)
+    {
+        assert(picker.pieces[i].availability == 1,
+               "Piece availability should be 1 after BITFIELD");
+    }
+
+    // Try to pick a piece - THIS SHOULD SUCCEED
+    uint? piece_opt = picker.pick_piece(peer_pieces);
+    if (catch excuse = piece_opt)
+    {
+        assert(false, "Should be able to pick piece after BITFIELD (got fault)");
+    }
+
+    uint piece = piece_opt;
+    assert(piece < 9150, "Picked piece should be valid");
+    assert(picker.pieces[piece].state == piece_picker::PieceState.FREE,
+           "Picked piece should still be FREE (not marked yet)");
+}
+
+<*
+ * Test picking multiple pieces in sequence (filling download slots)
+ *>
+fn void test_pick_multiple_pieces_sequentially() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(100);
+    defer piece_picker::free(&picker);
+
+    // Peer has all pieces
+    bool[] peer_pieces = mem::new_array(bool, 100);
+    defer free(peer_pieces);
+    for (usz i = 0; i < 100; i++)
+    {
+        peer_pieces[i] = true;
+    }
+    picker.update_peer_bitfield(peer_pieces)!!;
+
+    // Pick 5 pieces (simulating filling 5 download slots)
+    uint[5] picked_pieces;
+    for (usz i = 0; i < 5; i++)
+    {
+        uint? piece_opt = picker.pick_piece(peer_pieces);
+        piece_opt!!;
+        picked_pieces[i] = piece_opt!!;
+
+        // Mark as downloading so it won't be picked again
+        picker.mark_downloading(picked_pieces[i])!!;
+    }
+
+    // All picked pieces should be unique
+    for (usz i = 0; i < 5; i++)
+    {
+        for (usz j = i + 1; j < 5; j++)
+        {
+            assert(picked_pieces[i] != picked_pieces[j],
+                   "Each picked piece should be unique");
+        }
+    }
+
+    // Should still be able to pick more pieces
+    uint? next_piece = picker.pick_piece(peer_pieces);
+    next_piece!!;
+
+    // Verify it's not one we already picked
+    bool is_duplicate = false;
+    for (usz i = 0; i < 5; i++)
+    {
+        if (next_piece!! == picked_pieces[i])
+        {
+            is_duplicate = true;
+            break;
+        }
+    }
+    assert(!is_duplicate, "Should pick a new piece not already downloading");
+}
+
+<*
+ * Test the scenario where all download slots are full
+ * (this was causing misleading "NO_PIECES_TO_REQUEST" messages)
+ *>
+fn void test_pick_piece_when_all_downloading() @test
+{
+    piece_picker::PiecePicker picker = piece_picker::create(10);
+    defer piece_picker::free(&picker);
+
+    bool[] peer_pieces = mem::new_array(bool, 10);
+    defer free(peer_pieces);
+    for (usz i = 0; i < 10; i++)
+    {
+        peer_pieces[i] = true;
+    }
+    picker.update_peer_bitfield(peer_pieces)!!;
+
+    // Mark 5 pieces as downloading (simulating full download slots)
+    for (usz i = 0; i < 5; i++)
+    {
+        picker.mark_downloading((uint)i)!!;
+    }
+
+    // Should still be able to pick from remaining 5 pieces
+    uint? piece_opt = picker.pick_piece(peer_pieces);
+    piece_opt!!;
+    uint piece = piece_opt!!;
+
+    assert(piece >= 5, "Should pick from pieces not downloading");
+    assert(picker.pieces[piece].state == piece_picker::PieceState.FREE,
+           "Picked piece should be FREE");
+}

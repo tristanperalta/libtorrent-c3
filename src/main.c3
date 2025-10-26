@@ -16,6 +16,13 @@ import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::logger;
+import torrent_client::log_outputs;
+import torrent_client::download_session;
+import raylib_gui;
+
+// ============================================================================
+// Main Entry Point
+// ============================================================================
 
 fn int main(int argc, ZString* argv)
 {
@@ -86,6 +93,7 @@ fn int main(int argc, ZString* argv)
         String save_path = ".";  // Default to current directory
         String log_file_path = "";  // No file logging by default
         bool debug_mode = false;
+        bool gui_mode = false;
 
         for (usz i = 3; i < (usz)argc; i++)
         {
@@ -111,9 +119,13 @@ fn int main(int argc, ZString* argv)
             {
                 debug_mode = true;
             }
+            else if (arg == "--gui")
+            {
+                gui_mode = true;
+            }
         }
 
-        return cmd_download(&loop, torrent_path, save_path, numwant, log_file_path, debug_mode);
+        return cmd_download(&loop, torrent_path, save_path, numwant, log_file_path, debug_mode, gui_mode);
     }
     else
     {
@@ -199,6 +211,7 @@ fn void print_usage()
     io::printfn("  --numwant <n>        Number of peers to request from tracker (default: 50)");
     io::printfn("  --log-file <path>    Log to file");
     io::printfn("  --debug              Enable debug output to stderr");
+    io::printfn("  --gui                Launch graphical user interface");
     io::printfn("");
     io::printfn("Examples:");
     io::printfn("  torrent-client info ubuntu.torrent");
@@ -207,31 +220,8 @@ fn void print_usage()
     io::printfn("  torrent-client download ubuntu.torrent");
     io::printfn("  torrent-client download ubuntu.torrent --save-path ~/Downloads --numwant 100");
     io::printfn("  torrent-client download ubuntu.torrent --log-file download.log --debug");
+    io::printfn("  torrent-client download ubuntu.torrent --gui");
     io::printfn("  torrent-client ubuntu.torrent          # Same as 'info'");
-}
-
-<*
- Convert tracker error status code to descriptive string.
-
- @param status : "Tracker error status code"
- @return "Descriptive error message"
-*>
-fn String tracker_error_string(int status)
-{
-    switch (status)
-    {
-        // HTTP tracker errors
-        case -1: return "HTTP request failed";
-        case -2: return "Invalid response format";
-        case -3: return "Invalid tracker URL";
-
-        // UDP tracker specific errors
-        case -4: return "Invalid response format";
-        case -5: return "DNS lookup failed";
-        case -6: return "Invalid tracker URL";
-
-        default: return "Unknown error";
-    }
 }
 
 fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
@@ -241,7 +231,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
 
     // Basic info
     io::printfn("Name: %s", torrent.info.name);
-    io::printfn("Size: %s (%d bytes)", format_size(torrent.info.length), torrent.info.length);
+    io::printfn("Size: %s (%d bytes)", download_session::format_size(torrent.info.length), torrent.info.length);
 
     // Info hash (convert to hex)
     String hash_hex = hex::encode(mem, &torrent.info_hash);
@@ -283,7 +273,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
                 if (i > 0) path.append_char('/');
                 path.append(component);
             }
-            io::printfn("    [%d] %s (%s)", idx + 1, path.str_view(), format_size(file.length));
+            io::printfn("    [%d] %s (%s)", idx + 1, path.str_view(), download_session::format_size(file.length));
         }
     }
     else
@@ -294,7 +284,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
 
     // Piece info
     io::printfn("Piece Info:");
-    io::printfn("  Piece length: %s", format_size(torrent.info.piece_length));
+    io::printfn("  Piece length: %s", download_session::format_size(torrent.info.piece_length));
     long num_pieces = torrent.info.pieces.len / 20;
     io::printfn("  Total pieces: %d", num_pieces);
     io::printfn("");
@@ -342,33 +332,6 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
         }
         io::printfn("  Creation date: %d (Unix timestamp)", torrent.creation_date);
     }
-}
-
-fn String format_size(long bytes)
-{
-    DString result;
-
-    if (bytes < 1024)
-    {
-        result.appendf("%d bytes", bytes);
-    }
-    else if (bytes < 1024 * 1024)
-    {
-        double kb = (double)bytes / 1024.0;
-        result.appendf("%.2f KB", kb);
-    }
-    else if (bytes < 1024 * 1024 * 1024)
-    {
-        double mb = (double)bytes / (1024.0 * 1024.0);
-        result.appendf("%.2f MB", mb);
-    }
-    else
-    {
-        double gb = (double)bytes / (1024.0 * 1024.0 * 1024.0);
-        result.appendf("%.2f GB", gb);
-    }
-
-    return result.copy_str(mem);
 }
 
 <*
@@ -581,7 +544,7 @@ fn int cmd_announce(event_loop::EventLoop* loop, String torrent_path)
         else if (ctx.tracker_status != 0)
         {
             // Show descriptive error based on status code
-            String error_desc = tracker_error_string(ctx.tracker_status);
+            String error_desc = download_session::tracker_error_string(ctx.tracker_status);
             io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, ctx.tracker_status);
         }
         else
@@ -717,7 +680,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
         // Show descriptive error based on status code
         if (status != 0)
         {
-            String error_desc = tracker_error_string(status);
+            String error_desc = download_session::tracker_error_string(status);
             io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, status);
         }
         else
@@ -1038,820 +1001,119 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
 // ============================================================================
 
 <*
- Download context for managing the download workflow.
-*>
-struct DownloadContext
-{
-    event_loop::EventLoop* loop;
-    libtorrent::metainfo::TorrentFile* torrent;
-    download_manager::DownloadManager* dm;
-    storage_manager::StorageManager* sm;
-
-    // Tracker state
-    bool tracker_completed;
-    tracker::TrackerResponse* tracker_response;
-    async::timer::Timer* announce_timer;     // Periodic announce timer
-    async::timer::Timer* retry_timer;        // Tracker retry backoff timer
-    async::timer::Timer* pex_timer;          // PEX update timer (every 60s)
-    int announce_retry_count;               // For exponential backoff
-    int announce_backoff_ms;                // Current backoff delay
-    bool initial_announce_done;             // Has first announce succeeded?
-
-    // Peer management (Phase 6 - using peer pool)
-    peer_pool::PeerPool* peer_pool;
-
-    // Download state
-    bool download_complete;
-    int exit_code;
-
-    // Resume verification
-    uint num_pieces;                        // Total number of pieces
-    uint pieces_verified_count;             // Resume verification progress
-
-    // Options
-    int numwant;
-    String save_path;
-}
-
-<*
  Called when download is complete - closes all handles.
  Event loop will exit naturally once all handles are closed.
 *>
-fn void on_complete_download(DownloadContext* ctx)
+fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
+                        String save_path, int numwant)
 {
-    io::printfn("");
-    io::printfn("=== Download Complete! ===");
-    io::printfn("All %d pieces verified successfully", ctx.num_pieces);
-    io::printfn("Cleaning up...");
+    // Load torrent file synchronously
+    File file = file::open(torrent_path, "rb")!!;
+    defer (void)file.close();
 
-    // Stop announce timers
-    if (ctx.announce_timer)
-    {
-        async::timer::close(ctx.announce_timer);
-        ctx.announce_timer = null;
-    }
-    if (ctx.retry_timer)
-    {
-        async::timer::close(ctx.retry_timer);
-        ctx.retry_timer = null;
-    }
-    if (ctx.pex_timer)
-    {
-        async::timer::close(ctx.pex_timer);
-        ctx.pex_timer = null;
-    }
+    usz file_size = (usz)file.seek(0, io::Seek.END)!!;
+    file.seek(0, io::Seek.SET)!!;
 
-    // Close all peer connections (peer pool handles this)
-    if (ctx.peer_pool)
-    {
-        ctx.peer_pool.disconnect_all();
-    }
-
-    // Event loop will exit naturally when all handles are closed
-    ctx.download_complete = true;
-    ctx.exit_code = 0;
-}
-
-<*
- Callback for piece completion - write to disk.
-*>
-fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool success, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    if (!success)
-    {
-        io::eprintfn("Piece %d verification failed!", piece_index);
-
-        // Mark all peers who sent blocks for this piece as having hash failure
-        // TODO: Track which specific peer sent which block (requires per-block tracking)
-        // For now, we penalize all connected peers slightly
-        for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
-        {
-            peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
-            if (peer_info.state == peer_pool::PeerState.CONNECTED)
-            {
-                ctx.peer_pool.mark_hash_failure(peer_info.ip, peer_info.port)!!;
-            }
-        }
-
-        // Mark piece as failed for retry
-        ctx.dm.fail_piece(piece_index)!!;
-        return;
-    }
-
-    io::printfn("✓ Piece %d verified (%d bytes)", piece_index, piece_data.len);
-
-    // Write piece to disk via storage_manager
-    // TODO: Implement actual storage write when storage_manager is ready
-    // For now, just free the piece data
-    free(piece_data);
-
-    // Check progress
-    usz total, complete, downloading;
-    ctx.dm.get_progress(&total, &complete, &downloading);
-
-    if (complete % 100 == 0 || complete == total)
-    {
-        double percent = (complete * 100.0) / total;
-        io::printfn("Progress: %d/%d pieces (%.1f%%)", complete, total, percent);
-    }
-
-    // Check if download is complete
-    if (ctx.dm.is_complete())
-    {
-        on_complete_download(ctx);
-        return;
-    }
-
-    // Start downloading more pieces from available peers
-    // Find peer bitfields and start new pieces
-    for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
-    {
-        peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
-        if (peer_info.state == peer_pool::PeerState.CONNECTED && peer_info.handshake_ok)
-        {
-            // Try to start a new piece download
-            // This is a simplified version - ideally we'd track which pieces each peer has
-            bool[] peer_pieces = mem::new_array(bool, total);
-            for (usz j = 0; j < total; j++)
-            {
-                peer_pieces[j] = true; // Assume peer has all pieces for now
-            }
-
-            if (catch excuse = ctx.dm.start_piece_download(peer_pieces))
-            {
-                // No more pieces available
-            }
-            else
-            {
-                // Successfully started a new piece
-            }
-
-            free(peer_pieces);
-        }
-    }
-
-    // Continue requesting blocks
-    request_blocks_from_peers(ctx);
-}
-
-<*
- Callback for peer message handling.
-*>
-fn void on_download_peer_message(peer_connection::PeerConnection* peer,
-                                  peer_wire::Message* msg,
-                                  char[4] ip, ushort port,
-                                  void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    // Get peer from pool
-    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(ip, port);
-    if (catch err = peer_opt)
-    {
-        io::eprintfn("  [ERROR] Message from unknown peer %d.%d.%d.%d:%d",
-                     ip[0], ip[1], ip[2], ip[3], port);
-        return;
-    }
-    peer_pool::TorrentPeer* peer_info = peer_opt;
-
-    // Debug: log received message type
-    io::printfn("  [DEBUG] Received message type %d from peer %d.%d.%d.%d:%d",
-                (int)msg.type, ip[0], ip[1], ip[2], ip[3], port);
-
-    switch (msg.type)
-    {
-        case peer_wire::MessageType.BITFIELD:
-            io::printfn("  [DEBUG] === BITFIELD HANDLER ENTERED ===");
-            // Peer sent their bitfield - update piece availability
-            if (msg.payload.len > 0)
-            {
-                peer_info.received_bitfield = true;
-
-                // Convert bitfield bytes to bool array
-                usz num_pieces = (usz)((ctx.torrent.info.length + ctx.torrent.info.piece_length - 1) /
-                                       ctx.torrent.info.piece_length);
-                bool[] has_pieces = mem::new_array(bool, num_pieces);
-
-                // Parse bitfield
-                for (usz i = 0; i < num_pieces; i++)
-                {
-                    usz byte_index = i / 8;
-                    usz bit_index = 7 - (i % 8);
-                    if (byte_index < msg.payload.len)
-                    {
-                        has_pieces[i] = (msg.payload[byte_index] & (1 << bit_index)) != 0;
-                    }
-                }
-
-                // Update download manager
-                ctx.dm.update_peer_bitfield(has_pieces)!!;
-
-                io::printfn("  Peer %d.%d.%d.%d:%d sent bitfield",
-                            ip[0], ip[1], ip[2], ip[3], port);
-
-                // Count how many pieces the peer has
-                int peer_piece_count = 0;
-                for (usz i = 0; i < num_pieces; i++)
-                {
-                    if (has_pieces[i]) peer_piece_count++;
-                }
-                io::printfn("    Peer has %d/%d pieces", peer_piece_count, (int)num_pieces);
-
-                // Start piece downloads based on peer availability
-                // Try to fill all available download slots (up to max_concurrent_pieces)
-                int pieces_started = 0;
-                for (int i = 0; i < 5; i++)
-                {
-                    if (catch excuse = ctx.dm.start_piece_download(has_pieces))
-                    {
-                        // No more pieces to download or no slots available
-                        break;
-                    }
-                    pieces_started++;
-                }
-
-                if (pieces_started > 0)
-                {
-                    io::printfn("    Started downloading %d piece%s",
-                               pieces_started, pieces_started == 1 ? "" : "s");
-                }
-
-                free(has_pieces);
-
-                // Check if peer is a seed
-                if (peer_piece_count == (int)num_pieces)
-                {
-                    ctx.peer_pool.mark_peer_seed(ip, port)!!;
-                }
-            }
-
-        case peer_wire::MessageType.HAVE:
-            // Peer has a new piece
-            if (msg.payload.len >= 4)
-            {
-                uint piece_index = peer_wire::read_u32_be(msg.payload, 0);
-                ctx.dm.peer_has_piece(piece_index)!!;
-            }
-
-        case peer_wire::MessageType.PIECE:
-            // Received a piece block!
-            peer_wire::PieceMsg? piece_msg = peer_wire::decode_piece(msg.payload);
-            if (catch err = piece_msg) return;
-
-            // Add block to download manager
-            ctx.dm.receive_block(piece_msg.index, piece_msg.begin, piece_msg.block)!!;
-
-            // Track download statistics
-            ctx.peer_pool.update_peer_stats(ip, port, (ulong)piece_msg.block.len, 0)!!;
-
-            // Check if piece is complete
-            usz total_blocks, received_blocks;
-            if (catch excuse = ctx.dm.get_piece_progress(piece_msg.index, &total_blocks, &received_blocks))
-            {
-                // Piece not downloading, ignore
-            }
-            else if (received_blocks == total_blocks)
-            {
-                // Piece complete - verify and write to disk
-                ctx.dm.complete_piece(piece_msg.index, &on_download_piece_complete, ctx);
-            }
-
-            // Keep the request pipeline full
-            request_blocks_from_peers(ctx);
-
-        case peer_wire::MessageType.UNCHOKE:
-            io::printfn("  Peer %d.%d.%d.%d:%d unchoked us",
-                        ip[0], ip[1], ip[2], ip[3], port);
-
-            // If we haven't received BITFIELD yet, assume peer has all pieces
-            if (!peer_info.received_bitfield)
-            {
-                io::printfn("    No BITFIELD received - assuming peer has all pieces");
-
-                usz num_pieces = (usz)((ctx.torrent.info.length + ctx.torrent.info.piece_length - 1) /
-                                       ctx.torrent.info.piece_length);
-                bool[] has_all_pieces = mem::new_array(bool, num_pieces);
-
-                // Set all pieces to true (assume peer has everything)
-                for (usz i = 0; i < num_pieces; i++)
-                {
-                    has_all_pieces[i] = true;
-                }
-
-                // Update download manager
-                ctx.dm.update_peer_bitfield(has_all_pieces)!!;
-
-                // Start piece downloads
-                int pieces_started = 0;
-                for (int i = 0; i < 5; i++)
-                {
-                    if (catch excuse = ctx.dm.start_piece_download(has_all_pieces))
-                    {
-                        break;
-                    }
-                    pieces_started++;
-                }
-
-                if (pieces_started > 0)
-                {
-                    io::printfn("    Started downloading %d piece%s",
-                               pieces_started, pieces_started == 1 ? "" : "s");
-                }
-
-                free(has_all_pieces);
-                peer_info.received_bitfield = true;  // Mark as handled
-
-                // Mark as seed if has all pieces
-                ctx.peer_pool.mark_peer_seed(ip, port)!!;
-            }
-
-            // Now we can start requesting blocks!
-            io::printfn("    Starting block requests...");
-            request_blocks_from_peers(ctx);
-
-        case peer_wire::MessageType.CHOKE:
-            io::printfn("  Peer %d.%d.%d.%d:%d choked us",
-                        ip[0], ip[1], ip[2], ip[3], port);
-
-        default:
-            // Ignore other message types for now
-    }
-}
-
-<*
- Request blocks from ready peers.
-*>
-fn void request_blocks_from_peers(DownloadContext* ctx)
-{
-    // Try to fill the pipeline with block requests
-    int requests_sent = 0;
-    for (int attempts = 0; attempts < 100; attempts++)
-    {
-        // Get next block to request
-        block_manager::BlockRequest? req = ctx.dm.get_next_block_request();
-        if (catch err = req)
-        {
-            // No more blocks available right now
-            if (requests_sent == 0)
-            {
-                io::printfn("  [DEBUG] No blocks available to request");
-            }
-            break;
-        }
-
-        // Find a ready peer to request from (iterate through peer pool)
-        bool requested = false;
-        usz total_peers, candidates, connecting, connected;
-        ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-
-        // Get all peers from pool and find one that's READY
-        for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
-        {
-            peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
-            if (peer_info.connection &&
-                peer_info.state == peer_pool::PeerState.CONNECTED &&
-                peer_info.handshake_ok)
-            {
-                // Send REQUEST message
-                if (requests_sent == 0)
-                {
-                    io::printfn("  [DEBUG] First request: piece=%d offset=%d length=%d",
-                               req.piece_index, req.offset, req.length);
-                }
-                peer_info.connection.send_request(req.piece_index, req.offset, req.length)!!;
-                ctx.dm.mark_block_requested(req.piece_index, req.offset)!!;
-                requests_sent++;
-                requested = true;
-                break;
-            }
-        }
-
-        if (!requested) break;
-    }
-
-    if (requests_sent > 0)
-    {
-        io::printfn("  Sent %d block requests", requests_sent);
-    }
-}
-
-<*
- Callback when peer successfully connects.
-*>
-fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
-                                    char[4] ip, ushort port,
-                                    void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    io::printfn("  Peer %d.%d.%d.%d:%d connected and ready",
-                ip[0], ip[1], ip[2], ip[3], port);
-
-    // Get peer from pool
-    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(ip, port);
-    if (catch err = peer_opt) return;
-
-    peer_pool::TorrentPeer* peer_info = peer_opt;
-    peer_info.handshake_ok = true;
-
-    // Send INTERESTED message to the peer
-    peer.send_interested()!!;
-    io::printfn("  Sent INTERESTED to peer %d.%d.%d.%d:%d",
-                ip[0], ip[1], ip[2], ip[3], port);
-
-    // DON'T start piece downloads yet - wait for BITFIELD first
-    // The BITFIELD message handler will start downloads
-}
-
-<*
- Callback when peer disconnects.
-*>
-fn void on_download_peer_disconnected(char[4] ip, ushort port,
-                                       bool was_error,
-                                       void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    io::printfn("  Peer %d.%d.%d.%d:%d disconnected%s",
-                ip[0], ip[1], ip[2], ip[3], port,
-                was_error ? " (error)" : "");
-
-    // Peer pool automatically tries to replace failed connections
-    // Check if download is complete
-    if (ctx.dm.is_complete())
-    {
-        io::printfn("");
-        io::printfn("Download complete!");
-        on_complete_download(ctx);
-        return;
-    }
-
-    // Check if all peers are disconnected
-    usz total_peers, candidates, connecting, connected;
-    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-
-    if (connected == 0 && connecting == 0)
-    {
-        io::printfn("");
-        io::printfn("All peers disconnected - waiting for periodic announce to find more peers...");
-        // Note: The announce_timer will automatically bring fresh peers
-        // No manual re-announce needed - the timer handles it
-    }
-}
-
-<*
- Callback for tracker announce completion.
-*>
-fn void on_download_tracker_complete(tracker::TrackerResponse* response, int status, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-    ctx.tracker_completed = true;
-    ctx.tracker_response = response;
-
-    if (status != 0 || !response)
-    {
-        String error_desc = tracker_error_string(status);
-        io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, status);
-        ctx.exit_code = 1;
-        ctx.download_complete = true;
-        return;
-    }
-
-    if (response.failure_reason.len > 0)
-    {
-        io::eprintfn("Tracker error: %s", response.failure_reason);
-        ctx.exit_code = 1;
-        ctx.download_complete = true;
-        return;
-    }
-
-    int num_peers = (int)response.peers.len;
-    if (num_peers == 0)
-    {
-        io::printfn("No peers returned by tracker - will retry later");
-        // Don't stop download, just wait for next re-announce
-        return;
-    }
-
-    io::printfn("Tracker returned %d peers", num_peers);
-
-    // Add all peers to peer pool (Phase 1 integration)
-    ctx.peer_pool.add_peers_from_tracker(response.peers);
-
-    // Show peer pool stats
-    usz total_peers, candidates, connecting, connected;
-    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-    io::printfn("  Peer pool now has %d total peers (%d candidates, %d connecting, %d connected)",
-                total_peers, candidates, connecting, connected);
-
-    // Automatically connect to best peers (Phase 6 - peer pool manages connections)
-    io::printfn("Connecting to best peers...");
-    ctx.peer_pool.connect_to_peers();
-
-    // Show updated stats
-    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-    io::printfn("  Started %d new connections (total: %d connecting)", connecting - connected, connecting);
-
-    io::printfn("");
-    io::printfn("Download in progress...");
-    io::printfn("(Download will continue until complete or Ctrl+C)");
-    io::printfn("");
-}
-
-<*
- Callback for each piece verification during resume check.
-*>
-fn void on_verify_existing_piece(uint piece_index, bool verified, int status, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-    ctx.pieces_verified_count++;
-
-    if (status == 0 && verified)
-    {
-        // Piece exists and is valid - mark as complete
-        ctx.dm.picker.mark_complete(piece_index)!!;
-    }
-
-    // Show progress every 1000 pieces
-    if (ctx.pieces_verified_count % 1000 == 0)
-    {
-        io::printfn("  Verified %d/%d pieces...", ctx.pieces_verified_count, ctx.num_pieces);
-    }
-
-    // All pieces verified?
-    if (ctx.pieces_verified_count == ctx.num_pieces)
-    {
-        on_all_pieces_verified(ctx);
-    }
-}
-
-<*
- Verify all existing pieces on disk (resume support).
- Calls verify_piece() for each piece asynchronously.
-*>
-fn void verify_all_existing_pieces_async(DownloadContext* ctx)
-{
-    if (ctx.num_pieces == 0)
-    {
-        // No pieces to verify, start announce immediately
-        on_all_pieces_verified(ctx);
-        return;
-    }
-
-    // Verify each piece
-    for (uint i = 0; i < ctx.num_pieces; i++)
-    {
-        // Get expected hash for this piece
-        char[20] expected_hash;
-        usz hash_offset = (usz)i * 20;
-        for (usz j = 0; j < 20; j++)
-        {
-            expected_hash[j] = ctx.torrent.info.pieces[hash_offset + j];
-        }
-
-        // Verify piece asynchronously
-        ctx.sm.verify_piece(i, expected_hash, &on_verify_existing_piece, ctx);
-    }
-}
-
-<*
- Retry timer callback - retries tracker announce after backoff delay.
-*>
-fn void on_announce_retry_timer(async::timer::Timer* timer, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    io::printfn("  Retrying tracker announce (attempt %d)...", ctx.announce_retry_count + 1);
-
-    // Close retry timer
-    async::timer::close(timer);
-    ctx.retry_timer = null;
-
-    // Retry announce
-    tracker::announce(ctx.loop, ctx.torrent, 6881,
-                      ctx.initial_announce_done ? "" : "started",
-                      &on_announce_complete_with_retry, ctx);
-}
-
-<*
- Tracker announce completion callback with retry support.
- Implements exponential backoff on failure.
-*>
-fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int status, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    if (status != 0 || !response || response.failure_reason.len > 0)
-    {
-        // Failed - schedule retry with exponential backoff
-        ctx.announce_retry_count++;
-
-        // Calculate backoff: 1s, 2s, 4s, 8s, 16s, 30s (cap at 30s)
-        int backoff_ms = 1000 * (1 << (ctx.announce_retry_count - 1));
-        if (backoff_ms > 30000) backoff_ms = 30000;
-        ctx.announce_backoff_ms = backoff_ms;
-
-        if (status != 0)
-        {
-            String error_desc = tracker_error_string(status);
-            io::eprintfn("  Tracker announce failed: %s (status=%d)", error_desc, status);
-        }
-        else if (response && response.failure_reason.len > 0)
-        {
-            io::eprintfn("  Tracker error: %s", response.failure_reason);
-        }
-
-        io::printfn("  Retrying in %d seconds...", backoff_ms / 1000);
-
-        // Create retry timer (one-shot)
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
-        if (catch err = timer_opt)
-        {
-            io::eprintfn("  Failed to create retry timer - giving up");
-            ctx.download_complete = true;
-            ctx.exit_code = 1;
-            return;
-        }
-
-        ctx.retry_timer = timer_opt;
-        async::timer::start(ctx.retry_timer, (ulong)backoff_ms, 0,
-                          &on_announce_retry_timer, ctx);
-        return;
-    }
-
-    // Success - reset retry counter
-    ctx.announce_retry_count = 0;
-    ctx.initial_announce_done = true;
-
-    // Start periodic announce timer if not already running
-    if (!ctx.announce_timer && response.interval > 0)
-    {
-        ulong interval_ms = (ulong)(response.interval * 1000);
-        io::printfn("  Setting up periodic announce every %d seconds", response.interval);
-
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
-        if (catch err = timer_opt)
-        {
-            io::eprintfn("  Warning: Failed to create announce timer");
-        }
-        else
-        {
-            ctx.announce_timer = timer_opt;
-            async::timer::start(ctx.announce_timer, interval_ms, interval_ms,
-                              &on_announce_timer_tick, ctx);
-        }
-    }
-
-    // Start PEX timer if not already running (every 60 seconds)
-    if (!ctx.pex_timer)
-    {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
-        if (catch err = timer_opt)
-        {
-            io::eprintfn("  Warning: Failed to create PEX timer");
-        }
-        else
-        {
-            ctx.pex_timer = timer_opt;
-            // Start after 60 seconds, then repeat every 60 seconds
-            async::timer::start(ctx.pex_timer, 60000, 60000,
-                              &on_pex_timer_tick, ctx);
-        }
-    }
-
-    // Call existing tracker completion handler
-    on_download_tracker_complete(response, status, ctx);
-}
-
-<*
- Periodic announce timer callback - fires every interval seconds.
-*>
-fn void on_announce_timer_tick(async::timer::Timer* timer, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    if (ctx.dm.is_complete())
-    {
-        // Download complete - stop timer
-        async::timer::stop(timer);
-        return;
-    }
-
-    io::printfn("Periodic tracker re-announce...");
-
-    // Don't use retry logic for periodic announces - just try once
-    tracker::announce(ctx.loop, ctx.torrent, 6881, "",
-                      &on_download_tracker_complete, ctx);
-}
-
-<*
- PEX timer callback - sends queued PEX updates to all connected peers.
- Runs every 60 seconds per BEP 11 rate limiting.
-*>
-fn void on_pex_timer_tick(async::timer::Timer* timer, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    if (ctx.dm.is_complete())
-    {
-        // Download complete - stop timer
-        async::timer::stop(timer);
-        return;
-    }
-
-    // Send queued PEX updates to all connected peers
-    ctx.peer_pool.send_pex_updates();
-}
-
-<*
- Start tracker announce with retry support.
-*>
-fn void announce_with_retry(DownloadContext* ctx)
-{
-    ctx.announce_retry_count = 0;
-    ctx.announce_backoff_ms = 0;
-
-    tracker::announce(ctx.loop, ctx.torrent, 6881,
-                      ctx.initial_announce_done ? "" : "started",
-                      &on_announce_complete_with_retry, ctx);
-}
-
-<*
- Called when all existing pieces have been verified.
- Starts the tracker announce process.
-*>
-fn void on_all_pieces_verified(DownloadContext* ctx)
-{
-    usz total, complete, downloading;
-    ctx.dm.get_progress(&total, &complete, &downloading);
-
-    if (complete > 0)
-    {
-        double percent = (complete * 100.0) / total;
-        io::printfn("  Found %d/%d existing pieces (%.1f%%)", complete, total, percent);
-    }
-    else
-    {
-        io::printfn("  No existing pieces found - starting from scratch");
-    }
-    io::printfn("");
-
-    // Now start tracker announce
-    io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
-    announce_with_retry(ctx);
-}
-
-<*
- Callback for torrent file load completion.
-*>
-fn void on_download_load_complete(String data, int status, void* user_data)
-{
-    DownloadContext* ctx = (DownloadContext*)user_data;
-
-    if (status != 0)
-    {
-        ZString error_str = (ZString)uv::strerror(status);
-        io::eprintfn("Error loading file: %s (status=%d)", error_str, status);
-        ctx.exit_code = 1;
-        ctx.download_complete = true;
-        return;
-    }
+    char[] data = mem::new_array(char, file_size);
     defer free(data);
 
+    usz bytes_read = (usz)file.read(data)!!;
+    if (bytes_read != file_size)
+    {
+        io::eprintfn("Error: Read %d bytes but expected %d", bytes_read, file_size);
+        return 1;
+    }
+
     // Parse torrent
-    libtorrent::metainfo::TorrentFile*? torrent = libtorrent::metainfo::parse(data);
+    libtorrent::metainfo::TorrentFile*? torrent = libtorrent::metainfo::parse((String)data);
     if (catch err = torrent)
     {
         io::eprintfn("Error parsing torrent: %s", err);
-        ctx.exit_code = 1;
-        ctx.download_complete = true;
-        return;
+        return 1;
     }
 
-    ctx.torrent = torrent;
-
-    // Calculate number of pieces
+    // Calculate pieces
     uint num_pieces = (uint)((torrent.info.length + torrent.info.piece_length - 1) / torrent.info.piece_length);
     uint last_piece_length = (uint)(torrent.info.length % torrent.info.piece_length);
     if (last_piece_length == 0) last_piece_length = (uint)torrent.info.piece_length;
 
-    // Display torrent info
-    io::printfn("Name: %s", torrent.info.name);
-    io::printfn("Size: %s", format_size(torrent.info.length));
-    io::printfn("Pieces: %d x %s", num_pieces, format_size(torrent.info.piece_length));
-    io::printfn("");
+    // Initialize GUI
+    raylib_gui::UIState* ui = raylib_gui::init(
+        torrent.info.name,
+        torrent.info.length,
+        num_pieces,
+        save_path,
+        torrent.announce,
+        torrent.info.piece_length
+    );
+    if (!ui)
+    {
+        io::eprintfn("Failed to initialize GUI");
+        libtorrent::metainfo::free_torrent_file(torrent);
+        return 1;
+    }
+
+    // Set up GUI logging
+    log_outputs::LogSink log_sink;
+    log_outputs::GuiLogOutput* gui_out = mem::new(log_outputs::GuiLogOutput);
+    gui_out.ui = ui;
+    log_sink.outputs = mem::new_array(logger::LogOutput, 1);
+    log_sink.outputs[0] = gui_out;
+    logger::set_log_callback(&log_outputs::on_log_message, &log_sink);
+
+    // Create download context
+    DownloadContext ctx;
+    ctx.loop = loop;
+    ctx.torrent = torrent;
+    ctx.dm = null;
+    ctx.sm = null;
+    ctx.tracker_completed = false;
+    ctx.announce_timer = null;
+    ctx.retry_timer = null;
+    ctx.pex_timer = null;
+    ctx.keepalive_timer = null;
+    ctx.flush_timer = null;
+    ctx.announce_retry_count = 0;
+    ctx.announce_backoff_ms = 0;
+    ctx.initial_announce_done = false;
+    ctx.peer_pool = null;
+    ctx.download_complete = false;
+    ctx.exit_code = 0;
+    ctx.num_pieces = num_pieces;
+    ctx.pieces_verified_count = 0;
+    ctx.next_piece_to_verify = 0;
+    ctx.numwant = numwant;
+    ctx.save_path = save_path;
+    ctx.gui_state = ui;
+
+    // Build storage path (for multi-file torrents, append torrent name)
+    String storage_path = save_path;
+    bool need_free_path_gui = false;
+    if (torrent.info.is_multi_file)
+    {
+        DString path_builder_gui;
+        path_builder_gui.append(save_path);
+        if (save_path.len > 0 && save_path[save_path.len - 1] != '/')
+        {
+            path_builder_gui.append("/");
+        }
+        path_builder_gui.append(torrent.info.name);
+        storage_path = path_builder_gui.copy_str(mem);
+        need_free_path_gui = true;
+    }
+    defer if (need_free_path_gui) free(storage_path);
 
     // Create storage manager
     storage_manager::StorageManager? sm_opt = storage_manager::create(
-        ctx.loop, &torrent.info, ctx.save_path);
+        loop, &torrent.info, storage_path);
     if (catch err = sm_opt)
     {
-        io::eprintfn("Error creating storage manager: %s", err);
-        ctx.exit_code = 1;
-        ctx.download_complete = true;
-        return;
+        raylib_gui::add_log(ui, "Error creating storage manager");
+        raylib_gui::free(ui);
+        libtorrent::metainfo::free_torrent_file(torrent);
+        free(log_sink.outputs);
+        free(gui_out);
+        return 1;
     }
     ctx.sm = mem::new(storage_manager::StorageManager);
     *ctx.sm = sm_opt;
@@ -1859,7 +1121,7 @@ fn void on_download_load_complete(String data, int status, void* user_data)
     // Create download manager
     ctx.dm = mem::new(download_manager::DownloadManager);
     *ctx.dm = download_manager::create(
-        ctx.loop,
+        loop,
         num_pieces,
         (uint)torrent.info.piece_length,
         last_piece_length,
@@ -1868,98 +1130,137 @@ fn void on_download_load_complete(String data, int status, void* user_data)
         16384  // 16KB blocks
     );
 
-    // Store num_pieces for resume verification
-    ctx.num_pieces = num_pieces;
-    ctx.pieces_verified_count = 0;
-
-    // Create peer pool (Phase 1 - storage only, Phase 3 will add connection management)
+    // Create peer pool
     char[20] our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
-        .max_peerlist_size = 1000,     // Track up to 1000 peers (vs old limit of 10)
-        .max_active_connections = 25,   // Future: Phase 3 will manage connections
-        .max_failcount = 3,             // Future: Phase 3 will track failures
-        .min_reconnect_time = 60        // Future: Phase 3 will handle retries
+        .max_peerlist_size = 1000,
+        .max_active_connections = 25,
+        .max_failcount = 3,
+        .min_reconnect_time = 60
     };
-    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
-    io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);
+    ctx.peer_pool = peer_pool::create(loop, pool_config, &torrent.info_hash, &our_peer_id);
 
-    // Set peer pool callbacks (Phase 6 integration)
+    // Set peer pool callbacks
     ctx.peer_pool.set_callbacks(
-        &on_download_peer_connected,
-        &on_download_peer_message,
-        &on_download_peer_disconnected,
-        ctx
+        &download_session::on_download_peer_connected,
+        &download_session::on_download_peer_message,
+        &download_session::on_download_peer_disconnected,
+        &ctx
     );
-    io::printfn("");
 
-    // Check for existing pieces (resume support)
-    io::printfn("Checking for existing pieces...");
-    verify_all_existing_pieces_async(ctx);
-}
+    // Initialize storage manager (create directories, open files)
+    raylib_gui::add_log(ui, "Initializing storage...");
+    ctx.sm.initialize(&download_session::on_storage_initialized, &ctx);
 
-// ============================================================================
-// Log Output Implementations
-// ============================================================================
-
-// File Log Output - Writes log messages to a file.
-struct FileLogOutput (logger::LogOutput)
-{
-    std::io::File file;
-    bool is_open;
-}
-
-fn void FileLogOutput.write_log(FileLogOutput* self, logger::LogLevel level, String message) @dynamic
-{
-    if (self.is_open)
+    // Main GUI loop - run until window closes or download completes
+    int frame_count = 0;
+    while (!ctx.download_complete && raylib_gui::run_frame(ui, loop))
     {
-        DString buf;
-        buf.appendf("[%s] %s\n", logger::level_to_string(level), message);
-        self.file.write(buf.str_view())!!;
-        self.file.flush()!!;  // Ensure logs are written immediately
-    }
-}
+        // Event loop and rendering handled in run_frame()
 
-fn void FileLogOutput.close(FileLogOutput* self) @dynamic
-{
-    if (self.is_open)
+        // Update peer list periodically (every 60 frames = ~1 second)
+        frame_count++;
+        if (frame_count % 60 == 0 && ctx.peer_pool)
+        {
+            peer_pool::PeerDisplayInfo[] peer_info = ctx.peer_pool.get_peer_display_info();
+            raylib_gui::update_peer_list(ui, peer_info);
+        }
+    }
+
+    // Cleanup - stop all async operations first
+    io::printfn("Cleaning up...");
+
+    // Stop and close timers (prevents callbacks from firing during cleanup)
+    io::printfn("Stopping timers...");
+    if (ctx.announce_timer)
     {
-        self.file.close()!!;
-        self.is_open = false;
+        async::timer::stop(ctx.announce_timer);
+        async::timer::close(ctx.announce_timer);
     }
-}
-
-// Stderr Log Output - Writes log messages to stderr.
-struct StderrLogOutput (logger::LogOutput)
-{
-    char _dummy;  // C3 doesn't allow zero-sized structs
-}
-
-fn void StderrLogOutput.write_log(StderrLogOutput* self, logger::LogLevel level, String message) @dynamic
-{
-    io::eprintfn("[%s] %s", logger::level_to_string(level), message);
-}
-
-fn void StderrLogOutput.close(StderrLogOutput* self) @dynamic
-{
-    // No cleanup needed for stderr
-}
-
-// Log sink configuration for routing log messages to multiple destinations.
-struct LogSink
-{
-    logger::LogOutput[] outputs;  // Array of log output interfaces
-}
-
-// Log callback - routes library log messages to all registered outputs.
-fn void on_log_message(logger::LogLevel level, String message, void* user_data)
-{
-    LogSink* sink = (LogSink*)user_data;
-
-    // Write to all registered log outputs
-    foreach (output : sink.outputs)
+    if (ctx.retry_timer)
     {
-        output.write_log(level, message);
+        async::timer::stop(ctx.retry_timer);
+        async::timer::close(ctx.retry_timer);
     }
+    if (ctx.pex_timer)
+    {
+        async::timer::stop(ctx.pex_timer);
+        async::timer::close(ctx.pex_timer);
+    }
+    if (ctx.keepalive_timer)
+    {
+        async::timer::stop(ctx.keepalive_timer);
+        async::timer::close(ctx.keepalive_timer);
+    }
+    if (ctx.flush_timer)
+    {
+        async::timer::stop(ctx.flush_timer);
+        async::timer::close(ctx.flush_timer);
+    }
+
+    // Disconnect all peers before freeing peer pool
+    io::printfn("Gracefully disconnecting peers...");
+    if (ctx.peer_pool)
+    {
+        ctx.peer_pool.disconnect_all_gracefully();
+    }
+
+    // Process any remaining async cleanup callbacks
+    // Keep running until all handles are closed (with limit to prevent infinite loop)
+    io::printfn("Processing pending events...");
+    int cleanup_iterations = 0;
+    while (loop.is_alive() && cleanup_iterations < 200)
+    {
+        loop.run_nowait();
+        cleanup_iterations++;
+    }
+    io::printfn("Processed %d cleanup iterations", cleanup_iterations);
+
+    // Now safe to free resources
+    io::printfn("Freeing peer pool...");
+    if (ctx.peer_pool)
+    {
+        peer_pool::free(ctx.peer_pool);
+    }
+
+    io::printfn("Freeing download manager...");
+    if (ctx.dm)
+    {
+        download_manager::free(ctx.dm);
+        free(ctx.dm);
+    }
+
+    io::printfn("Freeing storage manager...");
+    if (ctx.sm)
+    {
+        storage_manager::free(ctx.sm);
+        free(ctx.sm);
+    }
+
+    io::printfn("Freeing torrent...");
+    if (ctx.torrent)
+    {
+        libtorrent::metainfo::free_torrent_file(ctx.torrent);
+    }
+
+    // Note: tracker_response is managed by the tracker module and already freed
+    // Don't try to free it here
+
+    // Cleanup logging
+    io::printfn("Cleaning up logging...");
+    logger::flush_logs();
+    if (log_sink.outputs.len > 0)
+    {
+        free(log_sink.outputs);
+    }
+    free(gui_out);
+
+    // Free GUI (this also closes the window)
+    io::printfn("Freeing GUI...");
+    raylib_gui::free(ui);
+
+    io::printfn("Cleanup complete");
+    return ctx.exit_code;
 }
 
 // ============================================================================
@@ -1975,18 +1276,26 @@ fn void on_log_message(logger::LogLevel level, String message, void* user_data)
  @param numwant : "Number of peers to request from tracker"
  @param log_file_path : "Path to log file (empty string = no file logging)"
  @param debug_mode : "Enable debug output to stderr"
+ @param gui_mode : "Launch graphical user interface"
  @return "Exit code (0 = success, 1 = error)"
 *>
 fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
-                    String save_path, int numwant, String log_file_path, bool debug_mode)
+                    String save_path, int numwant, String log_file_path, bool debug_mode, bool gui_mode)
 {
+    // GUI mode - launch graphical interface
+    if (gui_mode)
+    {
+        return cmd_download_gui(loop, torrent_path, save_path, numwant);
+    }
+
+    // Console mode
     io::printfn("=== BitTorrent Download ===");
     io::printfn("");
 
     // Set up multi-output logging system
-    LogSink log_sink;
-    FileLogOutput* file_out = null;
-    StderrLogOutput* stderr_out = null;
+    log_outputs::LogSink log_sink;
+    log_outputs::FileLogOutput* file_out = null;
+    log_outputs::StderrLogOutput* stderr_out = null;
 
     // Count outputs
     usz num_outputs = 0;
@@ -2002,7 +1311,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         // Add file output if requested
         if (log_file_path.len > 0)
         {
-            file_out = mem::new(FileLogOutput);
+            file_out = mem::new(log_outputs::FileLogOutput);
             file_out.file = file::open(log_file_path, "w")!!;
             file_out.is_open = true;
             log_sink.outputs[output_idx] = file_out;
@@ -2013,14 +1322,14 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         // Add stderr output if requested
         if (debug_mode)
         {
-            stderr_out = mem::new(StderrLogOutput);
+            stderr_out = mem::new(log_outputs::StderrLogOutput);
             log_sink.outputs[output_idx] = stderr_out;
             output_idx++;
             io::printfn("Debug logging to stderr enabled");
         }
 
         // Set callback
-        logger::set_log_callback(&on_log_message, &log_sink);
+        logger::set_log_callback(&log_outputs::on_log_message, &log_sink);
     }
 
     DownloadContext ctx;
@@ -2033,6 +1342,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.announce_timer = null;
     ctx.retry_timer = null;
     ctx.pex_timer = null;
+    ctx.keepalive_timer = null;
+    ctx.flush_timer = null;
     ctx.announce_retry_count = 0;
     ctx.announce_backoff_ms = 0;
     ctx.initial_announce_done = false;
@@ -2041,6 +1352,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.exit_code = 0;
     ctx.num_pieces = 0;
     ctx.pieces_verified_count = 0;
+    ctx.next_piece_to_verify = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
 
@@ -2066,7 +1378,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // Load torrent file async
     torrent_loader::load_file_async(loop, torrent_path,
-                                     &on_download_load_complete, &ctx);
+                                     &download_session::on_download_load_complete, &ctx);
 
     // Run event loop - blocks until download completes or error
     // The loop exits naturally when all handles are closed

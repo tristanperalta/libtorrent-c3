@@ -705,6 +705,18 @@ fn int fs_read(Loop* loop, Fs* req, int file, Buf* bufs, uint nbufs, long offset
 fn int fs_write(Loop* loop, Fs* req, int file, Buf* bufs, uint nbufs, long offset, FsCb cb) @extern("uv_fs_write");
 
 <*
+ Sync file data to disk asynchronously.
+ Ensures all written data is flushed from OS buffers to physical storage.
+
+ @param loop : "Event loop"
+ @param req : "Filesystem request"
+ @param file : "File descriptor to sync"
+ @param cb : "Completion callback"
+ @return "0 on success, negative error code on failure"
+*>
+fn int fs_fsync(Loop* loop, Fs* req, int file, FsCb cb) @extern("uv_fs_fsync");
+
+<*
  Close a file asynchronously.
 
  @param loop : "Event loop"

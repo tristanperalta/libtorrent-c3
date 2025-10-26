@@ -1,4 +1,4 @@
-module libtorrent::async::file::test;
+module async::file::test;
 
 import async::file;
 import async::event_loop;

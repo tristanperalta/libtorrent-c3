@@ -811,3 +811,140 @@ fn void test_last_piece_shorter() @test
     }
     assert(false, "Should find last piece download");
 }
+
+// ============================================================================
+// Regression Tests
+// ============================================================================
+
+<*
+ * Test starting piece downloads immediately after empty verification.
+ * Regression test for the scenario where:
+ * 1. All pieces fail verification (new download)
+ * 2. Peer sends BITFIELD with all pieces
+ * 3. Try to start piece downloads
+ *
+ * This was failing with NO_PIECES_TO_REQUEST because availability was 0.
+ *>
+fn void test_start_piece_after_empty_verification() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    // Create manager with realistic number of pieces (like Fedora ISO)
+    usz num_pieces = 9150;
+    char[] hashes = mem::new_array(char, num_pieces * 20);
+    defer free(hashes);
+    for (usz i = 0; i < hashes.len; i++)
+    {
+        hashes[i] = (char)i;
+    }
+
+    download_manager::DownloadManager manager = download_manager::create(
+        &loop, (uint)num_pieces, 262144, 262144, hashes, 5, 16384);
+    defer download_manager::free(&manager);
+
+    // Verify initial state (all pieces should be FREE, availability=0)
+    assert(manager.picker.pieces_complete == 0, "No pieces should be complete");
+    assert(manager.picker.pieces_downloading == 0, "No pieces should be downloading");
+    for (usz i = 0; i < 5; i++)
+    {
+        assert(manager.picker.pieces[i].availability == 0,
+               "Pieces should have 0 availability initially");
+    }
+
+    // Peer sends BITFIELD - has all pieces (like a seed)
+    bool[] peer_pieces = mem::new_array(bool, num_pieces);
+    defer free(peer_pieces);
+    for (usz i = 0; i < num_pieces; i++)
+    {
+        peer_pieces[i] = true;
+    }
+
+    // Update availability
+    manager.update_peer_bitfield(peer_pieces)!!;
+
+    // Verify availability was updated
+    for (usz i = 0; i < 5; i++)
+    {
+        assert(manager.picker.pieces[i].availability == 1,
+               "Pieces should have availability 1 after BITFIELD");
+    }
+
+    // Start piece downloads - THIS SHOULD SUCCEED (was failing before)
+    for (usz i = 0; i < 5; i++)
+    {
+        fault? result = manager.start_piece_download(peer_pieces);
+        if (catch excuse = result)
+        {
+            if (i == 0)
+            {
+                // First piece should always succeed
+                assert(false, "First piece download should succeed");
+            }
+            // Later pieces may fail if slots are full (that's OK)
+            break;
+        }
+    }
+
+    // At least one piece should have started
+    usz active_count = 0;
+    for (usz i = 0; i < manager.max_concurrent_pieces; i++)
+    {
+        if (manager.active_downloads[i].active) active_count++;
+    }
+    assert(active_count > 0, "Should have started at least one piece download");
+}
+
+<*
+ * Test that download slots can be filled incrementally as peers connect.
+ *>
+fn void test_fill_download_slots_incrementally() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[100] hashes;
+    download_manager::DownloadManager manager = download_manager::create(
+        &loop, 5, 262144, 262144, hashes[..], 5, 16384);  // 5 concurrent slots
+    defer download_manager::free(&manager);
+
+    // First peer connects with all pieces
+    bool[5] peer1_pieces = {true, true, true, true, true};
+    manager.update_peer_bitfield(peer1_pieces[..])!!;
+
+    // Start 2 pieces from first peer
+    manager.start_piece_download(peer1_pieces[..])!!;
+    manager.start_piece_download(peer1_pieces[..])!!;
+
+    usz active_count = 0;
+    for (usz i = 0; i < 5; i++)
+    {
+        if (manager.active_downloads[i].active) active_count++;
+    }
+    assert(active_count == 2, "Should have 2 active downloads");
+
+    // Second peer connects (also has all pieces)
+    bool[5] peer2_pieces = {true, true, true, true, true};
+    manager.update_peer_bitfield(peer2_pieces[..])!!;
+
+    // Start 3 more pieces from second peer
+    manager.start_piece_download(peer2_pieces[..])!!;
+    manager.start_piece_download(peer2_pieces[..])!!;
+    manager.start_piece_download(peer2_pieces[..])!!;
+
+    active_count = 0;
+    for (usz i = 0; i < 5; i++)
+    {
+        if (manager.active_downloads[i].active) active_count++;
+    }
+    assert(active_count == 5, "Should have 5 active downloads (all slots full)");
+
+    // Try to start one more - should fail (all slots full)
+    fault? result = manager.start_piece_download(peer2_pieces[..]);
+    if (catch excuse = result)
+    {
+        // Expected - all slots full
+        return;
+    }
+    assert(false, "Should fail when all slots are full");
+}

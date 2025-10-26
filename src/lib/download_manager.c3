@@ -274,6 +274,29 @@ fn fault? DownloadManager.start_piece_download(&self, bool[] peer_pieces) @publi
 *>
 fn block_manager::BlockRequest? DownloadManager.get_next_block_request(&self) @public
 {
+    // Debug: Show state of active downloads on first call
+    static bool logged_once = false;
+    if (!logged_once)
+    {
+        usz active_count = 0;
+        for (usz i = 0; i < self.max_concurrent_pieces; i++)
+        {
+            if (self.active_downloads[i].active)
+            {
+                active_count++;
+                usz total_blocks, received_blocks;
+                self.active_downloads[i].blocks.get_progress(&total_blocks, &received_blocks);
+                io::printfn("    [DM] Slot %d: piece=%d, blocks=%d/%d",
+                           i, self.active_downloads[i].piece_index, received_blocks, total_blocks);
+            }
+        }
+        if (active_count == 0)
+        {
+            io::printfn("    [DM] No active download slots!");
+        }
+        logged_once = true;
+    }
+
     // Try each active download
     for (usz i = 0; i < self.max_concurrent_pieces; i++)
     {

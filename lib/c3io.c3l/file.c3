@@ -46,6 +46,7 @@ alias WriteCallback = fn void(int bytes_written, int status, void* user_data);
 alias CloseCallback = fn void(int status, void* user_data);
 alias StatCallback = fn void(uv::FileStat* stat, int status, void* user_data);
 alias TruncateCallback = fn void(int status, void* user_data);
+alias FsyncCallback = fn void(int status, void* user_data);
 alias MkdirCallback = fn void(int status, void* user_data);
 
 // Request context structures
@@ -90,6 +91,13 @@ struct TruncateContext
 {
     uv::Fs req;
     TruncateCallback cb;
+    void* user_data;
+}
+
+struct FsyncContext
+{
+    uv::Fs req;
+    FsyncCallback cb;
     void* user_data;
 }
 
@@ -187,6 +195,20 @@ fn void on_stat_internal(uv::Fs* req)
 fn void on_truncate_internal(uv::Fs* req)
 {
     TruncateContext* ctx = (TruncateContext*)req;
+    int result = (int)uv::fs_req_result(req);
+
+    if (ctx.cb)
+    {
+        ctx.cb(result, ctx.user_data);
+    }
+
+    uv::fs_req_cleanup(req);
+    free(ctx);
+}
+
+fn void on_fsync_internal(uv::Fs* req)
+{
+    FsyncContext* ctx = (FsyncContext*)req;
     int result = (int)uv::fs_req_result(req);
 
     if (ctx.cb)
@@ -387,6 +409,35 @@ fn void ftruncate(event_loop::EventLoop* loop, File file, long size,
     ctx.user_data = user_data;
 
     int result = uv::fs_ftruncate(loop.loop, &ctx.req, (int)file, size, &on_truncate_internal);
+
+    if (result < 0)
+    {
+        // Immediate error
+        if (callback)
+        {
+            callback(result, user_data);
+        }
+        free(ctx);
+    }
+}
+
+<*
+ Sync file data to disk asynchronously.
+ Ensures all written data is flushed from OS buffers to physical storage.
+
+ @param loop : "Event loop"
+ @param file : "File descriptor to sync"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
+*>
+fn void fsync(event_loop::EventLoop* loop, File file,
+              FsyncCallback callback, void* user_data) @public
+{
+    FsyncContext* ctx = mem::new(FsyncContext);
+    ctx.cb = callback;
+    ctx.user_data = user_data;
+
+    int result = uv::fs_fsync(loop.loop, &ctx.req, (int)file, &on_fsync_internal);
 
     if (result < 0)
     {

@@ -7,6 +7,7 @@ import libtorrent::peer_connection;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import libtorrent::pex;
+import libtorrent::logger;
 import std::io;
 import std::time;
 import std::sort;
@@ -97,6 +98,21 @@ struct TorrentPeer
     bool from_tracker;           // Did we get this peer from tracker?
 }
 
+<*
+ Peer display information for GUI.
+ Contains formatted/calculated data ready for display.
+*>
+struct PeerDisplayInfo
+{
+    String ip_address;           // Formatted IP (e.g., "192.168.1.1")
+    ushort port;                 // Port number
+    String client;               // Client name (e.g., "μTorrent 1.7.7")
+    float percent_complete;      // Percent of torrent this peer has (0.0-100.0)
+    float download_speed;        // Current download speed from peer (bytes/sec)
+    float upload_speed;          // Current upload speed to peer (bytes/sec)
+    String state;                // Connection state as string
+}
+
 // Callbacks
 alias PeerConnectedCallback = fn void(peer_connection::PeerConnection* peer,
                                        common::Ipv4Addr ip, ushort port, void* user_data);
@@ -122,6 +138,7 @@ struct PeerPool
 
     // Phase 3: Connection management
     usz num_active_connections;     // Current number of active connections
+    bool shutting_down;             // Flag to prevent reconnection during cleanup
 
     // Torrent info (needed for peer connections)
     common::InfoHash info_hash;   // Torrent info hash
@@ -280,6 +297,7 @@ fn PeerPool* create(event_loop::EventLoop* loop,
 
     // Initialize connection count (Phase 3)
     pool.num_active_connections = 0;
+    pool.shutting_down = false;
 
     // No callbacks yet
     pool.on_connected = null;
@@ -298,6 +316,14 @@ fn PeerPool* create(event_loop::EventLoop* loop,
 fn void free(PeerPool* pool) @public
 {
     if (!pool) return;
+
+    // Set shutdown flag to prevent reconnection attempts during cleanup
+    pool.shutting_down = true;
+
+    // Clear callbacks to prevent user notifications during cleanup
+    pool.on_connected = null;
+    pool.on_message = null;
+    pool.on_disconnected = null;
 
     // Disconnect all active connections (Phase 3)
     pool.disconnect_all();
@@ -449,6 +475,11 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             peer_info.state = PeerState.DISCONNECTED;
             pool.num_active_connections--;
 
+            // Don't call close() from here - it causes recursion since close()
+            // triggers this callback. The peer will be freed by disconnect_all()
+            // or when the connection object is freed.
+            peer_info.connection = null;
+
             if (pool.on_disconnected)
             {
                 pool.on_disconnected(peer_info.ip, peer_info.port, true, pool.user_data);
@@ -457,8 +488,11 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             // Broadcast this peer drop to all other connected peers via PEX
             broadcast_pex_update(pool, peer_info.ip, peer_info.port, false);
 
-            // Try to replace this connection
-            pool.connect_to_peers();
+            // Try to replace this connection (unless we're shutting down)
+            if (!pool.shutting_down)
+            {
+                pool.connect_to_peers();
+            }
             return;
 
         default:
@@ -510,6 +544,8 @@ fn void on_pex_message_internal(peer_connection::PeerConnection* conn,
     // Add new peers from PEX to our pool
     if (pex_msg.added.len > 0)
     {
+        logger::logf(logger::LogLevel.INFO, "[PEX] Received %d peers from peer",
+                     pex_msg.added.len);
         pool.add_peers_from_pex(pex_msg.added);
     }
 
@@ -804,6 +840,45 @@ fn void PeerPool.disconnect_all(&self) @public
 }
 
 <*
+ Gracefully disconnect all active peer connections.
+
+ Sends NOT_INTERESTED and final PEX messages to all connected peers before
+ closing connections, allowing proper protocol shutdown.
+*>
+fn void PeerPool.disconnect_all_gracefully(&self) @public
+{
+    // Count peers for logging
+    usz connected_count = 0;
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        if (self.peers[i].connection) connected_count++;
+    }
+
+    if (connected_count > 0)
+    {
+        logger::logf(logger::LogLevel.INFO,
+                     "[Shutdown] Gracefully disconnecting from %d peer%s",
+                     connected_count, connected_count == 1 ? "" : "s");
+    }
+
+    // Gracefully disconnect each peer
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        if (self.peers[i].connection)
+        {
+            peer_connection::graceful_close(self.peers[i].connection);
+            self.peers[i].connection = null;
+            self.peers[i].state = PeerState.DISCONNECTED;
+        }
+    }
+
+    self.num_active_connections = 0;
+
+    // Update candidate cache
+    self.update_candidate_cache();
+}
+
+<*
  Fill available connection slots with best candidates (Phase 3).
 
  Automatically connects to the best peers from the candidate cache until
@@ -942,6 +1017,7 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
     }
 
     // Broadcast to all connected peers that support PEX
+    usz notified_count = 0;
     for (usz i = 0; i < pool.peers.len; i++)
     {
         TorrentPeer* peer = pool.peers[i];
@@ -969,6 +1045,15 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
         {
             peer_connection::drop_pex_peer(peer.connection, ip, port);
         }
+        notified_count++;
+    }
+
+    if (notified_count > 0)
+    {
+        logger::logf(logger::LogLevel.INFO, "[PEX] Queued peer %d.%d.%d.%d:%d (%s) for %d connected peers",
+                     ip[0], ip[1], ip[2], ip[3], port,
+                     added ? "added" : "dropped",
+                     notified_count);
     }
 }
 
@@ -989,6 +1074,28 @@ fn void PeerPool.send_pex_updates(&self) @public
             // send_pex_message handles rate limiting internally
             // Ignore any errors (peer may have disconnected, etc.)
             (void)peer_connection::send_pex_message(peer.connection);
+        }
+    }
+}
+
+<*
+ Send keepalive messages to all connected peers.
+
+ Keepalive messages (BEP 3) are required to maintain connections during idle periods.
+ Most BitTorrent clients will disconnect if they don't receive any message for 2-3 minutes.
+
+ This should be called periodically (every ~120 seconds) via a timer.
+*>
+fn void PeerPool.send_keepalives(&self) @public
+{
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        TorrentPeer* peer = self.peers[i];
+
+        if (peer.state == PeerState.CONNECTED && peer.connection)
+        {
+            // Ignore any errors (peer may have disconnected, etc.)
+            (void)peer.connection.send_keepalive();
         }
     }
 }
@@ -1036,11 +1143,12 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
         }
     }
 
-    // Debug output disabled for logging mode
-    // if (rejected_count > 0)
-    // {
-    //     io::printfn("[PEX] Added %d peers, rejected %d invalid peers", added_count, rejected_count);
-    // }
+    // Log PEX peer additions
+    if (added_count > 0 || rejected_count > 0)
+    {
+        logger::logf(logger::LogLevel.INFO, "[PEX] Added %d peers, rejected %d invalid peers",
+                     added_count, rejected_count);
+    }
 
     // After adding new peers, update candidate cache and try to connect
     if (added_count > 0)
@@ -1166,4 +1274,125 @@ fn fault? PeerPool.mark_peer_seed(&self, char[4] ip, ushort port) @public
     self.update_candidate_cache();
 
     return {};
+}
+
+<*
+ Get peer display information for GUI.
+ Returns array of PeerDisplayInfo structs allocated with mem allocator.
+ Caller must free the array.
+
+ @return "Array of peer display info"
+*>
+fn PeerDisplayInfo[] PeerPool.get_peer_display_info(&self) @public
+{
+    if (self.peers.len == 0)
+    {
+        PeerDisplayInfo[] empty;
+        return empty;
+    }
+
+    // Allocate array for display info
+    PeerDisplayInfo[] info_array = mem::new_array(PeerDisplayInfo, self.peers.len);
+
+    foreach (i, peer : self.peers)
+    {
+        PeerDisplayInfo* info = &info_array[i];
+
+        // Format IP address
+        DString ip_str;
+        ip_str.appendf("%d.%d.%d.%d",
+                      peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3]);
+        info.ip_address = ip_str.copy_str(mem);
+        info.port = peer.port;
+
+        // Parse client name from peer_id
+        // Format: -XX####- where XX is 2-letter client code
+        if (peer.peer_id[0] == '-' && peer.peer_id.len >= 8)
+        {
+            // Extract client code (2 letters after '-')
+            char[2] client_code = { peer.peer_id[1], peer.peer_id[2] };
+
+            // Extract version numbers
+            char[4] version_str = { peer.peer_id[3], peer.peer_id[4], peer.peer_id[5], peer.peer_id[6] };
+
+            DString client_name;
+            // Map common client codes
+            if (client_code[0] == 'U' && client_code[1] == 'T')
+            {
+                client_name.appendf("μTorrent %c.%c.%c.%c",
+                                   version_str[0], version_str[1], version_str[2], version_str[3]);
+            }
+            else if (client_code[0] == 'l' && client_code[1] == 't')
+            {
+                client_name.appendf("libtorrent %c.%c.%c",
+                                   version_str[0], version_str[1], version_str[2]);
+            }
+            else if (client_code[0] == 'D' && client_code[1] == 'E')
+            {
+                client_name.appendf("Deluge %c.%c.%c",
+                                   version_str[0], version_str[1], version_str[2]);
+            }
+            else
+            {
+                client_name.appendf("%c%c %c.%c.%c.%c",
+                                   client_code[0], client_code[1],
+                                   version_str[0], version_str[1], version_str[2], version_str[3]);
+            }
+            info.client = client_name.copy_str(mem);
+        }
+        else
+        {
+            info.client = "Unknown".copy(mem);
+        }
+
+        // Calculate percent complete from bitfield
+        if (peer.seed)
+        {
+            info.percent_complete = 100.0;
+        }
+        else if (peer.pieces.data.len > 0)
+        {
+            usz set_bits = 0;
+            usz total_pieces = peer.pieces.num_pieces;
+
+            // Count set bits
+            for (usz piece_idx = 0; piece_idx < total_pieces; piece_idx++)
+            {
+                if (peer.pieces.has_piece(piece_idx))
+                {
+                    set_bits++;
+                }
+            }
+
+            info.percent_complete = total_pieces > 0 ?
+                (float)set_bits * 100.0 / (float)total_pieces : 0.0;
+        }
+        else
+        {
+            info.percent_complete = 0.0;
+        }
+
+        // Speeds - TODO: track actual rates over time
+        info.download_speed = 0.0;
+        info.upload_speed = 0.0;
+
+        // State as string
+        switch (peer.state)
+        {
+            case PeerState.DISCOVERED:
+                info.state = "Discovered".copy(mem);
+            case PeerState.CANDIDATE:
+                info.state = "Candidate".copy(mem);
+            case PeerState.CONNECTING:
+                info.state = "Connecting".copy(mem);
+            case PeerState.CONNECTED:
+                info.state = "Connected".copy(mem);
+            case PeerState.DISCONNECTED:
+                info.state = "Disconnected".copy(mem);
+            case PeerState.BANNED:
+                info.state = "Banned".copy(mem);
+        }
+    }
+
+    return info_array;
 }

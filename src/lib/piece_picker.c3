@@ -150,6 +150,36 @@ fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces) @public
         return PIECE_INDEX_OUT_OF_BOUNDS?;
     }
 
+    // Debug: Count piece states
+    usz free_count = 0;
+    usz downloading_count = 0;
+    usz complete_count = 0;
+    usz peer_has_count = 0;
+    usz eligible_count = 0;
+
+    for (usz i = 0; i < self.num_pieces; i++)
+    {
+        if (peer_pieces[i]) peer_has_count++;
+
+        if (self.pieces[i].state == PieceState.FREE)
+        {
+            free_count++;
+        }
+        else if (self.pieces[i].state == PieceState.DOWNLOADING)
+        {
+            downloading_count++;
+        }
+        else if (self.pieces[i].state == PieceState.COMPLETE)
+        {
+            complete_count++;
+        }
+
+        if (peer_pieces[i] && self.pieces[i].state == PieceState.FREE)
+        {
+            eligible_count++;
+        }
+    }
+
     // Find rarest piece the peer has that we need
     uint best_piece_index = 0;
     uint lowest_availability = uint.max;
@@ -174,6 +204,8 @@ fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces) @public
 
     if (!found)
     {
+        io::printfn("[DEBUG] pick_piece FAILED: free=%d, downloading=%d, complete=%d, peer_has=%d, eligible=%d",
+                   free_count, downloading_count, complete_count, peer_has_count, eligible_count);
         return NO_PIECES_AVAILABLE?;
     }
 
