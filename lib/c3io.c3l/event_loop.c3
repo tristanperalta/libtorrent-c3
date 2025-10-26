@@ -2,6 +2,7 @@ module async::event_loop;
 
 import uv;
 import std::io;
+import libtorrent::logger;
 
 <*
  Event Loop Wrapper for libuv
@@ -49,7 +50,7 @@ fn EventLoop? create() @public
     if (result != 0)
     {
         free(loop);
-        io::printfn("Failed to initialize event loop: %s", (ZString)uv::strerror(result));
+        logger::logf(logger::LogLevel.ERROR, "Failed to initialize event loop: %s", (ZString)uv::strerror(result));
         return EVENT_LOOP_INIT_FAILED?;
     }
 
@@ -113,7 +114,7 @@ fn void? EventLoop.close(&self) @public
     int result = uv::loop_close(self.loop);
     if (result != 0)
     {
-        io::printfn("Failed to close event loop: %s", (ZString)uv::strerror(result));
+        logger::logf(logger::LogLevel.ERROR, "Failed to close event loop: %s", (ZString)uv::strerror(result));
         if (result == -16)  // UV_EBUSY
         {
             return EVENT_LOOP_STILL_ACTIVE?;
@@ -131,7 +132,7 @@ fn void EventLoop.free(&self) @public
     // Try to close the loop
     if (catch err = self.close())
     {
-        io::printfn("Warning: Error closing event loop during free: %s", err);
+        logger::logf(logger::LogLevel.WARN, "Error closing event loop during free: %s", err);
     }
 
     // Free the memory

@@ -1036,7 +1036,7 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
         }
     }
 
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // if (rejected_count > 0)
     // {
     //     io::printfn("[PEX] Added %d peers, rejected %d invalid peers", added_count, rejected_count);
@@ -1119,7 +1119,7 @@ fn fault? PeerPool.mark_hash_failure(&self, char[4] ip, ushort port) @public
     // Increment hash failure counter
     peer.hashfails++;
 
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked with hash failure (total: %d)",
     //             peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port, peer.hashfails);
 
@@ -1155,7 +1155,7 @@ fn fault? PeerPool.mark_peer_seed(&self, char[4] ip, ushort port) @public
     // Mark as seed
     peer.seed = true;
 
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked as seed",
     //             peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port);
 

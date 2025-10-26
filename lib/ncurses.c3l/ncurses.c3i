@@ -1,0 +1,266 @@
+// ncurses.c3i
+// C3 FFI bindings for ncurses (using libncursesw for UTF-8 support)
+// https://invisible-island.net/ncurses/
+// Created for libtorrent-c3 TUI
+
+module ncurses;
+
+<*
+ ncurses - Terminal user interface library
+
+ This file provides C FFI bindings for ncurses, focusing on the subset
+ needed for creating a BitTorrent client TUI with:
+ - Multiple bordered windows
+ - Real-time updating displays
+ - Progress bars and peer lists
+ - Event logs
+
+ We use libncursesw (wide character version) for full UTF-8 support.
+*>
+
+// ============================================================================
+// Opaque Types
+// ============================================================================
+
+alias Window = void;  // WINDOW* - ncurses window handle
+
+// ============================================================================
+// Core Initialization and Cleanup
+// ============================================================================
+
+<*
+ Initialize the ncurses library and create stdscr.
+ Must be called before any other ncurses functions.
+
+ @return "Pointer to standard screen window"
+*>
+extern fn Window* initscr();
+
+<*
+ End ncurses mode and restore terminal to normal state.
+ Must be called before exiting the program.
+
+ @return "0 on success"
+*>
+extern fn int endwin();
+
+<*
+ Refresh the standard screen to show pending updates.
+
+ @return "0 on success"
+*>
+extern fn int refresh();
+
+<*
+ Clear the standard screen.
+
+ @return "0 on success"
+*>
+extern fn int clear();
+
+<*
+ Move the cursor to specified position on standard screen.
+
+ @param y : "Row (0-based from top)"
+ @param x : "Column (0-based from left)"
+ @return "0 on success"
+*>
+extern fn int move(int y, int x);
+
+// ============================================================================
+// Window Management
+// ============================================================================
+
+<*
+ Create a new window.
+
+ @param nlines : "Number of lines (height)"
+ @param ncols : "Number of columns (width)"
+ @param begin_y : "Starting row"
+ @param begin_x : "Starting column"
+ @return "Pointer to new window or null on error"
+*>
+extern fn Window* newwin(int nlines, int ncols, int begin_y, int begin_x);
+
+<*
+ Delete a window and free its memory.
+
+ @param win : "Window to delete"
+ @return "0 on success"
+*>
+extern fn int delwin(Window* win);
+
+<*
+ Refresh a specific window to show pending updates.
+
+ @param win : "Window to refresh"
+ @return "0 on success"
+*>
+extern fn int wrefresh(Window* win);
+
+<*
+ Erase the contents of a window.
+
+ @param win : "Window to erase"
+ @return "0 on success"
+*>
+extern fn int werase(Window* win);
+
+<*
+ Draw a box border around a window.
+
+ @param win : "Window to draw border around"
+ @param verch : "Vertical character (0 for default line)"
+ @param horch : "Horizontal character (0 for default line)"
+ @return "0 on success"
+*>
+extern fn int box(Window* win, int verch, int horch);
+
+<*
+ Move cursor and print formatted string in a window.
+
+ @param win : "Window to print in"
+ @param y : "Row to move to"
+ @param x : "Column to move to"
+ @param fmt : "Printf-style format string"
+ @param args : "Variable arguments for format string"
+ @return "0 on success"
+*>
+extern fn int mvwprintw(Window* win, int y, int x, ZString fmt, args...);
+
+<*
+ Print formatted string at current cursor position in a window.
+
+ @param win : "Window to print in"
+ @param fmt : "Printf-style format string"
+ @param args : "Variable arguments for format string"
+ @return "0 on success"
+*>
+extern fn int wprintw(Window* win, ZString fmt, args...);
+
+<*
+ Turn on specific attributes for a window.
+
+ @param win : "Window to modify"
+ @param attrs : "Attributes to enable (e.g., A_BOLD)"
+ @return "0 on success"
+*>
+extern fn int wattron(Window* win, int attrs);
+
+<*
+ Turn off specific attributes for a window.
+
+ @param win : "Window to modify"
+ @param attrs : "Attributes to disable"
+ @return "0 on success"
+*>
+extern fn int wattroff(Window* win, int attrs);
+
+// ============================================================================
+// Terminal Configuration
+// ============================================================================
+
+<*
+ Set cbreak mode (characters available immediately, no line buffering).
+
+ @return "0 on success"
+*>
+extern fn int cbreak();
+
+<*
+ Disable echoing of typed characters.
+
+ @return "0 on success"
+*>
+extern fn int noecho();
+
+<*
+ Enable or disable non-blocking input for a window.
+
+ @param win : "Window to configure"
+ @param bf : "True for non-blocking, false for blocking"
+ @return "0 on success"
+*>
+extern fn int nodelay(Window* win, bool bf);
+
+<*
+ Set cursor visibility.
+
+ @param visibility : "0=invisible, 1=normal, 2=very visible"
+ @return "Previous cursor state or -1 on error"
+*>
+extern fn int curs_set(int visibility);
+
+// ============================================================================
+// Color Support
+// ============================================================================
+
+<*
+ Initialize color support.
+ Call after initscr() if using colors.
+
+ @return "0 on success"
+*>
+extern fn int start_color();
+
+<*
+ Define a color pair (foreground + background).
+
+ @param pair : "Pair number (1-COLOR_PAIRS)"
+ @param f : "Foreground color (0-7)"
+ @param b : "Background color (0-7)"
+ @return "0 on success"
+*>
+extern fn int init_pair(short pair, short f, short b);
+
+<*
+ Get color pair attribute value.
+ Use with wattron/wattroff.
+
+ @param n : "Pair number"
+ @return "Attribute value for the color pair"
+*>
+macro int color_pair(int n)
+{
+    return n << 8;
+}
+
+// ============================================================================
+// Screen Information
+// ============================================================================
+
+<*
+ Get maximum Y coordinate (height) of a window.
+
+ @param win : "Window to query"
+ @return "Number of rows in window"
+*>
+extern fn int getmaxy(Window* win);
+
+<*
+ Get maximum X coordinate (width) of a window.
+
+ @param win : "Window to query"
+ @return "Number of columns in window"
+*>
+extern fn int getmaxx(Window* win);
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+// Color values
+const int COLOR_BLACK = 0;
+const int COLOR_RED = 1;
+const int COLOR_GREEN = 2;
+const int COLOR_YELLOW = 3;
+const int COLOR_BLUE = 4;
+const int COLOR_MAGENTA = 5;
+const int COLOR_CYAN = 6;
+const int COLOR_WHITE = 7;
+
+// Attributes
+const int A_NORMAL = 0;
+const int A_BOLD = 1 << 13;
+const int A_REVERSE = 1 << 18;
+const int A_UNDERLINE = 1 << 17;

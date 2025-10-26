@@ -7,7 +7,7 @@
     "lib",
     "vendor/c3-vendor/libraries"
   ],
-  "dependencies": ["curl", "c3io"],
+  "dependencies": ["curl", "c3io", "ncurses"],
   "authors": [
     "Tristan Peralta <tristan@peralta.ph>",
     "Claude Code <noreply@anthropic.com>"
@@ -28,7 +28,7 @@
     },
     "torrent-client": {
       "type": "executable",
-      "sources": ["src/main.c3"]
+      "sources": ["src/main.c3", "src/ui/**"]
     }
   },
   "cc": "cc",
