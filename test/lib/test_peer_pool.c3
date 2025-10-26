@@ -1,7 +1,7 @@
 module libtorrent::peer_pool_test;
 
 import libtorrent::peer_pool;
-import libtorrent::event_loop;
+import async::event_loop;
 import libtorrent::tracker;
 import std::io;
 

@@ -1,6 +1,6 @@
-module libtorrent::async_work;
+module async::work;
 
-import libtorrent::event_loop;
+import async::event_loop;
 import uv;
 import std::io;
 

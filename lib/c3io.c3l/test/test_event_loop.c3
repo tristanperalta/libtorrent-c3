@@ -1,6 +1,6 @@
-module libtorrent::event_loop_test;
+module async::event_loop_test;
 
-import libtorrent::event_loop;
+import async::event_loop;
 import std::io;
 
 <*

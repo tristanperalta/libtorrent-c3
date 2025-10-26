@@ -4,8 +4,8 @@ import libtorrent::udp_tracker;
 import libtorrent::tracker;
 import libtorrent::metainfo;
 import libtorrent::bencode;
-import libtorrent::async_udp;
-import libtorrent::event_loop;
+import async::udp;
+import async::event_loop;
 import uv;
 import std::io;
 import std::net::url;
@@ -23,7 +23,7 @@ struct TestContext
 // Mock tracker server context
 struct MockTrackerServer
 {
-    async_udp::UdpSocket* socket;
+    async::udp::UdpSocket* socket;
     event_loop::EventLoop* loop;
     int port;
     long connection_id;
@@ -35,7 +35,7 @@ struct MockTrackerServer
 // Mock Tracker Server
 // ============================================================================
 
-fn void mock_tracker_on_recv(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+fn void mock_tracker_on_recv(async::udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
 {
     MockTrackerServer* server = (MockTrackerServer*)user_data;
 
@@ -83,7 +83,7 @@ fn void mock_tracker_on_recv(async_udp::UdpSocket* socket, char[] data, uv::Sock
         response[14] = (char)(conn_id >> 8);
         response[15] = (char)conn_id;
 
-        async_udp::send_to(socket, addr, response[..], null, null);
+        async::udp::send_to(socket, addr, response[..], null, null);
     }
     else if (action == udp_tracker::ACTION_ANNOUNCE)
     {
@@ -110,7 +110,7 @@ fn void mock_tracker_on_recv(async_udp::UdpSocket* socket, char[] data, uv::Sock
                 invalid_response[i] = 0;
             }
 
-            async_udp::send_to(socket, addr, invalid_response[..], null, null);
+            async::udp::send_to(socket, addr, invalid_response[..], null, null);
             return;
         }
 
@@ -147,7 +147,7 @@ fn void mock_tracker_on_recv(async_udp::UdpSocket* socket, char[] data, uv::Sock
         response[18] = 0;
         response[19] = 10;
 
-        async_udp::send_to(socket, addr, response[..], null, null);
+        async::udp::send_to(socket, addr, response[..], null, null);
     }
 }
 
@@ -156,7 +156,7 @@ fn MockTrackerServer*? create_mock_tracker(event_loop::EventLoop* loop, int port
     MockTrackerServer* server = mem::new(MockTrackerServer);
 
     // Create UDP socket
-    async_udp::UdpSocket*? socket_opt = async_udp::create(loop);
+    async::udp::UdpSocket*? socket_opt = async::udp::create(loop);
     if (catch err = socket_opt)
     {
         free(server);
@@ -165,7 +165,7 @@ fn MockTrackerServer*? create_mock_tracker(event_loop::EventLoop* loop, int port
     server.socket = socket_opt;
 
     // Bind to localhost
-    async_udp::bind(server.socket, "127.0.0.1", port);
+    async::udp::bind(server.socket, "127.0.0.1", port);
 
     // Start receiving
     server.loop = loop;
@@ -174,15 +174,15 @@ fn MockTrackerServer*? create_mock_tracker(event_loop::EventLoop* loop, int port
     server.should_respond = true;
     server.send_invalid_response = false;
 
-    async_udp::recv_start(server.socket, null, &mock_tracker_on_recv, server);
+    async::udp::recv_start(server.socket, null, &mock_tracker_on_recv, server);
 
     return server;
 }
 
 fn void close_mock_tracker(MockTrackerServer* server)
 {
-    async_udp::recv_stop(server.socket);
-    async_udp::close(server.socket);
+    async::udp::recv_stop(server.socket);
+    async::udp::close(server.socket);
     free(server);
 }
 

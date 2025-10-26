@@ -1,8 +1,8 @@
 module libtorrent::piece_assembler;
 
 import std::hash::sha1;
-import libtorrent::async_work;
-import libtorrent::event_loop;
+import async::work;
+import async::event_loop;
 import std::io;
 
 <*
@@ -45,7 +45,7 @@ struct VerifyContext
     char[20] actual_hash;      // Result computed in thread pool
     VerifyCallback callback;
     void* user_data;
-    async_work::WorkContext* work_ctx;
+    async::work::WorkContext* work_ctx;
 }
 
 <*
@@ -277,7 +277,7 @@ fn void PieceAssembler.verify(&self, event_loop::EventLoop* loop,
     }
 
     // Create async work context
-    async_work::WorkContext* work_ctx = mem::new(async_work::WorkContext);
+    async::work::WorkContext* work_ctx = mem::new(async::work::WorkContext);
     work_ctx.input = ctx;
     work_ctx.work_fn = &do_verify_work;
     work_ctx.callback = &on_verify_complete;
@@ -285,7 +285,7 @@ fn void PieceAssembler.verify(&self, event_loop::EventLoop* loop,
     ctx.work_ctx = work_ctx;
 
     // Queue work
-    int result = async_work::queue_work(loop, work_ctx);
+    int result = async::work::queue_work(loop, work_ctx);
     if (result != 0)
     {
         // Failed to queue - call callback with error

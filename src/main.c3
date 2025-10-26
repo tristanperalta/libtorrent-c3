@@ -5,7 +5,7 @@ import std::encoding::hex;
 import uv;
 import libtorrent;
 import libtorrent::tracker;
-import libtorrent::event_loop;
+import async::event_loop;
 import libtorrent::torrent_loader;
 import libtorrent::peer_connection;
 import libtorrent::peer_wire;
@@ -13,7 +13,7 @@ import libtorrent::download_manager;
 import libtorrent::block_manager;
 import libtorrent::storage_manager;
 import libtorrent::bitfield;
-import libtorrent::async_timer;
+import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::logger;
 
@@ -1050,9 +1050,9 @@ struct DownloadContext
     // Tracker state
     bool tracker_completed;
     tracker::TrackerResponse* tracker_response;
-    async_timer::Timer* announce_timer;     // Periodic announce timer
-    async_timer::Timer* retry_timer;        // Tracker retry backoff timer
-    async_timer::Timer* pex_timer;          // PEX update timer (every 60s)
+    async::timer::Timer* announce_timer;     // Periodic announce timer
+    async::timer::Timer* retry_timer;        // Tracker retry backoff timer
+    async::timer::Timer* pex_timer;          // PEX update timer (every 60s)
     int announce_retry_count;               // For exponential backoff
     int announce_backoff_ms;                // Current backoff delay
     bool initial_announce_done;             // Has first announce succeeded?
@@ -1087,17 +1087,17 @@ fn void on_complete_download(DownloadContext* ctx)
     // Stop announce timers
     if (ctx.announce_timer)
     {
-        async_timer::close(ctx.announce_timer);
+        async::timer::close(ctx.announce_timer);
         ctx.announce_timer = null;
     }
     if (ctx.retry_timer)
     {
-        async_timer::close(ctx.retry_timer);
+        async::timer::close(ctx.retry_timer);
         ctx.retry_timer = null;
     }
     if (ctx.pex_timer)
     {
-        async_timer::close(ctx.pex_timer);
+        async::timer::close(ctx.pex_timer);
         ctx.pex_timer = null;
     }
 
@@ -1619,14 +1619,14 @@ fn void verify_all_existing_pieces_async(DownloadContext* ctx)
 <*
  Retry timer callback - retries tracker announce after backoff delay.
 *>
-fn void on_announce_retry_timer(async_timer::Timer* timer, void* user_data)
+fn void on_announce_retry_timer(async::timer::Timer* timer, void* user_data)
 {
     DownloadContext* ctx = (DownloadContext*)user_data;
 
     io::printfn("  Retrying tracker announce (attempt %d)...", ctx.announce_retry_count + 1);
 
     // Close retry timer
-    async_timer::close(timer);
+    async::timer::close(timer);
     ctx.retry_timer = null;
 
     // Retry announce
@@ -1666,7 +1666,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         io::printfn("  Retrying in %d seconds...", backoff_ms / 1000);
 
         // Create retry timer (one-shot)
-        async_timer::Timer*? timer_opt = async_timer::create(ctx.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
         if (catch err = timer_opt)
         {
             io::eprintfn("  Failed to create retry timer - giving up");
@@ -1676,7 +1676,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         }
 
         ctx.retry_timer = timer_opt;
-        async_timer::start(ctx.retry_timer, (ulong)backoff_ms, 0,
+        async::timer::start(ctx.retry_timer, (ulong)backoff_ms, 0,
                           &on_announce_retry_timer, ctx);
         return;
     }
@@ -1691,7 +1691,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         ulong interval_ms = (ulong)(response.interval * 1000);
         io::printfn("  Setting up periodic announce every %d seconds", response.interval);
 
-        async_timer::Timer*? timer_opt = async_timer::create(ctx.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
         if (catch err = timer_opt)
         {
             io::eprintfn("  Warning: Failed to create announce timer");
@@ -1699,7 +1699,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         else
         {
             ctx.announce_timer = timer_opt;
-            async_timer::start(ctx.announce_timer, interval_ms, interval_ms,
+            async::timer::start(ctx.announce_timer, interval_ms, interval_ms,
                               &on_announce_timer_tick, ctx);
         }
     }
@@ -1707,7 +1707,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
     // Start PEX timer if not already running (every 60 seconds)
     if (!ctx.pex_timer)
     {
-        async_timer::Timer*? timer_opt = async_timer::create(ctx.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
         if (catch err = timer_opt)
         {
             io::eprintfn("  Warning: Failed to create PEX timer");
@@ -1716,7 +1716,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         {
             ctx.pex_timer = timer_opt;
             // Start after 60 seconds, then repeat every 60 seconds
-            async_timer::start(ctx.pex_timer, 60000, 60000,
+            async::timer::start(ctx.pex_timer, 60000, 60000,
                               &on_pex_timer_tick, ctx);
         }
     }
@@ -1728,14 +1728,14 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
 <*
  Periodic announce timer callback - fires every interval seconds.
 *>
-fn void on_announce_timer_tick(async_timer::Timer* timer, void* user_data)
+fn void on_announce_timer_tick(async::timer::Timer* timer, void* user_data)
 {
     DownloadContext* ctx = (DownloadContext*)user_data;
 
     if (ctx.dm.is_complete())
     {
         // Download complete - stop timer
-        async_timer::stop(timer);
+        async::timer::stop(timer);
         return;
     }
 
@@ -1750,14 +1750,14 @@ fn void on_announce_timer_tick(async_timer::Timer* timer, void* user_data)
  PEX timer callback - sends queued PEX updates to all connected peers.
  Runs every 60 seconds per BEP 11 rate limiting.
 *>
-fn void on_pex_timer_tick(async_timer::Timer* timer, void* user_data)
+fn void on_pex_timer_tick(async::timer::Timer* timer, void* user_data)
 {
     DownloadContext* ctx = (DownloadContext*)user_data;
 
     if (ctx.dm.is_complete())
     {
         // Download complete - stop timer
-        async_timer::stop(timer);
+        async::timer::stop(timer);
         return;
     }
 
@@ -2045,10 +2045,10 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.save_path = save_path;
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
-    async_timer::Timer* flush_timer = null;
+    async::timer::Timer* flush_timer = null;
     if (num_outputs > 0)
     {
-        async_timer::Timer*? flush_timer_opt = async_timer::create(loop);
+        async::timer::Timer*? flush_timer_opt = async::timer::create(loop);
         if (catch err = flush_timer_opt)
         {
             io::eprintfn("Warning: Failed to create log flush timer");
@@ -2057,8 +2057,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         {
             flush_timer = flush_timer_opt;
             // Start after 2 seconds, then repeat every 2 seconds
-            async_timer::start(flush_timer, 2000, 2000,
-                              fn void(async_timer::Timer* timer, void* user_data) {
+            async::timer::start(flush_timer, 2000, 2000,
+                              fn void(async::timer::Timer* timer, void* user_data) {
                                   logger::flush_logs();
                               }, null);
         }
@@ -2108,7 +2108,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Stop and close log flush timer
     if (flush_timer)
     {
-        async_timer::close(flush_timer);
+        async::timer::close(flush_timer);
     }
 
     // Flush any remaining logs before cleanup

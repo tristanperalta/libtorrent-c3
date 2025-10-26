@@ -1,8 +1,8 @@
 module libtorrent::storage_manager;
 
-import libtorrent::async_file;
-import libtorrent::async_work;
-import libtorrent::event_loop;
+import async::file;
+import async::work;
+import async::event_loop;
 import libtorrent::metainfo;
 import std::io;
 import std::hash::sha1;
@@ -48,7 +48,7 @@ struct FileInfo
     String path;           // Relative path within torrent
     ulong length;          // File length in bytes
     ulong offset;          // Offset within torrent (cumulative)
-    async_file::File file; // File handle (or -1 if not open)
+    async::file::File file; // File handle (or -1 if not open)
 }
 
 // Storage manager
@@ -280,7 +280,7 @@ fn void on_file_truncate_complete(int status, void* user_data)
     open_next_file(ctx);
 }
 
-fn void on_file_open_complete(async_file::File file, int status, void* user_data)
+fn void on_file_open_complete(async::file::File file, int status, void* user_data)
 {
     InitContext* ctx = (InitContext*)user_data;
 
@@ -303,7 +303,7 @@ fn void on_file_open_complete(async_file::File file, int status, void* user_data
     if (ctx.manager.pre_allocate)
     {
         ulong file_length = ctx.manager.files[ctx.current_file].length;
-        async_file::ftruncate(ctx.manager.loop, file, (long)file_length,
+        async::file::ftruncate(ctx.manager.loop, file, (long)file_length,
                               &on_file_truncate_complete, ctx);
     }
     else
@@ -338,8 +338,8 @@ fn void open_next_file(InitContext* ctx)
     defer std::core::mem::free(full_path);
 
     // Open file (create if doesn't exist, read/write mode)
-    async_file::open(ctx.manager.loop, full_path,
-                     async_file::OPEN_RDWR | async_file::OPEN_CREATE,
+    async::file::open(ctx.manager.loop, full_path,
+                     async::file::OPEN_RDWR | async::file::OPEN_CREATE,
                      420,  // 0644 in octal
                      &on_file_open_complete, ctx);
 }
@@ -383,7 +383,7 @@ fn void StorageManager.initialize(&self, InitCompleteCallback callback,
     ctx.error_code = 0;
 
     // Create base directory
-    async_file::mkdir(self.loop, self.base_path, 493,  // 0755 in octal
+    async::file::mkdir(self.loop, self.base_path, 493,  // 0755 in octal
                       &on_mkdir_complete, ctx);
 }
 
@@ -463,7 +463,7 @@ fn void write_next_span(WriteContext* ctx)
         return;
     }
 
-    async_file::write(ctx.manager.loop, file.file, (long)span.file_offset,
+    async::file::write(ctx.manager.loop, file.file, (long)span.file_offset,
                       span_data, &on_write_block_complete, ctx);
 }
 
@@ -582,7 +582,7 @@ fn void read_next_span(ReadContext* ctx)
         return;
     }
 
-    async_file::read(ctx.manager.loop, file.file, (long)span.file_offset,
+    async::file::read(ctx.manager.loop, file.file, (long)span.file_offset,
                      (usz)span.length, &on_read_block_complete, ctx);
 }
 
@@ -647,7 +647,7 @@ struct Sha1WorkContext
     char[20] actual_hash;       // Result computed in thread pool
     VerifyCompleteCallback cb;
     void* user_data;
-    async_work::WorkContext* work_ctx;
+    async::work::WorkContext* work_ctx;
 }
 
 <*
@@ -732,7 +732,7 @@ fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status,
     sha1_ctx.user_data = ctx.user_data;
 
     // Create async work context
-    async_work::WorkContext* work_ctx = mem::new(async_work::WorkContext);
+    async::work::WorkContext* work_ctx = mem::new(async::work::WorkContext);
     work_ctx.input = sha1_ctx;
     work_ctx.work_fn = &do_sha1_work;
     work_ctx.callback = &on_sha1_complete;
@@ -740,7 +740,7 @@ fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status,
     sha1_ctx.work_ctx = work_ctx;
 
     // Queue SHA-1 computation to thread pool
-    int result = async_work::queue_work(ctx.manager.loop, work_ctx);
+    int result = async::work::queue_work(ctx.manager.loop, work_ctx);
     if (result != 0)
     {
         // Failed to queue - call callback with error

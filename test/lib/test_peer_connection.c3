@@ -3,7 +3,7 @@ module libtorrent::peer_connection::test;
 import libtorrent::peer_connection;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
-import libtorrent::event_loop;
+import async::event_loop;
 import std::io;
 
 // ============================================================================

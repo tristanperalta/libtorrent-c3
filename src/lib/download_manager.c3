@@ -3,7 +3,7 @@ module libtorrent::download_manager;
 import libtorrent::piece_picker;
 import libtorrent::block_manager;
 import libtorrent::piece_assembler;
-import libtorrent::event_loop;
+import async::event_loop;
 import std::io;
 
 <*

@@ -2,7 +2,7 @@ module libtorrent::storage_manager::test;
 
 import libtorrent::storage_manager;
 import libtorrent::metainfo;
-import libtorrent::event_loop;
+import async::event_loop;
 import std::io;
 import std::hash::sha1;
 

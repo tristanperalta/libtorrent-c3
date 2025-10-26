@@ -1,7 +1,7 @@
-module libtorrent::async_file::test;
+module libtorrent::async::file::test;
 
-import libtorrent::async_file;
-import libtorrent::event_loop;
+import async::file;
+import async::event_loop;
 import uv;
 import std::io;
 
@@ -11,7 +11,7 @@ struct TestContext
     bool success;
     bool completed;
     int error_code;
-    async_file::File file;
+    async::file::File file;
     char[] data;
     usz bytes_written;
     usz file_size;
@@ -30,7 +30,7 @@ fn void on_close_success(int status, void* user_data)
     ctx.error_code = status;
 }
 
-fn void on_open_then_close(async_file::File file, int status, void* user_data)
+fn void on_open_then_close(async::file::File file, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
 
@@ -43,7 +43,7 @@ fn void on_open_then_close(async_file::File file, int status, void* user_data)
     }
 
     ctx.file = file;
-    async_file::close(ctx.loop, file, &on_close_success, user_data);
+    async::file::close(ctx.loop, file, &on_close_success, user_data);
 }
 
 fn void test_open_close_file() @test
@@ -63,8 +63,8 @@ fn void test_open_close_file() @test
     ctx.loop = &loop;
 
     // Open a temporary test file
-    async_file::open(&loop, "/tmp/test_async_file_temp.txt",
-                     async_file::OPEN_RDWR | async_file::OPEN_CREATE,
+    async::file::open(&loop, "/tmp/test_async_file_temp.txt",
+                     async::file::OPEN_RDWR | async::file::OPEN_CREATE,
                      420, &on_open_then_close, &ctx);
 
     // Run event loop until complete
@@ -125,11 +125,11 @@ fn void on_write_then_read(int bytes_written, int status, void* user_data)
     ctx.bytes_written = (usz)bytes_written;
 
     // Now read back the data
-    async_file::read(ctx.loop, ctx.file, 0, (usz)bytes_written,
+    async::file::read(ctx.loop, ctx.file, 0, (usz)bytes_written,
                      &on_read_verify, user_data);
 }
 
-fn void on_open_for_write(async_file::File file, int status, void* user_data)
+fn void on_open_for_write(async::file::File file, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
 
@@ -145,7 +145,7 @@ fn void on_open_for_write(async_file::File file, int status, void* user_data)
 
     // Write some data
     String test_data = "Hello async file I/O!";
-    async_file::write(ctx.loop, file, 0, (char[])test_data,
+    async::file::write(ctx.loop, file, 0, (char[])test_data,
                       &on_write_then_read, user_data);
 }
 
@@ -165,8 +165,8 @@ fn void test_write_read_file() @test
     ctx.completed = false;
     ctx.loop = &loop;
 
-    async_file::open(&loop, "/tmp/test_async_rw.txt",
-                     async_file::OPEN_RDWR | async_file::OPEN_CREATE | async_file::OPEN_TRUNC,
+    async::file::open(&loop, "/tmp/test_async_rw.txt",
+                     async::file::OPEN_RDWR | async::file::OPEN_CREATE | async::file::OPEN_TRUNC,
                      420, &on_open_for_write, &ctx);
 
     while (!ctx.completed)
@@ -178,7 +178,7 @@ fn void test_write_read_file() @test
     assert(ctx.bytes_written == 21, "Should write 21 bytes");
 
     // Clean up
-    async_file::close(&loop, ctx.file, &on_close_success, &ctx);
+    async::file::close(&loop, ctx.file, &on_close_success, &ctx);
     ctx.completed = false;
     while (!ctx.completed)
     {
@@ -219,7 +219,7 @@ fn void on_close_before_stat(int status, void* user_data)
     }
 
     // Now stat the file
-    async_file::stat(ctx.loop, "/tmp/test_async_stat.txt", &on_stat_verify, user_data);
+    async::file::stat(ctx.loop, "/tmp/test_async_stat.txt", &on_stat_verify, user_data);
 }
 
 fn void on_write_for_stat(int bytes_written, int status, void* user_data)
@@ -235,10 +235,10 @@ fn void on_write_for_stat(int bytes_written, int status, void* user_data)
     }
 
     // Close file first
-    async_file::close(ctx.loop, ctx.file, &on_close_before_stat, user_data);
+    async::file::close(ctx.loop, ctx.file, &on_close_before_stat, user_data);
 }
 
-fn void on_open_for_stat(async_file::File file, int status, void* user_data)
+fn void on_open_for_stat(async::file::File file, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
 
@@ -253,7 +253,7 @@ fn void on_open_for_stat(async_file::File file, int status, void* user_data)
     ctx.file = file;
 
     String test_data = "Test file stat";
-    async_file::write(ctx.loop, file, 0, (char[])test_data,
+    async::file::write(ctx.loop, file, 0, (char[])test_data,
                       &on_write_for_stat, user_data);
 }
 
@@ -273,8 +273,8 @@ fn void test_stat_file() @test
     ctx.completed = false;
     ctx.loop = &loop;
 
-    async_file::open(&loop, "/tmp/test_async_stat.txt",
-                     async_file::OPEN_RDWR | async_file::OPEN_CREATE | async_file::OPEN_TRUNC,
+    async::file::open(&loop, "/tmp/test_async_stat.txt",
+                     async::file::OPEN_RDWR | async::file::OPEN_CREATE | async::file::OPEN_TRUNC,
                      420, &on_open_for_stat, &ctx);
 
     while (!ctx.completed)
@@ -298,7 +298,7 @@ fn void on_truncate_verify(int status, void* user_data)
     ctx.error_code = status;
 }
 
-fn void on_open_for_truncate(async_file::File file, int status, void* user_data)
+fn void on_open_for_truncate(async::file::File file, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
 
@@ -313,7 +313,7 @@ fn void on_open_for_truncate(async_file::File file, int status, void* user_data)
     ctx.file = file;
 
     // Truncate to 1MB
-    async_file::ftruncate(ctx.loop, file, 1048576, &on_truncate_verify, user_data);
+    async::file::ftruncate(ctx.loop, file, 1048576, &on_truncate_verify, user_data);
 }
 
 fn void test_ftruncate_file() @test
@@ -332,8 +332,8 @@ fn void test_ftruncate_file() @test
     ctx.completed = false;
     ctx.loop = &loop;
 
-    async_file::open(&loop, "/tmp/test_async_truncate.txt",
-                     async_file::OPEN_RDWR | async_file::OPEN_CREATE | async_file::OPEN_TRUNC,
+    async::file::open(&loop, "/tmp/test_async_truncate.txt",
+                     async::file::OPEN_RDWR | async::file::OPEN_CREATE | async::file::OPEN_TRUNC,
                      420, &on_open_for_truncate, &ctx);
 
     while (!ctx.completed)
@@ -344,7 +344,7 @@ fn void test_ftruncate_file() @test
     assert(ctx.success, "Truncate should succeed");
 
     // Clean up
-    async_file::close(&loop, ctx.file, &on_close_success, &ctx);
+    async::file::close(&loop, ctx.file, &on_close_success, &ctx);
     ctx.completed = false;
     while (!ctx.completed)
     {
@@ -381,7 +381,7 @@ fn void test_mkdir() @test
     ctx.completed = false;
     ctx.loop = &loop;
 
-    async_file::mkdir(&loop, "/tmp/test_async_dir", 493, &on_mkdir_verify, &ctx);
+    async::file::mkdir(&loop, "/tmp/test_async_dir", 493, &on_mkdir_verify, &ctx);
 
     while (!ctx.completed)
     {
@@ -395,7 +395,7 @@ fn void test_mkdir() @test
 // Error Handling Tests
 // ============================================================================
 
-fn void on_open_nonexistent(async_file::File file, int status, void* user_data)
+fn void on_open_nonexistent(async::file::File file, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.completed = true;
@@ -420,8 +420,8 @@ fn void test_open_nonexistent_file() @test
     ctx.loop = &loop;
 
     // Try to open non-existent file without CREATE flag
-    async_file::open(&loop, "/nonexistent/path/file.txt",
-                     async_file::OPEN_RDONLY, 420,
+    async::file::open(&loop, "/nonexistent/path/file.txt",
+                     async::file::OPEN_RDONLY, 420,
                      &on_open_nonexistent, &ctx);
 
     while (!ctx.completed)

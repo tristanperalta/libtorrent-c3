@@ -1,7 +1,7 @@
-module libtorrent::async_dns::test;
+module libtorrent::async::dns::test;
 
-import libtorrent::async_dns;
-import libtorrent::event_loop;
+import async::dns;
+import async::event_loop;
 import uv;
 import std::io;
 
@@ -63,7 +63,7 @@ fn void test_resolve_localhost() @test
     ctx.addr_count = 0;
 
     // Resolve localhost (should always work)
-    async_dns::resolve(&loop, "localhost", "8080", &on_resolve_localhost, &ctx);
+    async::dns::resolve(&loop, "localhost", "8080", &on_resolve_localhost, &ctx);
 
     // Run event loop until complete
     while (!ctx.completed)
@@ -77,7 +77,7 @@ fn void test_resolve_localhost() @test
     // Clean up
     if (ctx.result)
     {
-        async_dns::free_result(ctx.result);
+        async::dns::free_result(ctx.result);
     }
 }
 
@@ -129,7 +129,7 @@ fn void test_resolve_tcp() @test
     ctx.result = null;
 
     // Resolve with TCP hint
-    async_dns::resolve_tcp(&loop, "localhost", "80", &on_resolve_tcp, &ctx);
+    async::dns::resolve_tcp(&loop, "localhost", "80", &on_resolve_tcp, &ctx);
 
     while (!ctx.completed)
     {
@@ -141,7 +141,7 @@ fn void test_resolve_tcp() @test
     // Clean up
     if (ctx.result)
     {
-        async_dns::free_result(ctx.result);
+        async::dns::free_result(ctx.result);
     }
 }
 
@@ -164,7 +164,7 @@ fn void on_resolve_for_addr_to_string(uv::AddrInfo* result, int status, void* us
     ctx.result = result;
 
     // Convert first address to string
-    String addr_str = async_dns::addr_to_string(result.ai_addr);
+    String addr_str = async::dns::addr_to_string(result.ai_addr);
 
     // Should be non-empty for localhost
     ctx.success = (addr_str.len > 0);
@@ -197,7 +197,7 @@ fn void test_addr_to_string() @test
     ctx.loop = &loop;
     ctx.result = null;
 
-    async_dns::resolve(&loop, "localhost", "0", &on_resolve_for_addr_to_string, &ctx);
+    async::dns::resolve(&loop, "localhost", "0", &on_resolve_for_addr_to_string, &ctx);
 
     while (!ctx.completed)
     {
@@ -209,7 +209,7 @@ fn void test_addr_to_string() @test
     // Clean up
     if (ctx.result)
     {
-        async_dns::free_result(ctx.result);
+        async::dns::free_result(ctx.result);
     }
 }
 
@@ -244,7 +244,7 @@ fn void test_resolve_invalid_hostname() @test
     ctx.result = null;
 
     // Try to resolve a clearly invalid hostname
-    async_dns::resolve(&loop, "this-hostname-should-not-exist-12345.invalid",
+    async::dns::resolve(&loop, "this-hostname-should-not-exist-12345.invalid",
                        "8080", &on_resolve_invalid, &ctx);
 
     while (!ctx.completed)
@@ -258,7 +258,7 @@ fn void test_resolve_invalid_hostname() @test
     // Clean up (even though it should be null)
     if (ctx.result)
     {
-        async_dns::free_result(ctx.result);
+        async::dns::free_result(ctx.result);
     }
 }
 
@@ -310,7 +310,7 @@ fn void test_multiple_addresses() @test
     ctx.addr_count = 0;
 
     // Resolve localhost which may have multiple addresses
-    async_dns::resolve(&loop, "localhost", "0", &on_resolve_multiple_addrs, &ctx);
+    async::dns::resolve(&loop, "localhost", "0", &on_resolve_multiple_addrs, &ctx);
 
     while (!ctx.completed)
     {
@@ -323,6 +323,6 @@ fn void test_multiple_addresses() @test
     // Clean up
     if (ctx.result)
     {
-        async_dns::free_result(ctx.result);
+        async::dns::free_result(ctx.result);
     }
 }

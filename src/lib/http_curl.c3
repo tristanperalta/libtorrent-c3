@@ -1,8 +1,8 @@
 module libtorrent::http;
 import curl;
 import libc;
-import libtorrent::async_work;
-import libtorrent::event_loop;
+import async::work;
+import async::event_loop;
 
 <*
  Curl-based HTTP client implementation.
@@ -50,7 +50,7 @@ struct HttpWorkContext
     ResponseBuffer* response_buf;
 
     // Work context (needed for cleanup)
-    async_work::WorkContext* work_ctx;
+    async::work::WorkContext* work_ctx;
 
     // User callback
     HttpCallback callback;
@@ -355,7 +355,7 @@ fn void request_async(event_loop::EventLoop* loop,
     http_ctx.success = false;
 
     // Create async work context
-    async_work::WorkContext* work_ctx = mem::new(async_work::WorkContext);
+    async::work::WorkContext* work_ctx = mem::new(async::work::WorkContext);
     work_ctx.input = http_ctx;
     work_ctx.work_fn = &do_http_work;
     work_ctx.callback = &on_http_complete;
@@ -365,7 +365,7 @@ fn void request_async(event_loop::EventLoop* loop,
     http_ctx.work_ctx = work_ctx;
 
     // Queue work
-    int result = async_work::queue_work(loop, work_ctx);
+    int result = async::work::queue_work(loop, work_ctx);
     if (result != 0)
     {
         // Failed to queue - call callback with error

@@ -1,10 +1,10 @@
 module libtorrent::udp_tracker;
 
 import libtorrent::common;
-import libtorrent::async_dns;
-import libtorrent::async_udp;
-import libtorrent::async_timer;
-import libtorrent::event_loop;
+import async::dns;
+import async::udp;
+import async::timer;
+import async::event_loop;
 import libtorrent::tracker;
 import libtorrent::metainfo;
 import uv;
@@ -411,8 +411,8 @@ struct AnnounceContext
     int initial_timeout_seconds;  // Initial timeout (0 = use default)
 
     // Network resources
-    async_udp::UdpSocket* socket;
-    async_timer::Timer* timeout_timer;
+    async::udp::UdpSocket* socket;
+    async::timer::Timer* timeout_timer;
     uv::Sockaddr* tracker_addr;
     String tracker_host;  // Keep hostname alive for async DNS
     String tracker_port_str;  // Keep port string alive for async DNS
@@ -438,16 +438,16 @@ fn void cleanup_and_callback(AnnounceContext* ctx)
     // Stop and close timer if active
     if (ctx.timeout_timer)
     {
-        async_timer::stop(ctx.timeout_timer);
-        async_timer::close(ctx.timeout_timer);
+        async::timer::stop(ctx.timeout_timer);
+        async::timer::close(ctx.timeout_timer);
         ctx.timeout_timer = null;
     }
 
     // Close socket if open
     if (ctx.socket)
     {
-        async_udp::recv_stop(ctx.socket);
-        async_udp::close(ctx.socket);
+        async::udp::recv_stop(ctx.socket);
+        async::udp::close(ctx.socket);
         ctx.socket = null;
     }
 
@@ -503,12 +503,12 @@ fn void cleanup_and_callback(AnnounceContext* ctx)
 <*
  Handle timeout - retry or fail.
 *>
-fn void on_timeout(async_timer::Timer* timer, void* user_data)
+fn void on_timeout(async::timer::Timer* timer, void* user_data)
 {
     AnnounceContext* ctx = (AnnounceContext*)user_data;
 
     // Stop timer
-    async_timer::stop(timer);
+    async::timer::stop(timer);
 
     // Check if we should retry
     if (ctx.retry < udp_tracker::UDP_MAX_RETRIES)
@@ -537,7 +537,7 @@ fn void on_timeout(async_timer::Timer* timer, void* user_data)
 <*
  Handle announce response.
 *>
-fn void on_announce_response(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
 {
     AnnounceContext* ctx = (AnnounceContext*)user_data;
 
@@ -547,9 +547,9 @@ fn void on_announce_response(async_udp::UdpSocket* socket, char[] data, uv::Sock
     }
 
     // Stop receiving and timer
-    async_udp::recv_stop(socket);
+    async::udp::recv_stop(socket);
     ctx.receiving = false;  // Reset flag so next phase can start receiving
-    async_timer::stop(ctx.timeout_timer);
+    async::timer::stop(ctx.timeout_timer);
 
     // Copy response data
     ctx.announce_response = mem::new_array(char, data.len);
@@ -590,7 +590,7 @@ fn void on_announce_response(async_udp::UdpSocket* socket, char[] data, uv::Sock
 <*
  Handle announce send completion.
 *>
-fn void on_announce_sent(async_udp::UdpSocket* socket, int status, void* user_data)
+fn void on_announce_sent(async::udp::UdpSocket* socket, int status, void* user_data)
 {
     if (status < 0)
     {
@@ -644,24 +644,24 @@ fn void start_announce_attempt(AnnounceContext* ctx)
     // Start receiving (only on first attempt - after connect phase recv was stopped)
     if (!ctx.receiving)
     {
-        async_udp::recv_start(ctx.socket, null, &on_announce_response, ctx);
+        async::udp::recv_start(ctx.socket, null, &on_announce_response, ctx);
         ctx.receiving = true;
     }
 
     // Send announce request
-    async_udp::send_to(ctx.socket, ctx.tracker_addr, ctx.announce_request[..],
+    async::udp::send_to(ctx.socket, ctx.tracker_addr, ctx.announce_request[..],
                        &on_announce_sent, ctx);
 
     // Start timeout timer
     int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : udp_tracker::UDP_INITIAL_TIMEOUT_SECONDS;
     int timeout_ms = (base_timeout * (1 << ctx.retry)) * 1000;
-    async_timer::start(ctx.timeout_timer, (ulong)timeout_ms, 0, &on_timeout, ctx);
+    async::timer::start(ctx.timeout_timer, (ulong)timeout_ms, 0, &on_timeout, ctx);
 }
 
 <*
  Handle connect response.
 *>
-fn void on_connect_response(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+fn void on_connect_response(async::udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
 {
     AnnounceContext* ctx = (AnnounceContext*)user_data;
 
@@ -671,9 +671,9 @@ fn void on_connect_response(async_udp::UdpSocket* socket, char[] data, uv::Socka
     }
 
     // Stop receiving and timer
-    async_udp::recv_stop(socket);
+    async::udp::recv_stop(socket);
     ctx.receiving = false;  // Reset flag so next phase can start receiving
-    async_timer::stop(ctx.timeout_timer);
+    async::timer::stop(ctx.timeout_timer);
 
     // Copy response
     ctx.connect_response[..] = data[0..CONNECT_RESPONSE_SIZE-1];
@@ -711,7 +711,7 @@ fn void on_connect_response(async_udp::UdpSocket* socket, char[] data, uv::Socka
 <*
  Handle connect send completion.
 *>
-fn void on_connect_sent(async_udp::UdpSocket* socket, int status, void* user_data)
+fn void on_connect_sent(async::udp::UdpSocket* socket, int status, void* user_data)
 {
     if (status < 0)
     {
@@ -749,18 +749,18 @@ fn void start_connect_attempt(AnnounceContext* ctx)
     // Start receiving (only on first attempt)
     if (!ctx.receiving)
     {
-        async_udp::recv_start(ctx.socket, null, &on_connect_response, ctx);
+        async::udp::recv_start(ctx.socket, null, &on_connect_response, ctx);
         ctx.receiving = true;
     }
 
     // Send connect request
-    async_udp::send_to(ctx.socket, ctx.tracker_addr, ctx.connect_request[..],
+    async::udp::send_to(ctx.socket, ctx.tracker_addr, ctx.connect_request[..],
                        &on_connect_sent, ctx);
 
     // Start timeout timer
     int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : udp_tracker::UDP_INITIAL_TIMEOUT_SECONDS;
     int timeout_ms = (base_timeout * (1 << ctx.retry)) * 1000;
-    async_timer::start(ctx.timeout_timer, (ulong)timeout_ms, 0, &on_timeout, ctx);
+    async::timer::start(ctx.timeout_timer, (ulong)timeout_ms, 0, &on_timeout, ctx);
 }
 
 <*
@@ -791,14 +791,14 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
             *ctx.tracker_addr = *info.ai_addr;
 
             // Extract IP for display
-            ctx.tracker_ip = async_dns::addr_to_string(info.ai_addr);
+            ctx.tracker_ip = async::dns::addr_to_string(info.ai_addr);
 
             found = true;
         }
         info = info.ai_next;
     }
 
-    async_dns::free_result(result);
+    async::dns::free_result(result);
 
     if (!found)
     {
@@ -809,7 +809,7 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
     }
 
     // Create UDP socket
-    async_udp::UdpSocket*? socket_opt = async_udp::create(ctx.loop);
+    async::udp::UdpSocket*? socket_opt = async::udp::create(ctx.loop);
     if (catch err = socket_opt)
     {
         ctx.state = AnnounceState.FAILED;
@@ -820,7 +820,7 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
     ctx.socket = socket_opt;
 
     // Create timeout timer
-    async_timer::Timer*? timer_opt = async_timer::create(ctx.loop);
+    async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
     if (catch err = timer_opt)
     {
         ctx.state = AnnounceState.FAILED;
@@ -906,5 +906,5 @@ fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torre
     DString port_str;
     port_str.appendf("%d", tracker_port);
     ctx.tracker_port_str = port_str.copy_str(mem);  // Copy to heap for async DNS
-    async_dns::resolve(loop, host, ctx.tracker_port_str, &on_dns_resolved, ctx);
+    async::dns::resolve(loop, host, ctx.tracker_port_str, &on_dns_resolved, ctx);
 }

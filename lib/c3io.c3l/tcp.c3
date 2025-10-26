@@ -1,8 +1,8 @@
-module libtorrent::async_tcp;
+module async::tcp;
 
 import uv;
 import std::io;
-import libtorrent::event_loop;
+import async::event_loop;
 
 <*
  Async TCP Socket Wrapper for libuv

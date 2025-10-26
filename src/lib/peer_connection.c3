@@ -1,7 +1,7 @@
 module libtorrent::peer_connection;
 
-import libtorrent::async_tcp;
-import libtorrent::event_loop;
+import async::tcp;
+import async::event_loop;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import libtorrent::pex;
@@ -56,7 +56,7 @@ alias PexCallback = fn void(PeerConnection* peer, pex::PexMessage* pex_msg, void
 // Manages the connection to a single peer.
 struct PeerConnection
 {
-    async_tcp::TcpConnection* tcp;
+    async::tcp::TcpConnection* tcp;
     event_loop::EventLoop* loop;
     PeerState state;
 
@@ -153,7 +153,7 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.user_data = user_data;
 
     // Connect to peer
-    async_tcp::TcpConnection*? tcp_opt = async_tcp::connect(loop, host, port, &on_tcp_connect, peer);
+    async::tcp::TcpConnection*? tcp_opt = async::tcp::connect(loop, host, port, &on_tcp_connect, peer);
     if (catch excuse = tcp_opt)
     {
         free(peer);
@@ -204,7 +204,7 @@ fn void close(PeerConnection* peer) @public
 <*
  Called when TCP connection completes.
 *>
-fn void on_tcp_connect(async_tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
 
@@ -245,7 +245,7 @@ fn void on_tcp_connect(async_tcp::TcpConnection* conn, int status, void* user_da
 <*
  Called when handshake has been sent.
 *>
-fn void on_handshake_sent(async_tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     if (status != 0)
     {
@@ -260,7 +260,7 @@ fn void on_handshake_sent(async_tcp::TcpConnection* conn, int status, void* user
 <*
  Allocate buffer for incoming TCP data.
 *>
-fn char[] alloc_buffer(async_tcp::TcpConnection* conn, usz suggested_size, void* user_data)
+fn char[] alloc_buffer(async::tcp::TcpConnection* conn, usz suggested_size, void* user_data)
 {
     return mem::new_array(char, suggested_size);
 }
@@ -268,7 +268,7 @@ fn char[] alloc_buffer(async_tcp::TcpConnection* conn, usz suggested_size, void*
 <*
  Called when TCP data is received.
 *>
-fn void on_tcp_read(async_tcp::TcpConnection* conn, char[] data, void* user_data)
+fn void on_tcp_read(async::tcp::TcpConnection* conn, char[] data, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
 
@@ -471,7 +471,7 @@ fn fault? send_message(PeerConnection* peer, char[] data) @inline
 <*
  Called when a message has been sent.
 *>
-fn void on_message_sent(async_tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_message_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     if (status != 0)
     {

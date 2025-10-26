@@ -1,8 +1,8 @@
-module libtorrent::async_file;
+module async::file;
 
 import uv;
 import std::io;
-import libtorrent::event_loop;
+import async::event_loop;
 
 <*
  Async File I/O Wrapper for libuv

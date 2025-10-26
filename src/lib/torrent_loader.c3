@@ -1,8 +1,8 @@
 module libtorrent::torrent_loader;
 
 import uv;
-import libtorrent::async_file;
-import libtorrent::event_loop;
+import async::file;
+import async::event_loop;
 import std::io;
 
 <*
@@ -43,7 +43,7 @@ struct LoadContext
     String path;
     LoadCompleteCallback cb;
     void* user_data;
-    async_file::File file;
+    async::file::File file;
     char[] file_data;
     long file_size;
 }
@@ -71,14 +71,14 @@ fn void on_stat_complete(uv::FileStat* stat, int status, void* user_data)
     ctx.file_size = (long)stat.st_size;
 
     // Open file for reading
-    async_file::open(ctx.loop, ctx.path, async_file::OPEN_RDONLY, 0,
+    async::file::open(ctx.loop, ctx.path, async::file::OPEN_RDONLY, 0,
                      &on_open_complete, ctx);
 }
 
 <*
  open() callback - file opened, now read contents.
 *>
-fn void on_open_complete(async_file::File file, int status, void* user_data)
+fn void on_open_complete(async::file::File file, int status, void* user_data)
 {
     LoadContext* ctx = (LoadContext*)user_data;
 
@@ -98,7 +98,7 @@ fn void on_open_complete(async_file::File file, int status, void* user_data)
     ctx.file = file;
 
     // Read entire file (offset 0, size from stat)
-    async_file::read(ctx.loop, file, 0, (usz)ctx.file_size,
+    async::file::read(ctx.loop, file, 0, (usz)ctx.file_size,
                      &on_read_complete, ctx);
 }
 
@@ -116,7 +116,7 @@ fn void on_read_complete(char[] data, int status, void* user_data)
         {
             ctx.cb("", status, ctx.user_data);
         }
-        async_file::close(ctx.loop, ctx.file, null, null);
+        async::file::close(ctx.loop, ctx.file, null, null);
         std::core::mem::free(ctx.path);
         std::core::mem::free(ctx);
         return;
@@ -130,7 +130,7 @@ fn void on_read_complete(char[] data, int status, void* user_data)
     }
 
     // Close file
-    async_file::close(ctx.loop, ctx.file, &on_close_complete, ctx);
+    async::file::close(ctx.loop, ctx.file, &on_close_complete, ctx);
 }
 
 <*
@@ -185,5 +185,5 @@ fn void load_file_async(event_loop::EventLoop* loop, String path,
     ctx.file_size = 0;
 
     // Start by getting file size
-    async_file::stat(loop, path, &on_stat_complete, ctx);
+    async::file::stat(loop, path, &on_stat_complete, ctx);
 }

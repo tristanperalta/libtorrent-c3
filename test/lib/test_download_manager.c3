@@ -1,7 +1,7 @@
 module libtorrent::download_manager::test;
 
 import libtorrent::download_manager;
-import libtorrent::event_loop;
+import async::event_loop;
 import libtorrent::block_manager;
 import std::hash::sha1;
 import std::io;

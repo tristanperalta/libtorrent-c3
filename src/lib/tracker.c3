@@ -6,7 +6,7 @@ import libtorrent::bencode;
 import libtorrent::metainfo;
 import libtorrent::udp_tracker;
 import libtorrent::http_tracker;
-import libtorrent::event_loop;
+import async::event_loop;
 import std::net::url;
 import std::time;
 import std::math::random;

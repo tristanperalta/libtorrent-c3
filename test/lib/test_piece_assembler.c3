@@ -1,7 +1,7 @@
 module libtorrent::piece_assembler::test;
 
 import libtorrent::piece_assembler;
-import libtorrent::event_loop;
+import async::event_loop;
 import std::hash::sha1;
 import std::io;
 

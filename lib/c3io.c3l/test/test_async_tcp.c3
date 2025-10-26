@@ -1,7 +1,7 @@
-module libtorrent::async_tcp_test;
+module async::tcp_test;
 
-import libtorrent::event_loop;
-import libtorrent::async_tcp;
+import async::event_loop;
+import async::tcp;
 import std::io;
 
 <*
@@ -19,14 +19,14 @@ fn void test_tcp_create_and_close() @test
     event_loop::EventLoop loop = loop_opt;
     defer loop.free();
 
-    async_tcp::TcpConnection*? conn_opt = async_tcp::create(&loop);
+    async::tcp::TcpConnection*? conn_opt = async::tcp::create(&loop);
     if (catch err = conn_opt)
     {
         assert(false, "Should create TCP connection");
         return;
     }
 
-    async_tcp::TcpConnection* conn = conn_opt;
+    async::tcp::TcpConnection* conn = conn_opt;
 
     conn.close();
     // Note: close() frees the connection automatically, but it's async
@@ -46,7 +46,7 @@ struct ConnectResult
     int status;
 }
 
-fn void on_test_connect(async_tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_test_connect(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     ConnectResult* result = user_data;
     result.called = true;
@@ -78,7 +78,7 @@ fn void test_tcp_connect_real_server() @test
     result.status = -1;
 
     // Connect to Google's HTTP server
-    async_tcp::TcpConnection*? conn_opt = async_tcp::connect(
+    async::tcp::TcpConnection*? conn_opt = async::tcp::connect(
         &loop, "142.250.185.46", 80, &on_test_connect, &result
     );
 
@@ -89,7 +89,7 @@ fn void test_tcp_connect_real_server() @test
         return;
     }
 
-    async_tcp::TcpConnection* conn = conn_opt;
+    async::tcp::TcpConnection* conn = conn_opt;
     // Note: connection is closed in the callback, no need for defer
 
     // Run event loop until connection completes and closes
@@ -121,14 +121,14 @@ fn void test_tcp_options() @test
     event_loop::EventLoop loop = loop_opt;
     defer loop.free();
 
-    async_tcp::TcpConnection*? conn_opt = async_tcp::create(&loop);
+    async::tcp::TcpConnection*? conn_opt = async::tcp::create(&loop);
     if (catch err = conn_opt)
     {
         assert(false, "Should create TCP connection");
         return;
     }
 
-    async_tcp::TcpConnection* conn = conn_opt;
+    async::tcp::TcpConnection* conn = conn_opt;
 
     // Test nodelay
     if (catch err = conn.set_nodelay(true))
@@ -160,14 +160,14 @@ struct ReadResult
     int bytes_received;
 }
 
-fn char[] on_test_alloc(async_tcp::TcpConnection* conn, usz suggested_size, void* user_data)
+fn char[] on_test_alloc(async::tcp::TcpConnection* conn, usz suggested_size, void* user_data)
 {
     // Allocate a buffer for reading
     char[] buf = mem::new_array(char, suggested_size);
     return buf;
 }
 
-fn void on_test_read(async_tcp::TcpConnection* conn, char[] data, void* user_data)
+fn void on_test_read(async::tcp::TcpConnection* conn, char[] data, void* user_data)
 {
     ReadResult* result = user_data;
     result.called = true;
@@ -196,7 +196,7 @@ struct WriteResult
     int status;
 }
 
-fn void on_test_write(async_tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_test_write(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     WriteResult* result = user_data;
     result.called = true;

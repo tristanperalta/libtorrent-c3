@@ -7,7 +7,7 @@
     "lib",
     "vendor/c3-vendor/libraries"
   ],
-  "dependencies": ["curl", "uv"],
+  "dependencies": ["curl", "c3io"],
   "authors": [
     "Tristan Peralta <tristan@peralta.ph>",
     "Claude Code <noreply@anthropic.com>"

@@ -1,8 +1,8 @@
-module libtorrent::async_timer;
+module async::timer;
 
 import uv;
 import std::io;
-import libtorrent::event_loop;
+import async::event_loop;
 
 <*
  Async Timer Wrapper for libuv

@@ -1,8 +1,8 @@
-module libtorrent::async_dns;
+module async::dns;
 
 import uv;
 import std::io;
-import libtorrent::event_loop;
+import async::event_loop;
 
 <*
  Async DNS Resolution Wrapper for libuv

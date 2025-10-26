@@ -1,7 +1,7 @@
-module libtorrent::async_udp::test;
+module libtorrent::async::udp::test;
 
-import libtorrent::async_udp;
-import libtorrent::event_loop;
+import async::udp;
+import async::event_loop;
 import uv;
 import std::io;
 
@@ -13,8 +13,8 @@ struct TestContext
     int send_count;
     int recv_count;
     event_loop::EventLoop* loop;
-    async_udp::UdpSocket* sender;
-    async_udp::UdpSocket* receiver;
+    async::udp::UdpSocket* sender;
+    async::udp::UdpSocket* receiver;
     char[] received_data;
     uv::Sockaddr* sender_addr;
 }
@@ -35,16 +35,16 @@ fn void test_create_close_socket() @test
     defer loop.free();
 
     // Create UDP socket
-    async_udp::UdpSocket*? socket_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? socket_opt = async::udp::create(&loop);
     if (catch err = socket_opt)
     {
         assert(false, "Should create UDP socket");
         return;
     }
-    async_udp::UdpSocket* socket = socket_opt;
+    async::udp::UdpSocket* socket = socket_opt;
 
     // Close socket
-    async_udp::close(socket);
+    async::udp::close(socket);
 
     // Run loop until close completes
     while (loop.is_alive())
@@ -68,19 +68,19 @@ fn void test_bind_socket() @test
     EventLoop loop = loop_opt;
     defer loop.free();
 
-    async_udp::UdpSocket*? socket_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? socket_opt = async::udp::create(&loop);
     if (catch err = socket_opt)
     {
         assert(false, "Should create UDP socket");
         return;
     }
-    async_udp::UdpSocket* socket = socket_opt;
+    async::udp::UdpSocket* socket = socket_opt;
 
     // Bind to any address on a random port (0 = let OS choose)
-    async_udp::bind(socket, "0.0.0.0", 0);
+    async::udp::bind(socket, "0.0.0.0", 0);
 
     // Close socket
-    async_udp::close(socket);
+    async::udp::close(socket);
 
     // Run loop until close completes
     while (loop.is_alive())
@@ -93,7 +93,7 @@ fn void test_bind_socket() @test
 // Send/Receive Tests
 // ============================================================================
 
-fn void on_recv_echo(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+fn void on_recv_echo(async::udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
 
@@ -130,12 +130,12 @@ fn void on_recv_echo(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* ad
     }
 }
 
-fn char[] on_alloc_default(async_udp::UdpSocket* socket, usz suggested_size, void* user_data)
+fn char[] on_alloc_default(async::udp::UdpSocket* socket, usz suggested_size, void* user_data)
 {
     return mem::new_array(char, suggested_size);
 }
 
-fn void on_send_complete(async_udp::UdpSocket* socket, int status, void* user_data)
+fn void on_send_complete(async::udp::UdpSocket* socket, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.send_count++;
@@ -168,34 +168,34 @@ fn void test_send_receive() @test
     ctx.received_data = {};
 
     // Create receiver socket
-    async_udp::UdpSocket*? receiver_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? receiver_opt = async::udp::create(&loop);
     if (catch err = receiver_opt)
     {
         assert(false, "Should create receiver socket");
         return;
     }
-    async_udp::UdpSocket* receiver = receiver_opt;
+    async::udp::UdpSocket* receiver = receiver_opt;
     ctx.receiver = receiver;
 
     // Bind receiver to localhost on port 9001
-    async_udp::bind(receiver, "127.0.0.1", 9001);
+    async::udp::bind(receiver, "127.0.0.1", 9001);
 
     // Start receiving
-    async_udp::recv_start(receiver, &on_alloc_default, &on_recv_echo, &ctx);
+    async::udp::recv_start(receiver, &on_alloc_default, &on_recv_echo, &ctx);
 
     // Create sender socket
-    async_udp::UdpSocket*? sender_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? sender_opt = async::udp::create(&loop);
     if (catch err = sender_opt)
     {
         assert(false, "Should create sender socket");
         return;
     }
-    async_udp::UdpSocket* sender = sender_opt;
+    async::udp::UdpSocket* sender = sender_opt;
     ctx.sender = sender;
 
     // Send datagram to receiver
     String test_data = "Hello UDP!";
-    async_udp::send(sender, "127.0.0.1", 9001, (char[])test_data, &on_send_complete, &ctx);
+    async::udp::send(sender, "127.0.0.1", 9001, (char[])test_data, &on_send_complete, &ctx);
 
     // Run event loop until we receive the datagram
     int max_iterations = 100;
@@ -215,8 +215,8 @@ fn void test_send_receive() @test
     {
         free(ctx.received_data);
     }
-    async_udp::close(sender);
-    async_udp::close(receiver);
+    async::udp::close(sender);
+    async::udp::close(receiver);
 
     // Run loop until close completes
     while (loop.is_alive())
@@ -238,7 +238,7 @@ struct MultiContext
     event_loop::EventLoop* loop;
 }
 
-fn void on_recv_multi(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+fn void on_recv_multi(async::udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
 {
     MultiContext* ctx = (MultiContext*)user_data;
 
@@ -253,7 +253,7 @@ fn void on_recv_multi(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* a
     }
 }
 
-fn void on_send_multi(async_udp::UdpSocket* socket, int status, void* user_data)
+fn void on_send_multi(async::udp::UdpSocket* socket, int status, void* user_data)
 {
     MultiContext* ctx = (MultiContext*)user_data;
 
@@ -282,31 +282,31 @@ fn void test_multiple_datagrams() @test
     ctx.loop = &loop;
 
     // Create receiver
-    async_udp::UdpSocket*? receiver_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? receiver_opt = async::udp::create(&loop);
     if (catch err = receiver_opt)
     {
         assert(false, "Should create receiver socket");
         return;
     }
-    async_udp::UdpSocket* receiver = receiver_opt;
+    async::udp::UdpSocket* receiver = receiver_opt;
 
-    async_udp::bind(receiver, "127.0.0.1", 9002);
-    async_udp::recv_start(receiver, &on_alloc_default, &on_recv_multi, &ctx);
+    async::udp::bind(receiver, "127.0.0.1", 9002);
+    async::udp::recv_start(receiver, &on_alloc_default, &on_recv_multi, &ctx);
 
     // Create sender
-    async_udp::UdpSocket*? sender_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? sender_opt = async::udp::create(&loop);
     if (catch err = sender_opt)
     {
         assert(false, "Should create sender socket");
         return;
     }
-    async_udp::UdpSocket* sender = sender_opt;
+    async::udp::UdpSocket* sender = sender_opt;
 
     // Send multiple datagrams
     for (int i = 0; i < ctx.messages_to_send; i++)
     {
         String msg = "Message";
-        async_udp::send(sender, "127.0.0.1", 9002, (char[])msg, &on_send_multi, &ctx);
+        async::udp::send(sender, "127.0.0.1", 9002, (char[])msg, &on_send_multi, &ctx);
     }
 
     // Run event loop until all messages received
@@ -322,8 +322,8 @@ fn void test_multiple_datagrams() @test
     assert(ctx.received == ctx.messages_to_send, "Should receive all messages");
 
     // Clean up
-    async_udp::close(sender);
-    async_udp::close(receiver);
+    async::udp::close(sender);
+    async::udp::close(receiver);
 
     while (loop.is_alive())
     {
@@ -343,7 +343,7 @@ struct SendToContext
     event_loop::EventLoop* loop;
 }
 
-fn void on_recv_capture_addr(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+fn void on_recv_capture_addr(async::udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
 {
     SendToContext* ctx = (SendToContext*)user_data;
 
@@ -359,12 +359,12 @@ fn void on_recv_capture_addr(async_udp::UdpSocket* socket, char[] data, uv::Sock
 
             // Send reply back to sender
             String reply = "Reply";
-            async_udp::send_to(socket, ctx.sender_addr, (char[])reply, null, null);
+            async::udp::send_to(socket, ctx.sender_addr, (char[])reply, null, null);
         }
     }
 }
 
-fn void on_recv_reply(async_udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+fn void on_recv_reply(async::udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
 {
     SendToContext* ctx = (SendToContext*)user_data;
 
@@ -409,32 +409,32 @@ fn void test_send_to_addr() @test
     ctx.loop = &loop;
 
     // Create receiver (will reply to sender)
-    async_udp::UdpSocket*? receiver_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? receiver_opt = async::udp::create(&loop);
     if (catch err = receiver_opt)
     {
         assert(false, "Should create receiver socket");
         return;
     }
-    async_udp::UdpSocket* receiver = receiver_opt;
+    async::udp::UdpSocket* receiver = receiver_opt;
 
-    async_udp::bind(receiver, "127.0.0.1", 9003);
-    async_udp::recv_start(receiver, &on_alloc_default, &on_recv_capture_addr, &ctx);
+    async::udp::bind(receiver, "127.0.0.1", 9003);
+    async::udp::recv_start(receiver, &on_alloc_default, &on_recv_capture_addr, &ctx);
 
     // Create sender (will receive reply)
-    async_udp::UdpSocket*? sender_opt = async_udp::create(&loop);
+    async::udp::UdpSocket*? sender_opt = async::udp::create(&loop);
     if (catch err = sender_opt)
     {
         assert(false, "Should create sender socket");
         return;
     }
-    async_udp::UdpSocket* sender = sender_opt;
+    async::udp::UdpSocket* sender = sender_opt;
 
-    async_udp::bind(sender, "127.0.0.1", 9004);
-    async_udp::recv_start(sender, &on_alloc_default, &on_recv_reply, &ctx);
+    async::udp::bind(sender, "127.0.0.1", 9004);
+    async::udp::recv_start(sender, &on_alloc_default, &on_recv_reply, &ctx);
 
     // Send initial message
     String initial = "Hello";
-    async_udp::send(sender, "127.0.0.1", 9003, (char[])initial, null, null);
+    async::udp::send(sender, "127.0.0.1", 9003, (char[])initial, null, null);
 
     // Run event loop until reply received
     int max_iterations = 200;
@@ -453,8 +453,8 @@ fn void test_send_to_addr() @test
     {
         free(ctx.sender_addr);
     }
-    async_udp::close(sender);
-    async_udp::close(receiver);
+    async::udp::close(sender);
+    async::udp::close(receiver);
 
     while (loop.is_alive())
     {

@@ -1,7 +1,7 @@
 module libtorrent::http_tracker;
 
 import libtorrent::http;
-import libtorrent::event_loop;
+import async::event_loop;
 import libtorrent::tracker;
 import libtorrent::metainfo;
 import std::net::url;
