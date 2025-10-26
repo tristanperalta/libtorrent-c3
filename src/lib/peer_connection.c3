@@ -210,7 +210,9 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
 
     if (status != 0)
     {
-        // Connection failed - notify via callback
+        // Connection failed - libuv already cleaned up the handle
+        // Don't call close() as the connection never succeeded
+        peer.tcp = null;
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -227,6 +229,11 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     if (catch excuse = conn.start_read(&alloc_buffer, &on_tcp_read, peer))
     {
         logger::log(logger::LogLevel.ERROR, "Failed to start reading from peer");
+        if (peer.tcp)
+        {
+            peer.tcp.close();
+            peer.tcp = null;
+        }
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -236,6 +243,11 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     if (catch excuse = conn.write(handshake, &on_handshake_sent, peer))
     {
         logger::log(logger::LogLevel.ERROR, "Failed to send handshake to peer");
+        if (peer.tcp)
+        {
+            peer.tcp.close();
+            peer.tcp = null;
+        }
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -251,6 +263,11 @@ fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* use
     {
         PeerConnection* peer = (PeerConnection*)user_data;
         logger::logf(logger::LogLevel.ERROR, "Failed to send handshake: status=%d", status);
+        if (peer.tcp)
+        {
+            peer.tcp.close();
+            peer.tcp = null;
+        }
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
     }
@@ -275,6 +292,11 @@ fn void on_tcp_read(async::tcp::TcpConnection* conn, char[] data, void* user_dat
     if (data.len == 0)
     {
         // EOF - connection closed
+        if (peer.tcp)
+        {
+            peer.tcp.close();
+            peer.tcp = null;
+        }
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -720,8 +742,12 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
     pex::PexMessage pex_msg = pex_msg_opt;
     defer pex::free_pex_message(&pex_msg);
 
-    // Debug output disabled for logging mode
-    // io::printfn("[PEX] Received %d added, %d dropped peers", pex_msg.added.len, pex_msg.dropped.len);
+    // Log PEX activity
+    if (pex_msg.added.len > 0 || pex_msg.dropped.len > 0)
+    {
+        logger::logf(logger::LogLevel.INFO, "[PEX] Received %d added, %d dropped peers",
+                     pex_msg.added.len, pex_msg.dropped.len);
+    }
 
     // Notify user callback (e.g., peer_pool) to add these peers
     if (peer.pex_cb)
@@ -783,8 +809,9 @@ fn void? send_pex_message(PeerConnection* peer) @public
         return err?;
     }
 
-    // Debug output disabled for logging mode
-    // io::printfn("[PEX] Sent %d added, %d dropped peers", peer.added_peers.len, peer.dropped_peers.len);
+    // Log PEX activity
+    logger::logf(logger::LogLevel.INFO, "[PEX] Sent %d added, %d dropped peers",
+                 peer.added_peers.len, peer.dropped_peers.len);
 
     // Update rate limit timestamp
     peer.last_pex_sent_sec = (long)time::now().to_seconds();
