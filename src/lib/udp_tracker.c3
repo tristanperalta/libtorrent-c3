@@ -13,6 +13,7 @@ import std::net::url;
 import std::time;
 import std::math::random;
 import std::os::linux; // For htonl, htons, ntohl, ntohs
+import libtorrent::logger;
 
 <*
  Async UDP Tracker Implementation
@@ -594,7 +595,7 @@ fn void on_announce_sent(async_udp::UdpSocket* socket, int status, void* user_da
     if (status < 0)
     {
         AnnounceContext* ctx = (AnnounceContext*)user_data;
-        io::printfn("Announce send failed: %s", (ZString)uv::strerror(status));
+        logger::logf(logger::LogLevel.ERROR, "Announce send failed: %s", (ZString)uv::strerror(status));
 
         // Retry
         if (ctx.retry < udp_tracker::UDP_MAX_RETRIES)
@@ -715,7 +716,7 @@ fn void on_connect_sent(async_udp::UdpSocket* socket, int status, void* user_dat
     if (status < 0)
     {
         AnnounceContext* ctx = (AnnounceContext*)user_data;
-        io::printfn("Connect send failed: %s", (ZString)uv::strerror(status));
+        logger::logf(logger::LogLevel.ERROR, "Connect send failed: %s", (ZString)uv::strerror(status));
 
         // Retry
         if (ctx.retry < udp_tracker::UDP_MAX_RETRIES)

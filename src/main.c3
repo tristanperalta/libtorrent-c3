@@ -15,6 +15,7 @@ import libtorrent::storage_manager;
 import libtorrent::bitfield;
 import libtorrent::async_timer;
 import libtorrent::peer_pool;
+import libtorrent::logger;
 
 fn int main(int argc, ZString* argv)
 {
@@ -83,6 +84,8 @@ fn int main(int argc, ZString* argv)
         // Parse optional arguments
         int numwant = tracker::DEFAULT_NUMWANT;
         String save_path = ".";  // Default to current directory
+        String log_file_path = "";  // No file logging by default
+        bool debug_mode = false;
 
         for (usz i = 3; i < (usz)argc; i++)
         {
@@ -99,9 +102,18 @@ fn int main(int argc, ZString* argv)
                 save_path = (String)argv[i + 1].str_view();
                 i++; // Skip next arg
             }
+            else if (arg == "--log-file" && i + 1 < (usz)argc)
+            {
+                log_file_path = (String)argv[i + 1].str_view();
+                i++; // Skip next arg
+            }
+            else if (arg == "--debug")
+            {
+                debug_mode = true;
+            }
         }
 
-        return cmd_download(&loop, torrent_path, save_path, numwant);
+        return cmd_download(&loop, torrent_path, save_path, numwant, log_file_path, debug_mode);
     }
     else
     {
@@ -185,6 +197,8 @@ fn void print_usage()
     io::printfn("Download Options:");
     io::printfn("  --save-path <path>   Directory to save files (default: current directory)");
     io::printfn("  --numwant <n>        Number of peers to request from tracker (default: 50)");
+    io::printfn("  --log-file <path>    Log to file");
+    io::printfn("  --debug              Enable debug output to stderr");
     io::printfn("");
     io::printfn("Examples:");
     io::printfn("  torrent-client info ubuntu.torrent");
@@ -192,6 +206,7 @@ fn void print_usage()
     io::printfn("  torrent-client connect ubuntu.torrent");
     io::printfn("  torrent-client download ubuntu.torrent");
     io::printfn("  torrent-client download ubuntu.torrent --save-path ~/Downloads --numwant 100");
+    io::printfn("  torrent-client download ubuntu.torrent --log-file download.log --debug");
     io::printfn("  torrent-client ubuntu.torrent          # Same as 'info'");
 }
 
@@ -1882,6 +1897,75 @@ fn void on_download_load_complete(String data, int status, void* user_data)
     verify_all_existing_pieces_async(ctx);
 }
 
+// ============================================================================
+// Log Output Implementations
+// ============================================================================
+
+// File Log Output - Writes log messages to a file.
+struct FileLogOutput (logger::LogOutput)
+{
+    std::io::File file;
+    bool is_open;
+}
+
+fn void FileLogOutput.write_log(FileLogOutput* self, logger::LogLevel level, String message) @dynamic
+{
+    if (self.is_open)
+    {
+        DString buf;
+        buf.appendf("[%s] %s\n", logger::level_to_string(level), message);
+        self.file.write(buf.str_view())!!;
+        self.file.flush()!!;  // Ensure logs are written immediately
+    }
+}
+
+fn void FileLogOutput.close(FileLogOutput* self) @dynamic
+{
+    if (self.is_open)
+    {
+        self.file.close()!!;
+        self.is_open = false;
+    }
+}
+
+// Stderr Log Output - Writes log messages to stderr.
+struct StderrLogOutput (logger::LogOutput)
+{
+    char _dummy;  // C3 doesn't allow zero-sized structs
+}
+
+fn void StderrLogOutput.write_log(StderrLogOutput* self, logger::LogLevel level, String message) @dynamic
+{
+    io::eprintfn("[%s] %s", logger::level_to_string(level), message);
+}
+
+fn void StderrLogOutput.close(StderrLogOutput* self) @dynamic
+{
+    // No cleanup needed for stderr
+}
+
+// Log sink configuration for routing log messages to multiple destinations.
+struct LogSink
+{
+    logger::LogOutput[] outputs;  // Array of log output interfaces
+}
+
+// Log callback - routes library log messages to all registered outputs.
+fn void on_log_message(logger::LogLevel level, String message, void* user_data)
+{
+    LogSink* sink = (LogSink*)user_data;
+
+    // Write to all registered log outputs
+    foreach (output : sink.outputs)
+    {
+        output.write_log(level, message);
+    }
+}
+
+// ============================================================================
+// Download Command - Full torrent download with piece management
+// ============================================================================
+
 <*
  Download command: Download a complete torrent to disk.
 
@@ -1889,13 +1973,55 @@ fn void on_download_load_complete(String data, int status, void* user_data)
  @param torrent_path : "Path to torrent file"
  @param save_path : "Directory to save downloaded files"
  @param numwant : "Number of peers to request from tracker"
+ @param log_file_path : "Path to log file (empty string = no file logging)"
+ @param debug_mode : "Enable debug output to stderr"
  @return "Exit code (0 = success, 1 = error)"
 *>
 fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
-                    String save_path, int numwant)
+                    String save_path, int numwant, String log_file_path, bool debug_mode)
 {
     io::printfn("=== BitTorrent Download ===");
     io::printfn("");
+
+    // Set up multi-output logging system
+    LogSink log_sink;
+    FileLogOutput* file_out = null;
+    StderrLogOutput* stderr_out = null;
+
+    // Count outputs
+    usz num_outputs = 0;
+    if (log_file_path.len > 0) num_outputs++;
+    if (debug_mode) num_outputs++;
+
+    // Build outputs array
+    if (num_outputs > 0)
+    {
+        log_sink.outputs = mem::new_array(logger::LogOutput, num_outputs);
+        usz output_idx = 0;
+
+        // Add file output if requested
+        if (log_file_path.len > 0)
+        {
+            file_out = mem::new(FileLogOutput);
+            file_out.file = file::open(log_file_path, "w")!!;
+            file_out.is_open = true;
+            log_sink.outputs[output_idx] = file_out;
+            output_idx++;
+            io::printfn("Logging to file: %s", log_file_path);
+        }
+
+        // Add stderr output if requested
+        if (debug_mode)
+        {
+            stderr_out = mem::new(StderrLogOutput);
+            log_sink.outputs[output_idx] = stderr_out;
+            output_idx++;
+            io::printfn("Debug logging to stderr enabled");
+        }
+
+        // Set callback
+        logger::set_log_callback(&on_log_message, &log_sink);
+    }
 
     DownloadContext ctx;
     ctx.loop = loop;
@@ -1917,6 +2043,26 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.pieces_verified_count = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
+
+    // Start periodic log flush timer (every 2 seconds) if logging is enabled
+    async_timer::Timer* flush_timer = null;
+    if (num_outputs > 0)
+    {
+        async_timer::Timer*? flush_timer_opt = async_timer::create(loop);
+        if (catch err = flush_timer_opt)
+        {
+            io::eprintfn("Warning: Failed to create log flush timer");
+        }
+        else
+        {
+            flush_timer = flush_timer_opt;
+            // Start after 2 seconds, then repeat every 2 seconds
+            async_timer::start(flush_timer, 2000, 2000,
+                              fn void(async_timer::Timer* timer, void* user_data) {
+                                  logger::flush_logs();
+                              }, null);
+        }
+    }
 
     // Load torrent file async
     torrent_loader::load_file_async(loop, torrent_path,
@@ -1958,6 +2104,30 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     {
         peer_pool::free(ctx.peer_pool);
     }
+
+    // Stop and close log flush timer
+    if (flush_timer)
+    {
+        async_timer::close(flush_timer);
+    }
+
+    // Flush any remaining logs before cleanup
+    logger::flush_logs();
+
+    // Cleanup log outputs (close files, etc.)
+    if (num_outputs > 0)
+    {
+        foreach (output : log_sink.outputs)
+        {
+            output.close();
+        }
+        if (file_out) free(file_out);
+        if (stderr_out) free(stderr_out);
+        if (log_sink.outputs.len > 0) free(log_sink.outputs);
+    }
+
+    // Free logger resources
+    logger::free_logger();
 
     return ctx.exit_code;
 }

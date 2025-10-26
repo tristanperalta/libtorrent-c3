@@ -4,6 +4,7 @@ import std::io;
 import std::core::mem;
 import std::core::dstring;
 import std::collections::list;
+import libtorrent::logger;
 
 /**
  * Bencode Format Specification
@@ -636,9 +637,9 @@ fn void dict_set(BencodeValue* dict, String key, BencodeValue* value) @public
         if (cmp >= 0)
         {
             // Keys not in sorted order - this violates BitTorrent spec
-            io::printfn("Warning: Dictionary keys must be in lexicographically sorted order!");
-            io::printfn("  Last key: %s", (String)last_key);
-            io::printfn("  New key: %s", key);
+            logger::log(logger::LogLevel.WARN, "Dictionary keys must be in lexicographically sorted order!");
+            logger::logf(logger::LogLevel.WARN, "  Last key: %s", (String)last_key);
+            logger::logf(logger::LogLevel.WARN, "  New key: %s", key);
         }
     }
 

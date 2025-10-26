@@ -8,6 +8,7 @@ import libtorrent::pex;
 import libtorrent::common;
 import std::io;
 import std::time;
+import libtorrent::logger;
 
 <*
  Peer Connection State Machine
@@ -225,7 +226,7 @@ fn void on_tcp_connect(async_tcp::TcpConnection* conn, int status, void* user_da
     // Start reading to receive handshake response
     if (catch excuse = conn.start_read(&alloc_buffer, &on_tcp_read, peer))
     {
-        io::printfn("Failed to start reading from peer");
+        logger::log(logger::LogLevel.ERROR, "Failed to start reading from peer");
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -234,7 +235,7 @@ fn void on_tcp_connect(async_tcp::TcpConnection* conn, int status, void* user_da
     // Send handshake
     if (catch excuse = conn.write(handshake, &on_handshake_sent, peer))
     {
-        io::printfn("Failed to send handshake to peer");
+        logger::log(logger::LogLevel.ERROR, "Failed to send handshake to peer");
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -249,7 +250,7 @@ fn void on_handshake_sent(async_tcp::TcpConnection* conn, int status, void* user
     if (status != 0)
     {
         PeerConnection* peer = (PeerConnection*)user_data;
-        io::printfn("Failed to send handshake: status=%d", status);
+        logger::logf(logger::LogLevel.ERROR, "Failed to send handshake: status=%d", status);
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
     }
@@ -307,7 +308,7 @@ fn void process_handshake(PeerConnection* peer)
     peer_wire::HandshakeMsg? handshake_opt = peer_wire::decode_handshake((char[])buffer);
     if (catch excuse = handshake_opt)
     {
-        io::printfn("Invalid handshake from peer");
+        logger::log(logger::LogLevel.ERROR, "Invalid handshake from peer");
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -328,7 +329,7 @@ fn void process_handshake(PeerConnection* peer)
 
     if (!hash_matches)
     {
-        io::printfn("Peer sent wrong info hash");
+        logger::log(logger::LogLevel.ERROR, "Peer sent wrong info hash");
         peer.state = PeerState.CLOSED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
         return;
@@ -357,7 +358,7 @@ fn void process_handshake(PeerConnection* peer)
     }
     else if (!peer.supports_extensions)
     {
-        io::printfn("[EXT] Peer does not support extension protocol - PEX unavailable");
+        logger::log(logger::LogLevel.INFO, "Peer does not support extension protocol - PEX unavailable");
     }
 
     // Process any messages that came with the handshake
@@ -390,7 +391,7 @@ fn void process_messages(PeerConnection* peer)
         peer_wire::Message? msg_opt = peer_wire::decode_message((char[])buffer);
         if (catch excuse = msg_opt)
         {
-            io::printfn("Invalid message from peer");
+            logger::log(logger::LogLevel.ERROR, "Invalid message from peer");
             peer.state = PeerState.CLOSED;
             if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
             return;
@@ -475,7 +476,7 @@ fn void on_message_sent(async_tcp::TcpConnection* conn, int status, void* user_d
     if (status != 0)
     {
         PeerConnection* peer = (PeerConnection*)user_data;
-        io::printfn("Failed to send message to peer: status=%d", status);
+        logger::logf(logger::LogLevel.ERROR, "Failed to send message to peer: status=%d", status);
         // Don't close connection on send failure, just log it
     }
 }
@@ -631,12 +632,13 @@ fn void send_extension_handshake(PeerConnection* peer) @private
 
     if (catch excuse = send_message(peer, msg))
     {
-        io::printfn("Failed to send extension handshake");
+        logger::log(logger::LogLevel.ERROR, "Failed to send extension handshake");
         return;
     }
 
     peer.sent_ext_handshake = true;
-    io::printfn("[EXT] Sent extension handshake (ut_pex: %d)", peer.our_pex_msg_id);
+    // Debug output disabled for logging mode
+    // io::printfn("[EXT] Sent extension handshake (ut_pex: %d)", peer.our_pex_msg_id);
 }
 
 <*
@@ -647,7 +649,7 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
     peer_wire::ExtensionHandshake? ext_hs_opt = peer_wire::decode_extension_handshake(payload);
     if (catch excuse = ext_hs_opt)
     {
-        io::printfn("[EXT] Failed to decode extension handshake");
+        logger::log(logger::LogLevel.ERROR, "Failed to decode extension handshake");
         return;
     }
 
@@ -661,13 +663,15 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
     {
         peer.supports_pex = true;
         peer.peer_pex_msg_id = ext_hs.ut_pex_id;
-        io::printfn("[EXT] Peer supports PEX (msg_id: %d)", peer.peer_pex_msg_id);
+        // Debug output disabled for logging mode
+        // io::printfn("[EXT] Peer supports PEX (msg_id: %d)", peer.peer_pex_msg_id);
     }
 
-    if (ext_hs.client_name.len > 0)
-    {
-        io::printfn("[EXT] Peer client: %s", ext_hs.client_name);
-    }
+    // Debug output disabled for logging mode
+    // if (ext_hs.client_name.len > 0)
+    // {
+    //     io::printfn("[EXT] Peer client: %s", ext_hs.client_name);
+    // }
 }
 
 <*
@@ -678,7 +682,7 @@ fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
     peer_wire::ExtensionMessage? ext_msg_opt = peer_wire::decode_extension_message(payload);
     if (catch excuse = ext_msg_opt)
     {
-        io::printfn("[EXT] Failed to decode extension message");
+        logger::log(logger::LogLevel.ERROR, "Failed to decode extension message");
         return;
     }
 
@@ -697,7 +701,7 @@ fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
     }
     else
     {
-        io::printfn("[EXT] Unknown extension message ID: %d", ext_msg.ext_msg_id);
+        logger::logf(logger::LogLevel.WARN, "Unknown extension message ID: %d", ext_msg.ext_msg_id);
     }
 }
 
@@ -709,14 +713,15 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
     pex::PexMessage? pex_msg_opt = pex::decode_pex_message(payload);
     if (catch excuse = pex_msg_opt)
     {
-        io::printfn("[PEX] Failed to decode PEX message");
+        logger::log(logger::LogLevel.ERROR, "Failed to decode PEX message");
         return;
     }
 
     pex::PexMessage pex_msg = pex_msg_opt;
     defer pex::free_pex_message(&pex_msg);
 
-    io::printfn("[PEX] Received %d added, %d dropped peers", pex_msg.added.len, pex_msg.dropped.len);
+    // Debug output disabled for logging mode
+    // io::printfn("[PEX] Received %d added, %d dropped peers", pex_msg.added.len, pex_msg.dropped.len);
 
     // Notify user callback (e.g., peer_pool) to add these peers
     if (peer.pex_cb)
@@ -774,11 +779,12 @@ fn void? send_pex_message(PeerConnection* peer) @public
     // Send message
     if (catch err = send_message(peer, ext_msg))
     {
-        io::printfn("[PEX] Failed to send PEX message");
+        logger::log(logger::LogLevel.ERROR, "Failed to send PEX message");
         return err?;
     }
 
-    io::printfn("[PEX] Sent %d added, %d dropped peers", peer.added_peers.len, peer.dropped_peers.len);
+    // Debug output disabled for logging mode
+    // io::printfn("[PEX] Sent %d added, %d dropped peers", peer.added_peers.len, peer.dropped_peers.len);
 
     // Update rate limit timestamp
     peer.last_pex_sent_sec = (long)time::now().to_seconds();

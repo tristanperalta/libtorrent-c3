@@ -1036,10 +1036,11 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
         }
     }
 
-    if (rejected_count > 0)
-    {
-        io::printfn("[PEX] Added %d peers, rejected %d invalid peers", added_count, rejected_count);
-    }
+    // Debug output disabled for logging mode
+    // if (rejected_count > 0)
+    // {
+    //     io::printfn("[PEX] Added %d peers, rejected %d invalid peers", added_count, rejected_count);
+    // }
 
     // After adding new peers, update candidate cache and try to connect
     if (added_count > 0)
@@ -1118,8 +1119,9 @@ fn fault? PeerPool.mark_hash_failure(&self, char[4] ip, ushort port) @public
     // Increment hash failure counter
     peer.hashfails++;
 
-    io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked with hash failure (total: %d)",
-                peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port, peer.hashfails);
+    // Debug output disabled for logging mode
+    // io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked with hash failure (total: %d)",
+    //             peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port, peer.hashfails);
 
     // Recalculate rank with penalty (-30 per hash failure)
     update_peer_rank((PeerPool*)self, peer);
@@ -1153,8 +1155,9 @@ fn fault? PeerPool.mark_peer_seed(&self, char[4] ip, ushort port) @public
     // Mark as seed
     peer.seed = true;
 
-    io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked as seed",
-                peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port);
+    // Debug output disabled for logging mode
+    // io::printfn("  [POOL] Peer %d.%d.%d.%d:%d marked as seed",
+    //             peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port);
 
     // Recalculate rank with seed boost (+50)
     update_peer_rank((PeerPool*)self, peer);
