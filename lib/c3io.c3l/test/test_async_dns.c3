@@ -1,4 +1,4 @@
-module libtorrent::async::dns::test;
+module async::dns::test;
 
 import async::dns;
 import async::event_loop;

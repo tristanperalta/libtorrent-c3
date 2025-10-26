@@ -1,4 +1,4 @@
-module libtorrent::async::udp::test;
+module async::udp::test;
 
 import async::udp;
 import async::event_loop;
