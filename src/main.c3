@@ -17,6 +17,7 @@ import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::logger;
 import torrent_client::log_outputs;
+import raylib_gui;
 
 fn int main(int argc, ZString* argv)
 {
@@ -87,6 +88,7 @@ fn int main(int argc, ZString* argv)
         String save_path = ".";  // Default to current directory
         String log_file_path = "";  // No file logging by default
         bool debug_mode = false;
+        bool gui_mode = false;
 
         for (usz i = 3; i < (usz)argc; i++)
         {
@@ -112,9 +114,13 @@ fn int main(int argc, ZString* argv)
             {
                 debug_mode = true;
             }
+            else if (arg == "--gui")
+            {
+                gui_mode = true;
+            }
         }
 
-        return cmd_download(&loop, torrent_path, save_path, numwant, log_file_path, debug_mode);
+        return cmd_download(&loop, torrent_path, save_path, numwant, log_file_path, debug_mode, gui_mode);
     }
     else
     {
@@ -200,6 +206,7 @@ fn void print_usage()
     io::printfn("  --numwant <n>        Number of peers to request from tracker (default: 50)");
     io::printfn("  --log-file <path>    Log to file");
     io::printfn("  --debug              Enable debug output to stderr");
+    io::printfn("  --gui                Launch graphical user interface");
     io::printfn("");
     io::printfn("Examples:");
     io::printfn("  torrent-client info ubuntu.torrent");
@@ -208,6 +215,7 @@ fn void print_usage()
     io::printfn("  torrent-client download ubuntu.torrent");
     io::printfn("  torrent-client download ubuntu.torrent --save-path ~/Downloads --numwant 100");
     io::printfn("  torrent-client download ubuntu.torrent --log-file download.log --debug");
+    io::printfn("  torrent-client download ubuntu.torrent --gui");
     io::printfn("  torrent-client ubuntu.torrent          # Same as 'info'");
 }
 
@@ -1072,6 +1080,9 @@ struct DownloadContext
     // Options
     int numwant;
     String save_path;
+
+    // GUI integration (null in CLI mode)
+    raylib_gui::UIState* gui_state;
 }
 
 <*
@@ -1151,6 +1162,17 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
     // Check progress
     usz total, complete, downloading;
     ctx.dm.get_progress(&total, &complete, &downloading);
+
+    // Update GUI if present
+    if (ctx.gui_state)
+    {
+        usz connected_peers, total_peers, candidates, connecting;
+        ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected_peers);
+
+        raylib_gui::update_progress(ctx.gui_state, (uint)complete, (uint)downloading,
+                                    0, 0.0, 0.0);  // TODO: Calculate actual downloaded bytes and speeds
+        raylib_gui::update_peers(ctx.gui_state, (int)connected_peers, (int)total_peers);
+    }
 
     if (complete % 100 == 0 || complete == total)
     {
@@ -1509,12 +1531,21 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
 {
     DownloadContext* ctx = (DownloadContext*)user_data;
     ctx.tracker_completed = true;
-    ctx.tracker_response = response;
+    // Note: Don't save response pointer - it becomes invalid after this callback returns
 
     if (status != 0 || !response)
     {
         String error_desc = tracker_error_string(status);
         io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, status);
+
+        // Update GUI if present
+        if (ctx.gui_state)
+        {
+            DString status_msg;
+            status_msg.appendf("Error: %s", error_desc);
+            raylib_gui::update_tracker_status(ctx.gui_state, status_msg.str_view());
+        }
+
         ctx.exit_code = 1;
         ctx.download_complete = true;
         return;
@@ -1523,6 +1554,15 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     if (response.failure_reason.len > 0)
     {
         io::eprintfn("Tracker error: %s", response.failure_reason);
+
+        // Update GUI if present
+        if (ctx.gui_state)
+        {
+            DString status_msg;
+            status_msg.appendf("Error: %s", response.failure_reason);
+            raylib_gui::update_tracker_status(ctx.gui_state, status_msg.str_view());
+        }
+
         ctx.exit_code = 1;
         ctx.download_complete = true;
         return;
@@ -1532,11 +1572,26 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     if (num_peers == 0)
     {
         io::printfn("No peers returned by tracker - will retry later");
+
+        // Update GUI if present
+        if (ctx.gui_state)
+        {
+            raylib_gui::update_tracker_status(ctx.gui_state, "No peers available");
+        }
+
         // Don't stop download, just wait for next re-announce
         return;
     }
 
     io::printfn("Tracker returned %d peers", num_peers);
+
+    // Update GUI if present
+    if (ctx.gui_state)
+    {
+        DString status_msg;
+        status_msg.appendf("Announce OK (%d peers)", num_peers);
+        raylib_gui::update_tracker_status(ctx.gui_state, status_msg.str_view());
+    }
 
     // Add all peers to peer pool (Phase 1 integration)
     ctx.peer_pool.add_peers_from_tracker(response.peers);
@@ -1544,6 +1599,13 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     // Show peer pool stats
     usz total_peers, candidates, connecting, connected;
     ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
+
+    // Update GUI if present
+    if (ctx.gui_state)
+    {
+        raylib_gui::update_peers(ctx.gui_state, (int)connected, (int)total_peers);
+    }
+
     io::printfn("  Peer pool now has %d total peers (%d candidates, %d connecting, %d connected)",
                 total_peers, candidates, connecting, connected);
 
@@ -1899,6 +1961,239 @@ fn void on_download_load_complete(String data, int status, void* user_data)
 }
 
 // ============================================================================
+// Download Command (GUI Mode) - Graphical interface with raylib
+// ============================================================================
+
+<*
+ Download command with GUI.
+
+ @param loop : "Event loop"
+ @param torrent_path : "Path to torrent file"
+ @param save_path : "Directory to save downloaded files"
+ @param numwant : "Number of peers to request from tracker"
+ @return "Exit code (0 = success, 1 = error)"
+*>
+fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
+                        String save_path, int numwant)
+{
+    // Load torrent file synchronously
+    File file = file::open(torrent_path, "rb")!!;
+    defer (void)file.close();
+
+    usz file_size = (usz)file.seek(0, io::Seek.END)!!;
+    file.seek(0, io::Seek.SET)!!;
+
+    char[] data = mem::new_array(char, file_size);
+    defer free(data);
+
+    usz bytes_read = (usz)file.read(data)!!;
+    if (bytes_read != file_size)
+    {
+        io::eprintfn("Error: Read %d bytes but expected %d", bytes_read, file_size);
+        return 1;
+    }
+
+    // Parse torrent
+    libtorrent::metainfo::TorrentFile*? torrent = libtorrent::metainfo::parse((String)data);
+    if (catch err = torrent)
+    {
+        io::eprintfn("Error parsing torrent: %s", err);
+        return 1;
+    }
+
+    // Calculate pieces
+    uint num_pieces = (uint)((torrent.info.length + torrent.info.piece_length - 1) / torrent.info.piece_length);
+    uint last_piece_length = (uint)(torrent.info.length % torrent.info.piece_length);
+    if (last_piece_length == 0) last_piece_length = (uint)torrent.info.piece_length;
+
+    // Initialize GUI
+    raylib_gui::UIState* ui = raylib_gui::init(
+        torrent.info.name,
+        torrent.info.length,
+        num_pieces,
+        save_path,
+        torrent.announce,
+        torrent.info.piece_length
+    );
+    if (!ui)
+    {
+        io::eprintfn("Failed to initialize GUI");
+        libtorrent::metainfo::free_torrent_file(torrent);
+        return 1;
+    }
+
+    // Set up GUI logging
+    log_outputs::LogSink log_sink;
+    log_outputs::GuiLogOutput* gui_out = mem::new(log_outputs::GuiLogOutput);
+    gui_out.ui = ui;
+    log_sink.outputs = mem::new_array(logger::LogOutput, 1);
+    log_sink.outputs[0] = gui_out;
+    logger::set_log_callback(&log_outputs::on_log_message, &log_sink);
+
+    // Create download context
+    DownloadContext ctx;
+    ctx.loop = loop;
+    ctx.torrent = torrent;
+    ctx.dm = null;
+    ctx.sm = null;
+    ctx.tracker_completed = false;
+    ctx.announce_timer = null;
+    ctx.retry_timer = null;
+    ctx.pex_timer = null;
+    ctx.announce_retry_count = 0;
+    ctx.announce_backoff_ms = 0;
+    ctx.initial_announce_done = false;
+    ctx.peer_pool = null;
+    ctx.download_complete = false;
+    ctx.exit_code = 0;
+    ctx.num_pieces = num_pieces;
+    ctx.pieces_verified_count = 0;
+    ctx.numwant = numwant;
+    ctx.save_path = save_path;
+    ctx.gui_state = ui;
+
+    // Create storage manager
+    storage_manager::StorageManager? sm_opt = storage_manager::create(
+        loop, &torrent.info, save_path);
+    if (catch err = sm_opt)
+    {
+        raylib_gui::add_log(ui, "Error creating storage manager");
+        raylib_gui::free(ui);
+        libtorrent::metainfo::free_torrent_file(torrent);
+        free(log_sink.outputs);
+        free(gui_out);
+        return 1;
+    }
+    ctx.sm = mem::new(storage_manager::StorageManager);
+    *ctx.sm = sm_opt;
+
+    // Create download manager
+    ctx.dm = mem::new(download_manager::DownloadManager);
+    *ctx.dm = download_manager::create(
+        loop,
+        num_pieces,
+        (uint)torrent.info.piece_length,
+        last_piece_length,
+        torrent.info.pieces,
+        5,  // Max 5 concurrent pieces
+        16384  // 16KB blocks
+    );
+
+    // Create peer pool
+    char[20] our_peer_id = tracker::generate_peer_id();
+    peer_pool::PeerPoolConfig pool_config = {
+        .max_peerlist_size = 1000,
+        .max_active_connections = 25,
+        .max_failcount = 3,
+        .min_reconnect_time = 60
+    };
+    ctx.peer_pool = peer_pool::create(loop, pool_config, &torrent.info_hash, &our_peer_id);
+
+    // Set peer pool callbacks
+    ctx.peer_pool.set_callbacks(
+        &on_download_peer_connected,
+        &on_download_peer_message,
+        &on_download_peer_disconnected,
+        &ctx
+    );
+
+    // Start verification (will eventually trigger announce)
+    raylib_gui::add_log(ui, "Checking for existing pieces...");
+    verify_all_existing_pieces_async(&ctx);
+
+    // Main GUI loop - run until window closes or download completes
+    while (!ctx.download_complete && raylib_gui::run_frame(ui, loop))
+    {
+        // Event loop and rendering handled in run_frame()
+    }
+
+    // Cleanup - stop all async operations first
+    io::printfn("Cleaning up...");
+
+    // Stop and close timers (prevents callbacks from firing during cleanup)
+    io::printfn("Stopping timers...");
+    if (ctx.announce_timer)
+    {
+        async::timer::stop(ctx.announce_timer);
+        async::timer::close(ctx.announce_timer);
+    }
+    if (ctx.retry_timer)
+    {
+        async::timer::stop(ctx.retry_timer);
+        async::timer::close(ctx.retry_timer);
+    }
+    if (ctx.pex_timer)
+    {
+        async::timer::stop(ctx.pex_timer);
+        async::timer::close(ctx.pex_timer);
+    }
+
+    // Disconnect all peers before freeing peer pool
+    io::printfn("Disconnecting peers...");
+    if (ctx.peer_pool)
+    {
+        ctx.peer_pool.disconnect_all();
+    }
+
+    // Process any remaining async cleanup callbacks
+    // Keep running until all handles are closed (with limit to prevent infinite loop)
+    io::printfn("Processing pending events...");
+    int cleanup_iterations = 0;
+    while (loop.is_alive() && cleanup_iterations < 100)
+    {
+        loop.run_nowait();
+        cleanup_iterations++;
+    }
+    io::printfn("Processed %d cleanup iterations", cleanup_iterations);
+
+    // Now safe to free resources
+    io::printfn("Freeing peer pool...");
+    if (ctx.peer_pool)
+    {
+        peer_pool::free(ctx.peer_pool);
+    }
+
+    io::printfn("Freeing download manager...");
+    if (ctx.dm)
+    {
+        download_manager::free(ctx.dm);
+        free(ctx.dm);
+    }
+
+    io::printfn("Freeing storage manager...");
+    if (ctx.sm)
+    {
+        storage_manager::free(ctx.sm);
+        free(ctx.sm);
+    }
+
+    io::printfn("Freeing torrent...");
+    if (ctx.torrent)
+    {
+        libtorrent::metainfo::free_torrent_file(ctx.torrent);
+    }
+
+    // Note: tracker_response is managed by the tracker module and already freed
+    // Don't try to free it here
+
+    // Cleanup logging
+    io::printfn("Cleaning up logging...");
+    logger::flush_logs();
+    if (log_sink.outputs.len > 0)
+    {
+        free(log_sink.outputs);
+    }
+    free(gui_out);
+
+    // Free GUI (this also closes the window)
+    io::printfn("Freeing GUI...");
+    raylib_gui::free(ui);
+
+    io::printfn("Cleanup complete");
+    return ctx.exit_code;
+}
+
+// ============================================================================
 // Download Command - Full torrent download with piece management
 // ============================================================================
 
@@ -1911,11 +2206,19 @@ fn void on_download_load_complete(String data, int status, void* user_data)
  @param numwant : "Number of peers to request from tracker"
  @param log_file_path : "Path to log file (empty string = no file logging)"
  @param debug_mode : "Enable debug output to stderr"
+ @param gui_mode : "Launch graphical user interface"
  @return "Exit code (0 = success, 1 = error)"
 *>
 fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
-                    String save_path, int numwant, String log_file_path, bool debug_mode)
+                    String save_path, int numwant, String log_file_path, bool debug_mode, bool gui_mode)
 {
+    // GUI mode - launch graphical interface
+    if (gui_mode)
+    {
+        return cmd_download_gui(loop, torrent_path, save_path, numwant);
+    }
+
+    // Console mode
     io::printfn("=== BitTorrent Download ===");
     io::printfn("");
 

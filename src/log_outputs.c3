@@ -2,6 +2,7 @@ module torrent_client::log_outputs;
 
 import libtorrent::logger;
 import std::io;
+import raylib_gui;
 
 // ============================================================================
 // Log Output Implementations
@@ -52,6 +53,30 @@ fn void StderrLogOutput.write_log(StderrLogOutput* self, logger::LogLevel level,
 fn void StderrLogOutput.close(StderrLogOutput* self) @dynamic
 {
     // No cleanup needed for stderr
+}
+
+<*
+ GUI Log Output - Writes log messages to the raylib GUI.
+*>
+struct GuiLogOutput (logger::LogOutput)
+{
+    raylib_gui::UIState* ui;
+}
+
+fn void GuiLogOutput.write_log(GuiLogOutput* self, logger::LogLevel level, String message) @dynamic
+{
+    if (self.ui)
+    {
+        // Format message with level prefix
+        DString formatted;
+        formatted.appendf("[%s] %s", logger::level_to_string(level), message);
+        raylib_gui::add_log(self.ui, formatted.str_view());
+    }
+}
+
+fn void GuiLogOutput.close(GuiLogOutput* self) @dynamic
+{
+    // No cleanup needed for GUI
 }
 
 <*
