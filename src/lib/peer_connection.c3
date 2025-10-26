@@ -197,6 +197,40 @@ fn void close(PeerConnection* peer) @public
     free(peer);
 }
 
+<*
+ Gracefully close a peer connection by sending protocol messages before disconnect.
+
+ Sends NOT_INTERESTED and final PEX messages before closing the TCP connection,
+ allowing the peer to properly handle our disconnection.
+
+ @param peer : "Peer to gracefully close"
+*>
+fn void graceful_close(PeerConnection* peer) @public
+{
+    if (!peer) return;
+    if (peer.state == PeerState.CLOSED) return;
+
+    // Log graceful disconnect
+    logger::log(logger::LogLevel.INFO, "[Shutdown] Gracefully disconnecting from peer");
+
+    // Step 1: Send NOT_INTERESTED if we were interested
+    // This tells the peer we're intentionally leaving, not crashing
+    if (peer.am_interested)
+    {
+        (void)peer.send_not_interested();  // Ignore errors - we're closing anyway
+    }
+
+    // Step 2: Send final PEX message if we have queued peer updates
+    // This shares our peer list one last time before leaving the swarm
+    if (peer.supports_pex && (peer.added_peers.len > 0 || peer.dropped_peers.len > 0))
+    {
+        (void)send_pex_message(peer);  // Ignore errors - best effort delivery
+    }
+
+    // Step 3: Close the connection (TCP will flush buffers before sending FIN)
+    close(peer);
+}
+
 // ============================================================================
 // Internal Callbacks
 // ============================================================================

@@ -28,6 +28,11 @@ import raylib_gui;
 // Set to 0 to disable periodic flushing (only flush on exit)
 const int FILE_FLUSH_INTERVAL_MS = 5000;
 
+// Maximum concurrent piece verifications during resume check
+// Default: 100 pieces - optimized for systems with 12+ threads
+// Balances CPU utilization with memory usage and system responsiveness
+const int VERIFICATION_BATCH_SIZE = 100;
+
 // ============================================================================
 // Main Entry Point
 // ============================================================================
@@ -1100,6 +1105,7 @@ struct DownloadContext
     // Resume verification
     uint num_pieces;                        // Total number of pieces
     uint pieces_verified_count;             // Resume verification progress
+    uint next_piece_to_verify;              // Index of next piece to verify (for batching)
 
     // Options
     int numwant;
@@ -1147,10 +1153,17 @@ fn void on_complete_download(DownloadContext* ctx)
         ctx.flush_timer = null;
     }
 
-    // Close all peer connections (peer pool handles this)
+    // Gracefully disconnect from all peers
     if (ctx.peer_pool)
     {
-        ctx.peer_pool.disconnect_all();
+        usz total_peers, candidates, connecting, connected;
+        ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
+        if (connected > 0)
+        {
+            io::printfn("Gracefully disconnecting from %d peer%s...",
+                       connected, connected == 1 ? "" : "s");
+        }
+        ctx.peer_pool.disconnect_all_gracefully();
     }
 
     // Event loop will exit naturally when all handles are closed
@@ -1832,11 +1845,36 @@ fn void on_verify_existing_piece(uint piece_index, bool verified, int status, vo
         io::printfn("  Verified %d/%d pieces...", ctx.pieces_verified_count, ctx.num_pieces);
     }
 
+    // Start next piece verification to maintain batch concurrency
+    if (ctx.next_piece_to_verify < ctx.num_pieces)
+    {
+        start_piece_verification(ctx, ctx.next_piece_to_verify);
+        ctx.next_piece_to_verify++;
+    }
+
     // All pieces verified?
     if (ctx.pieces_verified_count == ctx.num_pieces)
     {
         on_all_pieces_verified(ctx);
     }
+}
+
+<*
+ Start verification for a single piece.
+ Extracts the expected hash and queues the verification.
+*>
+fn void start_piece_verification(DownloadContext* ctx, uint piece_index)
+{
+    // Get expected hash for this piece
+    char[20] expected_hash;
+    usz hash_offset = (usz)piece_index * 20;
+    for (usz j = 0; j < 20; j++)
+    {
+        expected_hash[j] = ctx.torrent.info.pieces[hash_offset + j];
+    }
+
+    // Verify piece asynchronously
+    ctx.sm.verify_piece(piece_index, expected_hash, &on_verify_existing_piece, ctx);
 }
 
 <*
@@ -1852,20 +1890,20 @@ fn void verify_all_existing_pieces_async(DownloadContext* ctx)
         return;
     }
 
-    // Verify each piece
-    for (uint i = 0; i < ctx.num_pieces; i++)
-    {
-        // Get expected hash for this piece
-        char[20] expected_hash;
-        usz hash_offset = (usz)i * 20;
-        for (usz j = 0; j < 20; j++)
-        {
-            expected_hash[j] = ctx.torrent.info.pieces[hash_offset + j];
-        }
+    // Start first batch of pieces (limited by VERIFICATION_BATCH_SIZE)
+    // This prevents overwhelming the system with too many concurrent verifications
+    uint batch_end = ctx.num_pieces < VERIFICATION_BATCH_SIZE ? ctx.num_pieces : VERIFICATION_BATCH_SIZE;
 
-        // Verify piece asynchronously
-        ctx.sm.verify_piece(i, expected_hash, &on_verify_existing_piece, ctx);
+    io::printfn("  Starting batched verification: %d pieces at a time (total: %d)",
+                batch_end, ctx.num_pieces);
+
+    for (uint i = 0; i < batch_end; i++)
+    {
+        start_piece_verification(ctx, i);
     }
+
+    // Track next piece to verify
+    ctx.next_piece_to_verify = batch_end;
 }
 
 <*
@@ -2218,6 +2256,7 @@ fn void on_download_load_complete(String data, int status, void* user_data)
     // Store num_pieces for resume verification
     ctx.num_pieces = num_pieces;
     ctx.pieces_verified_count = 0;
+    ctx.next_piece_to_verify = 0;
 
     // Create peer pool (Phase 1 - storage only, Phase 3 will add connection management)
     char[20] our_peer_id = tracker::generate_peer_id();
@@ -2334,6 +2373,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.exit_code = 0;
     ctx.num_pieces = num_pieces;
     ctx.pieces_verified_count = 0;
+    ctx.next_piece_to_verify = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
     ctx.gui_state = ui;
@@ -2451,10 +2491,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     }
 
     // Disconnect all peers before freeing peer pool
-    io::printfn("Disconnecting peers...");
+    io::printfn("Gracefully disconnecting peers...");
     if (ctx.peer_pool)
     {
-        ctx.peer_pool.disconnect_all();
+        ctx.peer_pool.disconnect_all_gracefully();
     }
 
     // Process any remaining async cleanup callbacks
@@ -2604,6 +2644,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.exit_code = 0;
     ctx.num_pieces = 0;
     ctx.pieces_verified_count = 0;
+    ctx.next_piece_to_verify = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
 

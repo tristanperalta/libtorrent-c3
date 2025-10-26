@@ -840,6 +840,45 @@ fn void PeerPool.disconnect_all(&self) @public
 }
 
 <*
+ Gracefully disconnect all active peer connections.
+
+ Sends NOT_INTERESTED and final PEX messages to all connected peers before
+ closing connections, allowing proper protocol shutdown.
+*>
+fn void PeerPool.disconnect_all_gracefully(&self) @public
+{
+    // Count peers for logging
+    usz connected_count = 0;
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        if (self.peers[i].connection) connected_count++;
+    }
+
+    if (connected_count > 0)
+    {
+        logger::logf(logger::LogLevel.INFO,
+                     "[Shutdown] Gracefully disconnecting from %d peer%s",
+                     connected_count, connected_count == 1 ? "" : "s");
+    }
+
+    // Gracefully disconnect each peer
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        if (self.peers[i].connection)
+        {
+            peer_connection::graceful_close(self.peers[i].connection);
+            self.peers[i].connection = null;
+            self.peers[i].state = PeerState.DISCONNECTED;
+        }
+    }
+
+    self.num_active_connections = 0;
+
+    // Update candidate cache
+    self.update_candidate_cache();
+}
+
+<*
  Fill available connection slots with best candidates (Phase 3).
 
  Automatically connects to the best peers from the candidate cache until
