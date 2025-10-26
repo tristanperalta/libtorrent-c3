@@ -1,0 +1,17 @@
+{
+  "provides": "ncurses",
+  "targets": {
+    "linux-x64": {
+      "linked-libraries": ["ncursesw"]
+    },
+    "linux-aarch64": {
+      "linked-libraries": ["ncursesw"]
+    },
+    "macos-x64": {
+      "linked-libraries": ["ncursesw"]
+    },
+    "macos-aarch64": {
+      "linked-libraries": ["ncursesw"]
+    }
+  }
+}

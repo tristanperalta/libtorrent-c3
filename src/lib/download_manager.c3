@@ -232,7 +232,7 @@ fn fault? DownloadManager.start_piece_download(&self, bool[] peer_pieces) @publi
     }
     uint piece_index = piece_opt;
 
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // io::printfn("      [DM] Picked piece %d for download", piece_index);
 
     // Get piece length (last piece may be shorter)

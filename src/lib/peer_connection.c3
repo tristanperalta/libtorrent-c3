@@ -637,7 +637,7 @@ fn void send_extension_handshake(PeerConnection* peer) @private
     }
 
     peer.sent_ext_handshake = true;
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // io::printfn("[EXT] Sent extension handshake (ut_pex: %d)", peer.our_pex_msg_id);
 }
 
@@ -663,11 +663,11 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
     {
         peer.supports_pex = true;
         peer.peer_pex_msg_id = ext_hs.ut_pex_id;
-        // Debug output disabled for logging mode
+        // Debug output disabled for TUI mode
         // io::printfn("[EXT] Peer supports PEX (msg_id: %d)", peer.peer_pex_msg_id);
     }
 
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // if (ext_hs.client_name.len > 0)
     // {
     //     io::printfn("[EXT] Peer client: %s", ext_hs.client_name);
@@ -720,7 +720,7 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
     pex::PexMessage pex_msg = pex_msg_opt;
     defer pex::free_pex_message(&pex_msg);
 
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // io::printfn("[PEX] Received %d added, %d dropped peers", pex_msg.added.len, pex_msg.dropped.len);
 
     // Notify user callback (e.g., peer_pool) to add these peers
@@ -783,7 +783,7 @@ fn void? send_pex_message(PeerConnection* peer) @public
         return err?;
     }
 
-    // Debug output disabled for logging mode
+    // Debug output disabled for TUI mode
     // io::printfn("[PEX] Sent %d added, %d dropped peers", peer.added_peers.len, peer.dropped_peers.len);
 
     // Update rate limit timestamp
