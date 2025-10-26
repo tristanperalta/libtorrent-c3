@@ -4,6 +4,7 @@ import raylib5::rl;
 import raygui::rg;
 import async::event_loop;
 import libtorrent::logger;
+import libtorrent::peer_pool;
 import std::io;
 
 // ============================================================================
@@ -54,6 +55,8 @@ struct UIState
     // Peer state
     int peers_connected;
     int peers_total;
+    peer_pool::PeerDisplayInfo[] peer_list;
+    int peer_scroll_offset;
 
     // Log messages (ring buffer)
     String[] log_messages;
@@ -112,6 +115,9 @@ fn UIState* init(String torrent_name, long total_size, uint pieces_total,
     // Initialize peer state
     state.peers_connected = 0;
     state.peers_total = 0;
+    peer_pool::PeerDisplayInfo[] empty_peers;
+    state.peer_list = empty_peers;
+    state.peer_scroll_offset = 0;
 
     // Initialize log buffer (keep last 1000 messages)
     state.log_capacity = 1000;
@@ -380,15 +386,119 @@ fn void render_overview_tab(UIState* state, int content_y, int content_height) @
 *>
 fn void render_peers_tab(UIState* state, int content_y, int content_height) @private
 {
-    int margin = 20;
+    int margin = 10;
+    int row_height = 25;
+    int header_height = 30;
+
+    // Table columns
+    int col1_x = margin;                    // IP:Port
+    int col1_width = 180;
+    int col2_x = col1_x + col1_width;       // Client
+    int col2_width = 150;
+    int col3_x = col2_x + col2_width;       // % Complete
+    int col3_width = 100;
+    int col4_x = col3_x + col3_width;       // Down Speed
+    int col4_width = 110;
+    int col5_x = col4_x + col4_width;       // Up Speed
+    int col5_width = 110;
+    int col6_x = col5_x + col5_width;       // State
+    int col6_width = 120;
+
     int y = content_y;
 
-    DString peers_text;
-    peers_text.appendf("Connected Peers: %d / %d", state.peers_connected, state.peers_total);
-    rl::drawText(peers_text.zstr_view(), margin, y, 20, rl::DARKGRAY);
-    y += 40;
+    // Draw header background
+    rl::drawRectangle(margin, y, state.window_width - margin * 2, header_height,
+                      (rl::Color){220, 220, 220, 255});
 
-    rl::drawText("Peer list will be implemented next...", margin, y, 18, rl::LIGHTGRAY);
+    // Draw column headers
+    rl::drawText("IP Address", col1_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Client", col2_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("% Complete", col3_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Down Speed", col4_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Up Speed", col5_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("State", col6_x + 5, y + 8, 18, rl::DARKGRAY);
+
+    y += header_height;
+
+    // Calculate how many rows we can display
+    int table_height = content_height - header_height - 40;  // Reserve 40px for status bar
+    int max_rows = table_height / row_height;
+
+    // Draw peer rows
+    int row_count = 0;
+    foreach (i, peer : state.peer_list)
+    {
+        // Skip rows that are scrolled out of view
+        if (i < (usz)state.peer_scroll_offset) continue;
+
+        // Stop if we've filled the visible area
+        if (row_count >= max_rows) break;
+
+        // Alternating row colors
+        rl::Color row_color = (row_count % 2 == 0) ?
+            (rl::Color){255, 255, 255, 255} :  // White
+            (rl::Color){245, 245, 245, 255};   // Light gray
+
+        rl::drawRectangle(margin, y, state.window_width - margin * 2, row_height, row_color);
+
+        // Column 1: IP:Port
+        DString ip_port;
+        ip_port.appendf("%s:%d", peer.ip_address, peer.port);
+        rl::drawText(ip_port.zstr_view(), col1_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        // Column 2: Client
+        rl::drawText((ZString)peer.client.ptr, col2_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        // Column 3: % Complete
+        DString percent;
+        percent.appendf("%.1f%%", peer.percent_complete);
+        rl::drawText(percent.zstr_view(), col3_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        // Column 4: Down Speed
+        DString down_speed;
+        if (peer.download_speed > 0.0)
+        {
+            down_speed.appendf("%.1f KiB/s", peer.download_speed / 1024.0);
+        }
+        else
+        {
+            down_speed.append("-");
+        }
+        rl::drawText(down_speed.zstr_view(), col4_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        // Column 5: Up Speed
+        DString up_speed;
+        if (peer.upload_speed > 0.0)
+        {
+            up_speed.appendf("%.1f KiB/s", peer.upload_speed / 1024.0);
+        }
+        else
+        {
+            up_speed.append("-");
+        }
+        rl::drawText(up_speed.zstr_view(), col5_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        // Column 6: State
+        rl::drawText((ZString)peer.state.ptr, col6_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        y += row_height;
+        row_count++;
+    }
+
+    // Draw status bar at bottom of table
+    int status_y = content_y + content_height - 35;
+    rl::drawRectangle(margin, status_y, state.window_width - margin * 2, 30,
+                      (rl::Color){230, 230, 230, 255});
+
+    DString status_text;
+    status_text.appendf("Connections: %d (%d)  |  Down Speed: %.1f KiB/s  |  Up Speed: %.1f KiB/s",
+                       state.peers_connected,
+                       state.peers_total,
+                       state.download_speed / 1024.0,
+                       state.upload_speed / 1024.0);
+    rl::drawText(status_text.zstr_view(), margin + 10, status_y + 8, 16, rl::DARKGRAY);
+
+    // TODO: Add scrollbar if peer_list.len > max_rows
 }
 
 <*
@@ -486,6 +596,29 @@ fn void update_tracker_status(UIState* state, String status) @public
 }
 
 <*
+ Update peer list.
+ Called periodically to refresh peer table.
+ Takes ownership of the peer_list array.
+*>
+fn void update_peer_list(UIState* state, peer_pool::PeerDisplayInfo[] new_peer_list) @public
+{
+    // Free old peer list
+    if (state.peer_list.len > 0)
+    {
+        foreach (peer : state.peer_list)
+        {
+            if (peer.ip_address.len > 0) mem::free(peer.ip_address.ptr);
+            if (peer.client.len > 0) mem::free(peer.client.ptr);
+            if (peer.state.len > 0) mem::free(peer.state.ptr);
+        }
+        mem::free(state.peer_list.ptr);
+    }
+
+    // Store new peer list
+    state.peer_list = new_peer_list;
+}
+
+<*
  Add a log message.
  Called from logger flush callback.
 *>
@@ -536,6 +669,18 @@ fn void free(UIState* state) @public
     if (state.tracker_status.len > 0)
     {
         mem::free(state.tracker_status.ptr);
+    }
+
+    // Free peer list
+    if (state.peer_list.len > 0)
+    {
+        foreach (peer : state.peer_list)
+        {
+            if (peer.ip_address.len > 0) mem::free(peer.ip_address.ptr);
+            if (peer.client.len > 0) mem::free(peer.client.ptr);
+            if (peer.state.len > 0) mem::free(peer.state.ptr);
+        }
+        mem::free(state.peer_list.ptr);
     }
 
     // Free log messages

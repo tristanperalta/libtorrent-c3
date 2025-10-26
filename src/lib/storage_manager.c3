@@ -142,10 +142,61 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
 }
 
 <*
+ Context for tracking sync_all_files() operation.
+*>
+struct SyncAllContext
+{
+    usz files_remaining;
+    usz sync_errors;
+}
+
+<*
+ Callback for file close during cleanup.
+ Does nothing - just allows async close to complete.
+*>
+fn void on_file_close_cleanup(int status, void* user_data) @private
+{
+    // Nothing to do - async cleanup will handle the rest
+}
+
+<*
+ Callback for individual file sync in sync_all_files().
+*>
+fn void on_file_sync_complete(int status, void* user_data) @private
+{
+    SyncAllContext* ctx = (SyncAllContext*)user_data;
+
+    if (status < 0)
+    {
+        ctx.sync_errors++;
+    }
+
+    ctx.files_remaining--;
+
+    // When all syncs complete, free context
+    if (ctx.files_remaining == 0)
+    {
+        std::core::mem::free(ctx);
+    }
+}
+
+<*
  Free storage manager resources.
+ Note: Files are synced periodically during download, so no fsync needed here.
 *>
 fn void free(StorageManager* manager) @public
 {
+    // Close all open file handles (already synced periodically)
+    for (usz i = 0; i < manager.files.len; i++)
+    {
+        if (manager.files[i].file >= 0)
+        {
+            async::file::close(manager.loop, manager.files[i].file,
+                             &on_file_close_cleanup, null);
+            manager.files[i].file = -1;
+        }
+    }
+
     // Free file paths
     for (usz i = 0; i < manager.files.len; i++)
     {
@@ -791,4 +842,40 @@ fn void StorageManager.get_stats(&self, ulong* allocated_bytes, ulong* written_b
 {
     *allocated_bytes = self.total_length;
     *written_bytes = 0;  // Would need to track this
+}
+
+<*
+ Sync all open files to disk (flush OS buffers).
+
+ This is called periodically during download to ensure data persistence.
+ All fsync operations run asynchronously in parallel for performance.
+*>
+fn void StorageManager.sync_all_files(&self) @public
+{
+    // Count files that need syncing
+    usz files_to_sync = 0;
+    for (usz i = 0; i < self.files.len; i++)
+    {
+        if (self.files[i].file >= 0)
+        {
+            files_to_sync++;
+        }
+    }
+
+    if (files_to_sync == 0) return;
+
+    // Create shared context
+    SyncAllContext* ctx = mem::new(SyncAllContext);
+    ctx.files_remaining = files_to_sync;
+    ctx.sync_errors = 0;
+
+    // Sync each open file (all run in parallel)
+    for (usz i = 0; i < self.files.len; i++)
+    {
+        if (self.files[i].file >= 0)
+        {
+            async::file::fsync(self.loop, self.files[i].file,
+                             &on_file_sync_complete, ctx);
+        }
+    }
 }
