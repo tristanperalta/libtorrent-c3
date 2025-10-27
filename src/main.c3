@@ -4,6 +4,7 @@ import std::io;
 import std::encoding::hex;
 import uv;
 import libtorrent;
+import libtorrent::common;
 import libtorrent::tracker;
 import async::event_loop;
 import libtorrent::torrent_loader;
@@ -340,7 +341,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
  @param ip : "4-byte IP address"
  @return "Formatted IP string (xxx.xxx.xxx.xxx)"
 *>
-fn String format_ip_address(char[4] ip)
+fn String format_ip_address(common::Ipv4Addr ip)
 {
     DString result;
     result.appendf("%d.%d.%d.%d",
@@ -591,7 +592,7 @@ struct PeerConnectionInfo
     ushort port;             // Port number
     peer_connection::PeerConnection* conn;  // Connection handle
     peer_connection::PeerState state;       // Current state
-    char[20] remote_peer_id; // Peer ID from handshake
+    common::PeerId remote_peer_id; // Peer ID from handshake
     bool handshake_ok;       // Handshake completed successfully
 }
 
@@ -731,7 +732,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
     ctx.peer_infos = mem::new_array(PeerConnectionInfo, max_connections);
 
     // Generate our peer ID
-    char[20] our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = tracker::generate_peer_id();
 
     for (int i = 0; i < max_connections; i++)
     {
@@ -810,7 +811,7 @@ fn void on_connect_load_complete(String data, int status, void* user_data)
     ctx.torrent = torrent;
 
     // Create peer pool (Phase 1 - storage only)
-    char[20] our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
         .max_peerlist_size = 1000,
         .max_active_connections = 25,
@@ -1131,7 +1132,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     );
 
     // Create peer pool
-    char[20] our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
         .max_peerlist_size = 1000,
         .max_active_connections = 25,

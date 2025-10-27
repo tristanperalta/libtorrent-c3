@@ -174,7 +174,7 @@ fn int compare_peers(TorrentPeer* a, TorrentPeer* b)
  Find peer index using binary search.
  Returns index if found, otherwise returns the insertion point (as negative).
 *>
-fn isz find_peer_index(PeerPool* pool, char[4] ip, ushort port)
+fn isz find_peer_index(PeerPool* pool, common::Ipv4Addr ip, ushort port)
 {
     if (pool.peers.len == 0)
     {
@@ -580,7 +580,7 @@ fn void PeerPool.set_callbacks(&self,
  @param port : "Port number"
  @param from_tracker : "Is this peer from tracker?"
 *>
-fn void PeerPool.add_peer(&self, char[4] ip, ushort port, bool from_tracker) @public
+fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, bool from_tracker) @public
 {
     // Check if peer already exists
     isz idx = find_peer_index(self, ip, port);
@@ -680,7 +680,7 @@ fn void PeerPool.add_peers_from_tracker(&self, tracker::Peer[] peers) @public
  @param port : "Port number"
  @return "Peer if found, fault if not found"
 *>
-fn TorrentPeer*? PeerPool.find_peer(&self, char[4] ip, ushort port) @public
+fn TorrentPeer*? PeerPool.find_peer(&self, common::Ipv4Addr ip, ushort port) @public
 {
     isz idx = find_peer_index(self, ip, port);
     if (idx < 0)
@@ -786,7 +786,7 @@ fn void PeerPool.get_stats(&self,
  @param ip : "Peer IP address"
  @param port : "Peer port"
 *>
-fn void PeerPool.disconnect_peer(&self, char[4] ip, ushort port) @public
+fn void PeerPool.disconnect_peer(&self, common::Ipv4Addr ip, ushort port) @public
 {
     // Find peer
     TorrentPeer*? peer_opt = self.find_peer(ip, port);
@@ -1180,7 +1180,7 @@ fn void update_peer_rank(PeerPool* pool, TorrentPeer* peer)
  @param bytes_uploaded : "Bytes uploaded to this peer"
  @return "Fault if peer not found"
 *>
-fn fault? PeerPool.update_peer_stats(&self, char[4] ip, ushort port,
+fn fault? PeerPool.update_peer_stats(&self, common::Ipv4Addr ip, ushort port,
                                       ulong bytes_downloaded, ulong bytes_uploaded) @public
 {
     TorrentPeer*? peer_opt = self.find_peer(ip, port);
@@ -1214,7 +1214,7 @@ fn fault? PeerPool.update_peer_stats(&self, char[4] ip, ushort port,
  @param port : "Peer port"
  @return "Fault if peer not found"
 *>
-fn fault? PeerPool.mark_hash_failure(&self, char[4] ip, ushort port) @public
+fn fault? PeerPool.mark_hash_failure(&self, common::Ipv4Addr ip, ushort port) @public
 {
     TorrentPeer*? peer_opt = self.find_peer(ip, port);
     if (catch err = peer_opt)
@@ -1250,7 +1250,7 @@ fn fault? PeerPool.mark_hash_failure(&self, char[4] ip, ushort port) @public
  @param port : "Peer port"
  @return "Fault if peer not found"
 *>
-fn fault? PeerPool.mark_peer_seed(&self, char[4] ip, ushort port) @public
+fn fault? PeerPool.mark_peer_seed(&self, common::Ipv4Addr ip, ushort port) @public
 {
     TorrentPeer*? peer_opt = self.find_peer(ip, port);
     if (catch err = peer_opt)

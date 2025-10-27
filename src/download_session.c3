@@ -4,6 +4,7 @@ import std::io;
 import std::encoding::hex;
 import uv;
 import libtorrent;
+import libtorrent::common;
 import libtorrent::tracker;
 import async::event_loop;
 import libtorrent::metainfo;
@@ -301,7 +302,7 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
 *>
 fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                                   peer_wire::Message* msg,
-                                  char[4] ip, ushort port,
+                                  common::Ipv4Addr ip, ushort port,
                                   void* user_data) @public
 {
     download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
@@ -633,7 +634,7 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
  Callback when peer successfully connects.
 *>
 fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
-                                    char[4] ip, ushort port,
+                                    common::Ipv4Addr ip, ushort port,
                                     void* user_data) @public
 {
     download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
@@ -661,7 +662,7 @@ fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
 <*
  Callback when peer disconnects.
 *>
-fn void on_download_peer_disconnected(char[4] ip, ushort port,
+fn void on_download_peer_disconnected(common::Ipv4Addr ip, ushort port,
                                        bool was_error,
                                        void* user_data) @public
 {
@@ -893,7 +894,7 @@ fn void on_verify_existing_piece(uint piece_index, bool verified, int status, vo
 fn void start_piece_verification(download_session::DownloadContext* ctx, uint piece_index) @public
 {
     // Get expected hash for this piece
-    char[20] expected_hash;
+    common::InfoHash expected_hash;
     usz hash_offset = (usz)piece_index * 20;
     for (usz j = 0; j < 20; j++)
     {
@@ -1286,7 +1287,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     ctx.next_piece_to_verify = 0;
 
     // Create peer pool (Phase 1 - storage only, Phase 3 will add connection management)
-    char[20] our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
         .max_peerlist_size = 1000,     // Track up to 1000 peers (vs old limit of 10)
         .max_active_connections = 25,   // Future: Phase 3 will manage connections

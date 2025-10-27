@@ -61,9 +61,9 @@ struct PeerConnection
     PeerState state;
 
     // Torrent info
-    char[20] info_hash;
-    char[20] our_peer_id;
-    char[20] remote_peer_id;
+    common::InfoHash info_hash;
+    common::PeerId our_peer_id;
+    common::PeerId remote_peer_id;
 
     // Peer state flags (BEP 3)
     bool am_choking;         // We are choking the peer
@@ -112,7 +112,7 @@ struct PeerConnection
  @return "Peer connection or fault"
 *>
 fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort port,
-                              char[20] info_hash, char[20] our_peer_id,
+                              common::InfoHash info_hash, common::PeerId our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
                               PexCallback pex_cb, void* user_data) @public
 {
