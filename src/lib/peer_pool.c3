@@ -3,6 +3,7 @@ module libtorrent::peer_pool;
 import libtorrent::common;
 import async::event_loop;
 import libtorrent::tracker;
+import libtorrent::dht_get_peers;
 import libtorrent::peer_connection;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
@@ -105,7 +106,7 @@ struct TorrentPeer
     int peer_rank;               // Priority for connection (higher = better)
 
     // Source tracking
-    bool from_tracker;           // Did we get this peer from tracker?
+    common::PeerSource source;   // Where did we discover this peer?
 }
 
 <*
@@ -588,16 +589,20 @@ fn void PeerPool.set_callbacks(&self,
 
  @param ip : "IPv4 address"
  @param port : "Port number"
- @param from_tracker : "Is this peer from tracker?"
+ @param source : "Peer discovery source"
+ @param pex_flags : "PEX flags (optional, only used for PEX peers)"
 *>
-fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, bool from_tracker) @public
+fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, common::PeerSource source, char pex_flags = 0) @public
 {
     // Check if peer already exists
     isz idx = find_peer_index(self, ip, port);
     if (idx >= 0)
     {
-        // Already exists, just update source flag
-        self.peers[idx].from_tracker = self.peers[idx].from_tracker || from_tracker;
+        // Already exists, prioritize TRACKER source over others
+        if (source == common::PeerSource.TRACKER && self.peers[idx].source != common::PeerSource.TRACKER)
+        {
+            self.peers[idx].source = common::PeerSource.TRACKER;
+        }
         return;
     }
 
@@ -624,7 +629,7 @@ fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, bool from_tra
     peer.optimistically_unchoked = false;
     peer.handshake_ok = false;
     peer.received_bitfield = false;
-    peer.from_tracker = from_tracker;
+    peer.source = source;
 
     // Initialize peer_id to zeros
     peer.peer_id = {};
@@ -665,22 +670,45 @@ fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, bool from_tra
 }
 
 <*
- Batch add peers from tracker response.
+ Batch add peers from any source.
 
- @param peers : "Peers from tracker"
+ @param peers : "Peers to add"
+ @param source : "Peer discovery source"
 *>
-fn void PeerPool.add_peers_from_tracker(&self, tracker::Peer[] peers) @public
+fn void PeerPool.add_peers(&self, common::Peer[] peers, common::PeerSource source) @public
 {
     for (usz i = 0; i < peers.len; i++)
     {
         // Skip peers with invalid port 0
         if (peers[i].port == 0) continue;
 
-        self.add_peer(peers[i].ip, peers[i].port, true);
+        self.add_peer(peers[i].ip, peers[i].port, source);
     }
 
-    // Update candidate cache after batch add (Phase 2)
+    // Update candidate cache after batch add
     self.update_candidate_cache();
+}
+
+<*
+ Batch add peers from tracker response.
+ Convenience wrapper for add_peers() with TRACKER source.
+
+ @param peers : "Peers from tracker"
+*>
+fn void PeerPool.add_peers_from_tracker(&self, common::Peer[] peers) @public
+{
+    self.add_peers(peers, common::PeerSource.TRACKER);
+}
+
+<*
+ Batch add peers from DHT get_peers response.
+ Convenience wrapper for add_peers() with DHT source.
+
+ @param peers : "Peers from DHT"
+*>
+fn void PeerPool.add_peers_from_dht(&self, common::Peer[] peers) @public
+{
+    self.add_peers(peers, common::PeerSource.DHT);
 }
 
 <*
@@ -1135,8 +1163,8 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
         }
 
         // Add peer to pool (will be deduplicated if already exists)
-        // from_tracker=false since this came from PEX
-        self.add_peer(pex_peer.ip, pex_peer.port, false);
+        // Use PeerSource.PEX and pass flags for seed detection
+        self.add_peer(pex_peer.ip, pex_peer.port, common::PeerSource.PEX, pex_peer.flags);
         added_count++;
 
         // If the peer is marked as a seed, update our records

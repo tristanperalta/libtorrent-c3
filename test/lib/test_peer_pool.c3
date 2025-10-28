@@ -1,6 +1,8 @@
 module libtorrent::peer_pool_test;
 
 import libtorrent::peer_pool;
+import libtorrent::dht_get_peers;
+import libtorrent::common;
 import async::event_loop;
 import libtorrent::tracker;
 import std::io;
@@ -61,7 +63,7 @@ fn void test_add_single_peer() @test
     // Add a peer
     char[4] ip = { 192, 168, 1, 1 };
     ushort port = 6881;
-    pool.add_peer(ip, port, true);
+    pool.add_peer(ip, port, common::PeerSource.TRACKER);
 
     // Verify peer was added
     usz total, candidates, connecting, connected;
@@ -81,7 +83,7 @@ fn void test_add_single_peer() @test
     assert(found.ip[1] == 168, "IP byte 1 should match");
     assert(found.ip[2] == 1, "IP byte 2 should match");
     assert(found.ip[3] == 1, "IP byte 3 should match");
-    assert(found.from_tracker == true, "Should be from tracker");
+    assert(found.source == common::PeerSource.TRACKER, "Should be from tracker");
     assert(found.state == peer_pool::PeerState.DISCOVERED, "Should be DISCOVERED");
 }
 
@@ -102,8 +104,8 @@ fn void test_add_duplicate_peer() @test
     char[4] ip = { 10, 0, 0, 1 };
     ushort port = 6881;
 
-    pool.add_peer(ip, port, true);
-    pool.add_peer(ip, port, true);
+    pool.add_peer(ip, port, common::PeerSource.TRACKER);
+    pool.add_peer(ip, port, common::PeerSource.TRACKER);
 
     // Should only have 1 peer
     usz total, candidates, connecting, connected;
@@ -125,7 +127,7 @@ fn void test_add_peers_from_tracker() @test
     defer peer_pool::free(pool);
 
     // Create tracker peer list
-    tracker::Peer[] tracker_peers = mem::new_array(tracker::Peer, 3);
+    common::Peer[] tracker_peers = mem::new_array(common::Peer, 3);
     tracker_peers[0].ip = { 192, 168, 1, 1 };
     tracker_peers[0].port = 6881;
     tracker_peers[1].ip = { 192, 168, 1, 2 };
@@ -174,7 +176,7 @@ fn void test_find_nonexistent_peer() @test
     defer peer_pool::free(pool);
 
     // Add one peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
 
     // Try to find different peer
     peer_pool::TorrentPeer*? found_opt = pool.find_peer({ 10, 0, 0, 1 }, 6881);
@@ -202,9 +204,9 @@ fn void test_erase_peer() @test
     defer peer_pool::free(pool);
 
     // Add three peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
-    pool.add_peer({ 10, 0, 0, 1 }, 51413, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 10, 0, 0, 1 }, 51413, common::PeerSource.TRACKER);
 
     // Verify 3 peers
     usz total, candidates, connecting, connected;
@@ -261,7 +263,7 @@ fn void test_erase_only_peer() @test
     defer peer_pool::free(pool);
 
     // Add one peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
 
     usz total, candidates, connecting, connected;
     pool.get_stats(&total, &candidates, &connecting, &connected);
@@ -300,7 +302,7 @@ fn void test_peer_limit_enforcement() @test
     for (int i = 0; i < 10; i++)
     {
         char[4] ip = { 192, 168, 1, (char)i };
-        pool.add_peer(ip, 6881, true);
+        pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
     }
 
     // Should only have 5 peers (the limit)
@@ -323,9 +325,9 @@ fn void test_statistics() @test
     defer peer_pool::free(pool);
 
     // Add peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
 
     // Initially all should be DISCOVERED
     usz total, candidates, connecting, connected;
@@ -367,11 +369,11 @@ fn void test_sorted_order() @test
     defer peer_pool::free(pool);
 
     // Add peers in non-sorted order
-    pool.add_peer({ 192, 168, 1, 5 }, 6885, true);
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, true);
-    pool.add_peer({ 10, 0, 0, 1 }, 6881, true);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+    pool.add_peer({ 192, 168, 1, 5 }, 6885, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    pool.add_peer({ 10, 0, 0, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
 
     // Verify they're stored in sorted order
     // 10.0.0.1:6881 < 192.168.1.1:6881 < 192.168.1.2:6882 < 192.168.1.3:6883 < 192.168.1.5:6885
@@ -399,7 +401,7 @@ fn void test_peer_rank_calculation() @test
     defer peer_pool::free(pool);
 
     // Add peer and verify base rank (just IP-based randomness)
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
     peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
 
     // Base rank: IP-based randomness only (1 * 7 % 20 = 7)
@@ -445,15 +447,15 @@ fn void test_candidate_cache_sorting() @test
 
     // Add peers with different characteristics
     // Peer 1: Normal peer (rank = 1 * 7 % 20 = 7)
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
 
     // Peer 2: Seed (rank = 50 + 2 * 7 % 20 = 64)
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
     peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
     peer2.seed = true;
 
     // Peer 3: Downloaded from before (rank = 100 + 3 * 7 % 20 = 101)
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, true);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
     peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
     peer3.prev_amount_download = 5000;
 
@@ -497,8 +499,8 @@ fn void test_pick_best_candidate() @test
     }
 
     // Add peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
 
     // Mark one as seed
     peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
@@ -526,12 +528,12 @@ fn void test_seed_priority() @test
     defer peer_pool::free(pool);
 
     // Add regular peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
     peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
     int regular_rank = peer1.peer_rank;
 
     // Add seed peer
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
     peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
     peer2.seed = true;
 
@@ -558,7 +560,7 @@ fn void test_failure_penalty() @test
     defer peer_pool::free(pool);
 
     // Add peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
     peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
     int initial_rank = peer.peer_rank;
 
@@ -618,7 +620,7 @@ fn void test_disconnect_peer() @test
     defer peer_pool::free(pool);
 
     // Add a peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
 
     // Disconnect peer (should not crash even without connection)
     pool.disconnect_peer({ 192, 168, 1, 1 }, 6881);
@@ -643,9 +645,9 @@ fn void test_disconnect_all() @test
     defer peer_pool::free(pool);
 
     // Add multiple peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, true);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, true);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, true);
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
 
     // Disconnect all (peers without connections remain unchanged)
     pool.disconnect_all();
@@ -688,7 +690,7 @@ fn void test_connection_limit() @test
     for (int i = 0; i < 10; i++)
     {
         char[4] ip = { 192, 168, 1, (char)i };
-        pool.add_peer(ip, 6881, true);
+        pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
     }
 
     // Try to connect to peers
@@ -723,7 +725,7 @@ fn void test_update_peer_stats() @test
 
     // Add a peer
     char[4] ip = { 192, 168, 1, 100 };
-    pool.add_peer(ip, 6881, true);
+    pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
 
     // Get initial rank
     TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
@@ -760,7 +762,7 @@ fn void test_mark_hash_failure() @test
 
     // Add a peer
     char[4] ip = { 192, 168, 1, 100 };
-    pool.add_peer(ip, 6881, true);
+    pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
 
     // Get initial rank
     TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
@@ -800,7 +802,7 @@ fn void test_mark_peer_seed() @test
 
     // Add a peer
     char[4] ip = { 192, 168, 1, 100 };
-    pool.add_peer(ip, 6881, true);
+    pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
 
     // Get initial rank
     TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
@@ -883,8 +885,8 @@ fn void test_stats_update_candidate_cache() @test
     // Add two peers
     char[4] ip1 = { 192, 168, 1, 100 };
     char[4] ip2 = { 192, 168, 1, 101 };
-    pool.add_peer(ip1, 6881, true);
-    pool.add_peer(ip2, 6881, true);
+    pool.add_peer(ip1, 6881, common::PeerSource.TRACKER);
+    pool.add_peer(ip2, 6881, common::PeerSource.TRACKER);
 
     // Update candidate cache to make peers available
     pool.update_candidate_cache();
@@ -917,4 +919,139 @@ fn void test_stats_update_candidate_cache() @test
            new_best.ip[2] == ip1[2] && new_best.ip[3] == ip1[3] &&
            new_best.port == 6881,
            "Peer with hash failures should be ranked lower");
+}
+
+// ============================================================================
+// Phase 6 Tests: DHT Integration
+// ============================================================================
+
+<*
+ Test adding peers from DHT get_peers response.
+*>
+fn void test_add_peers_from_dht() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Create DHT peer list
+    common::Peer[] dht_peers = mem::new_array(common::Peer, 3);
+    defer free(dht_peers);
+
+    dht_peers[0].ip = { 10, 20, 30, 40 };
+    dht_peers[0].port = 51413;
+    dht_peers[1].ip = { 172, 16, 0, 1 };
+    dht_peers[1].port = 6881;
+    dht_peers[2].ip = { 192, 168, 100, 1 };
+    dht_peers[2].port = 6882;
+
+    // Add peers from DHT
+    pool.add_peers_from_dht(dht_peers);
+
+    // Verify all peers were added
+    usz total, candidates, connecting, connected;
+    pool.get_stats(&total, &candidates, &connecting, &connected);
+    assert(total == 3, "Should have 3 peers from DHT");
+
+    // Verify each peer can be found
+    if (catch err = pool.find_peer({ 10, 20, 30, 40 }, 51413))
+    {
+        assert(false, "Should find DHT peer 1");
+    }
+
+    if (catch err = pool.find_peer({ 172, 16, 0, 1 }, 6881))
+    {
+        assert(false, "Should find DHT peer 2");
+    }
+
+    if (catch err = pool.find_peer({ 192, 168, 100, 1 }, 6882))
+    {
+        assert(false, "Should find DHT peer 3");
+    }
+
+    io::printn("✓ Add peers from DHT");
+}
+
+<*
+ Test that DHT peers are marked with from_tracker=false.
+*>
+fn void test_dht_peers_not_from_tracker() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add DHT peer
+    common::Peer[] dht_peers = mem::new_array(common::Peer, 1);
+    defer free(dht_peers);
+
+    dht_peers[0].ip = { 10, 20, 30, 40 };
+    dht_peers[0].port = 51413;
+
+    pool.add_peers_from_dht(dht_peers);
+
+    // Verify peer is marked as NOT from tracker
+    peer_pool::TorrentPeer* peer = pool.find_peer({ 10, 20, 30, 40 }, 51413)!!;
+    assert(peer.source != common::PeerSource.TRACKER, "DHT peer should not be marked as from_tracker");
+    assert(peer.state == peer_pool::PeerState.DISCOVERED, "DHT peer should be DISCOVERED");
+
+    io::printn("✓ DHT peers marked correctly");
+}
+
+<*
+ Test deduplication between tracker and DHT peers.
+ If a peer comes from both tracker and DHT, the from_tracker flag should remain true.
+*>
+fn void test_dht_tracker_deduplication() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    common::Ipv4Addr shared_ip = { 192, 168, 1, 100 };
+    ushort shared_port = 6881;
+
+    // Add peer from tracker first
+    pool.add_peer(shared_ip, shared_port, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer = pool.find_peer(shared_ip, shared_port)!!;
+    assert(peer.source == common::PeerSource.TRACKER, "Peer from tracker should be marked");
+
+    // Now add same peer from DHT
+    common::Peer[] dht_peers = mem::new_array(common::Peer, 1);
+    defer free(dht_peers);
+
+    dht_peers[0].ip = shared_ip;
+    dht_peers[0].port = shared_port;
+
+    pool.add_peers_from_dht(dht_peers);
+
+    // Verify no duplicate - still only 1 peer
+    usz total, candidates, connecting, connected;
+    pool.get_stats(&total, &candidates, &connecting, &connected);
+    assert(total == 1, "Should not create duplicate peer");
+
+    // Verify from_tracker flag remains true
+    peer = pool.find_peer(shared_ip, shared_port)!!;
+    assert(peer.source == common::PeerSource.TRACKER, "source == common::PeerSource.TRACKER flag should remain true");
+
+    io::printn("✓ DHT/tracker deduplication");
 }

@@ -753,7 +753,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
 
     for (int i = 0; i < max_connections; i++)
     {
-        tracker::Peer peer = response.peers[i];
+        common::Peer peer = response.peers[i];
 
         // Format IP address
         DString ip_buf;

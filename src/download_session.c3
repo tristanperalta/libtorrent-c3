@@ -16,6 +16,8 @@ import libtorrent::storage_manager;
 import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
+import libtorrent::dht_client;
+import libtorrent::dht_get_peers;
 import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
@@ -58,8 +60,14 @@ struct DownloadContext
     int announce_backoff_ms;                // Current backoff delay
     bool initial_announce_done;             // Has first announce succeeded?
 
-    // Peer management (Phase 6 - using peer pool)
+    // Peer management
     peer_pool::PeerPool* peer_pool;
+
+    // DHT peer discovery
+    dht_client::DhtClient* dht_client;
+    dht_get_peers::GetPeersSearch* dht_search;
+    async::timer::Timer* dht_timer;  // Periodic DHT peer discovery
+    bool dht_enabled;
 
     // Download state
     bool download_complete;
@@ -764,7 +772,7 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
         raylib_gui::update_tracker_status(ctx.gui_state, status_msg.str_view());
     }
 
-    // Add all peers to peer pool (Phase 1 integration)
+    // Add all peers to peer pool
     ctx.peer_pool.add_peers_from_tracker(response.peers);
 
     // Show peer pool stats
@@ -780,7 +788,7 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     io::printfn("  Peer pool now has %d total peers (%d candidates, %d connecting, %d connected)",
                 total_peers, candidates, connecting, connected);
 
-    // Automatically connect to best peers (Phase 6 - peer pool manages connections)
+    // Automatically connect to best peers
     io::printfn("Connecting to best peers...");
     ctx.peer_pool.connect_to_peers();
 
@@ -1197,6 +1205,132 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
     // Now start tracker announce
     io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
     announce_with_retry(ctx);
+
+    // Start DHT peer discovery if enabled
+    if (ctx.dht_enabled && ctx.dht_client)
+    {
+        io::printfn("Starting DHT peer discovery...");
+        start_dht_peer_discovery(ctx);
+    }
+}
+
+// ============================================================================
+// DHT Peer Discovery
+// ============================================================================
+
+<*
+ Timer callback for periodic DHT peer discovery.
+ Re-queries DHT for peers every 5 minutes.
+*>
+fn void on_dht_timer_tick(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    // Free previous search if exists
+    if (ctx.dht_search)
+    {
+        dht_get_peers::free_search(ctx.dht_search);
+        ctx.dht_search = null;
+    }
+
+    // Start new DHT peer discovery
+    start_dht_peer_discovery(ctx);
+}
+
+<*
+ Start DHT peer discovery for the torrent's info hash.
+*>
+fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
+{
+    if (!ctx.dht_client || !ctx.torrent) return;
+
+    // Create get_peers search for this torrent's info hash
+    ctx.dht_search = dht_get_peers::create_search(ctx.torrent.info_hash);
+
+    // TODO: Actually send get_peers queries to DHT
+    // For now, this is a placeholder - full DHT query implementation
+    // would integrate with the DHT client's send_get_peers method
+
+    io::printfn("[DHT] Searching for peers for torrent...");
+
+    // In a full implementation, we would:
+    // 1. Get closest nodes from routing table
+    // 2. Send get_peers queries to those nodes
+    // 3. Process responses and add peers to peer pool
+    // 4. Handle announce tokens for announcing we have the torrent
+}
+
+<*
+ Process DHT peer discovery results and add peers to peer pool.
+*>
+fn void on_dht_peers_found(download_session::DownloadContext* ctx) @public
+{
+    if (!ctx.dht_search) return;
+
+    // Get discovered peers from DHT
+    common::Peer[] dht_peers = dht_get_peers::get_peers(ctx.dht_search);
+    defer free(dht_peers);
+
+    if (dht_peers.len == 0)
+    {
+        io::printfn("[DHT] No peers found");
+        return;
+    }
+
+    io::printfn("[DHT] Found %d peers", dht_peers.len);
+
+    // Add DHT peers to peer pool
+    ctx.peer_pool.add_peers_from_dht(dht_peers);
+
+    // Show updated peer pool stats
+    usz total_peers, candidates, connecting, connected;
+    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
+    io::printfn("  Peer pool now has %d total peers (%d candidates)",
+                total_peers, candidates);
+
+    // Try to connect to new peers
+    ctx.peer_pool.connect_to_peers();
+}
+
+<*
+ Initialize DHT client for peer discovery.
+*>
+fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @public
+{
+    // Generate DHT node ID (similar to peer ID)
+    common::NodeId our_node_id = tracker::generate_peer_id();
+
+    // Create DHT client
+    ctx.dht_client = dht_client::create_dht_client(our_node_id);
+    if (!ctx.dht_client)
+    {
+        io::eprintfn("[DHT] Failed to create DHT client");
+        ctx.dht_enabled = false;
+        return;
+    }
+
+    io::printfn("[DHT] Starting DHT on port %d", dht_port);
+
+    // Add default bootstrap nodes
+    dht_client::add_default_bootstrap_nodes(ctx.dht_client);
+
+    // Start bootstrap process
+    dht_client::bootstrap(ctx.dht_client);
+
+    ctx.dht_enabled = true;
+
+    // Set up periodic DHT query timer (every 5 minutes)
+    async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
+    if (catch err = timer_opt)
+    {
+        io::eprintfn("[DHT] Warning: Failed to create DHT timer");
+    }
+    else
+    {
+        ctx.dht_timer = timer_opt;
+        async::timer::start(ctx.dht_timer, 300000, 300000,
+                          &on_dht_timer_tick, ctx);
+    }
 }
 
 <*
@@ -1286,7 +1420,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     ctx.pieces_verified_count = 0;
     ctx.next_piece_to_verify = 0;
 
-    // Create peer pool (Phase 1 - storage only, Phase 3 will add connection management)
+    // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
         .max_peerlist_size = 1000,     // Track up to 1000 peers (vs old limit of 10)
@@ -1297,13 +1431,17 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
     io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);
 
-    // Set peer pool callbacks (Phase 6 integration)
+    // Set peer pool callbacks
     ctx.peer_pool.set_callbacks(
         &on_download_peer_connected,
         &on_download_peer_message,
         &on_download_peer_disconnected,
         ctx
     );
+    io::printfn("");
+
+    // Initialize DHT for peer discovery
+    init_dht(ctx, 6881);  // Use same port as BitTorrent protocol
     io::printfn("");
 
     // Initialize storage manager (create directories, open files)

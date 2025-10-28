@@ -1,5 +1,6 @@
 module libtorrent::tracker_test;
 import libtorrent::tracker;
+import libtorrent::common;
 import libtorrent::bencode;
 import std::io;
 import std::net::url;
@@ -117,13 +118,13 @@ fn void test_parse_compact_peers() @test {
         10,  0,   0, 1,   0xC8, 0xD5   // 10.0.0.1:51413 (0xC8D5 = 51413)
     };
 
-    tracker::Peer[]? peers_opt = tracker::parse_compact_peers(peer_data);
+    common::Peer[]? peers_opt = tracker::parse_compact_peers(peer_data);
     if (catch excuse = peers_opt) {
         assert(false, "Should parse valid peer data");
         return;
     }
 
-    tracker::Peer[] peers = peers_opt;
+    common::Peer[] peers = peers_opt;
     assert(peers.len == 2, "Should parse 2 peers");
 
     // Check first peer
@@ -151,7 +152,7 @@ fn void test_parse_compact_peers_invalid_length() @test {
     // Invalid: 7 bytes (not divisible by 6)
     char[] peer_data = { 192, 168, 1, 1, 0x1A, 0xE1, 0xFF };
 
-    tracker::Peer[]? peers = tracker::parse_compact_peers(peer_data);
+    common::Peer[]? peers = tracker::parse_compact_peers(peer_data);
     if (catch excuse = peers) {
         // Expected failure - test passes
     } else {
@@ -166,13 +167,13 @@ fn void test_parse_compact_peers_invalid_length() @test {
 fn void test_parse_compact_peers_empty() @test {
     char[] empty;
 
-    tracker::Peer[]? peers_opt = tracker::parse_compact_peers(empty);
+    common::Peer[]? peers_opt = tracker::parse_compact_peers(empty);
     if (catch excuse = peers_opt) {
         assert(false, "Should handle empty data");
         return;
     }
 
-    tracker::Peer[] peers = peers_opt;
+    common::Peer[] peers = peers_opt;
     assert(peers.len == 0, "Should return empty array");
 }
 

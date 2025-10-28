@@ -30,8 +30,33 @@ const usz COMPACT_PEER_PORT_SIZE = 2;     // Port size in compact format
 // Type aliases for common protocol types
 alias InfoHash = char[SHA1_HASH_SIZE];     // Torrent info hash
 alias PeerId = char[PEER_ID_SIZE];         // BitTorrent peer ID
+alias NodeId = char[SHA1_HASH_SIZE];       // DHT node ID (BEP 5)
 alias Ipv4Addr = char[IPV4_ADDR_SIZE];     // IPv4 address in network byte order
 
 // Type aliases for block/piece indexing (used across multiple modules)
 typedef PieceIndex = uint;
 typedef BlockOffset = uint;
+
+<*
+ Peer discovered from any source (tracker, DHT, PEX, etc.)
+ Standard peer representation used across all peer discovery methods.
+*>
+struct Peer
+{
+    Ipv4Addr ip;    // IPv4 address
+    ushort port;    // Port number
+}
+
+<*
+ Peer discovery source
+ Tracks where a peer was discovered from for statistics and prioritization.
+*>
+enum PeerSource : char
+{
+    MANUAL,         // Manually added
+    TRACKER,        // HTTP/UDP tracker announce
+    DHT,            // DHT get_peers query
+    PEX,            // Peer Exchange (BEP 11)
+    LSD,            // Local Service Discovery (BEP 14) - future
+    DHT_ANNOUNCE    // DHT announce response - future
+}

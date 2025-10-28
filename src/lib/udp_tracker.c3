@@ -135,7 +135,7 @@ struct AnnounceResponse {
     int interval;
     int leechers;
     int seeders;
-    tracker::Peer[] peers_data;
+    common::Peer[] peers_data;
 }
 
 struct ErrorResponse {

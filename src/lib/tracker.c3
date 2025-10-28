@@ -44,15 +44,6 @@ interface Tracker
 }
 
 <*
- Peer structure representing a BitTorrent peer.
- Contains IPv4 address and port number.
-*>
-struct Peer {
-    common::Ipv4Addr ip;  // IPv4 address in network byte order
-    ushort port;          // Port number
-}
-
-<*
  Tracker response structure.
  Contains information received from the tracker.
 *>
@@ -61,8 +52,8 @@ struct TrackerResponse {
     long min_interval;      // Minimum announce interval (optional)
     long complete;          // Number of seeders
     long incomplete;        // Number of leechers
-    Peer[] peers;          // List of peers
-    String failure_reason; // Error message if request failed (empty if none)
+    common::Peer[] peers;   // List of peers
+    String failure_reason;  // Error message if request failed (empty if none)
     String warning_message; // Optional warning from tracker (empty if none)
 }
 
@@ -167,7 +158,7 @@ fn String build_announce_url(String tracker_url, common::InfoHash* info_hash,
  @param peer_data : "Raw peer data from tracker"
  @return "Array of parsed peers or fault"
 *>
-fn Peer[]? parse_compact_peers(char[] peer_data)
+fn common::Peer[]? parse_compact_peers(char[] peer_data)
 {
     // Validate length is multiple of COMPACT_PEER_SIZE
     if (peer_data.len % common::COMPACT_PEER_SIZE != 0) {
@@ -176,11 +167,11 @@ fn Peer[]? parse_compact_peers(char[] peer_data)
 
     usz count = peer_data.len / common::COMPACT_PEER_SIZE;
     if (count == 0) {
-        Peer[] empty;
+        common::Peer[] empty;
         return empty;
     }
 
-    Peer[] peers = mem::new_array(Peer, count);
+    common::Peer[] peers = mem::new_array(common::Peer, count);
 
     for (usz i = 0; i < count; i++)
     {
