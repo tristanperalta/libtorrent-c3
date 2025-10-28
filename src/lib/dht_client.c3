@@ -7,6 +7,10 @@ import libtorrent::common;
 import libtorrent::dht_routing_table;
 import libtorrent::dht_rpc_manager;
 import libtorrent::krpc;
+import libtorrent::bencode;
+import async::udp;
+import async::event_loop;
+import uv;
 
 /**
  * DHT Client Implementation
@@ -75,6 +79,8 @@ struct DhtClient
     long last_refresh_time;                        // Last bucket refresh timestamp
     BootstrapNode[MAX_BOOTSTRAP_NODES] bootstrap_nodes;
     int bootstrap_node_count;
+    udp::UdpSocket* socket;                        // UDP socket for DHT communication
+    event_loop::EventLoop* loop;                   // Event loop
 }
 
 // ============================================================================
@@ -85,9 +91,11 @@ struct DhtClient
  * Create a new DHT client
  *
  * @param our_id Our node ID (20 random bytes)
- * @return Initialized DHT client (allocated on heap)
+ * @param loop Event loop for async I/O
+ * @param port DHT port to bind to
+ * @return Initialized DHT client (allocated on heap), or null on failure
  */
-fn DhtClient* create_dht_client(common::NodeId our_id) @public
+fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* loop, ushort port) @public
 {
     DhtClient* client = mem::new(DhtClient);
 
@@ -104,6 +112,35 @@ fn DhtClient* create_dht_client(common::NodeId our_id) @public
     client.state = DhtState.UNINITIALIZED;
     client.last_refresh_time = 0;
     client.bootstrap_node_count = 0;
+    client.loop = loop;
+
+    // Create UDP socket (only if event loop is provided)
+    if (loop != null)
+    {
+        udp::UdpSocket*? socket_opt = udp::create(loop);
+        if (catch err = socket_opt)
+        {
+            io::eprintfn("[DHT] Failed to create UDP socket");
+            free_dht_client(client);
+            return null;
+        }
+
+        client.socket = socket_opt;
+
+        // Bind to DHT port
+        DString addr_str;
+        addr_str.appendf("0.0.0.0");
+        udp::bind(client.socket, addr_str.str_view(), (int)port);
+
+        // Start receiving UDP datagrams
+        udp::recv_start(client.socket, &on_udp_alloc, &on_udp_recv, client);
+
+        io::printfn("[DHT] UDP socket bound to port %d", port);
+    }
+    else
+    {
+        client.socket = null;
+    }
 
     return client;
 }
@@ -124,6 +161,12 @@ fn void free_callback_context(void* userdata)
 fn void free_dht_client(DhtClient* client) @public
 {
     if (!client) return;
+
+    // Close UDP socket
+    if (client.socket)
+    {
+        udp::close(client.socket);
+    }
 
     // Cancel all pending transactions and free their callback contexts
     if (client.rpc_manager)
@@ -192,12 +235,33 @@ fn void add_default_bootstrap_nodes(DhtClient* client) @public
 // ============================================================================
 
 /**
+ * Helper: Convert IP address to string
+ */
+fn String ip_to_string(common::Ipv4Addr ip) => @pool()
+{
+    DString buf;
+    buf.appendf("%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+    return buf.copy_str(mem);
+}
+
+/**
  * Callback context for RPC responses
  */
 struct RpcCallbackContext
 {
     DhtClient* client;
     krpc::QueryType query_type;
+}
+
+/**
+ * UDP send callback
+ */
+fn void on_udp_send(udp::UdpSocket* socket, int status, void* user_data)
+{
+    if (status < 0)
+    {
+        io::eprintfn("[DHT] UDP send failed");
+    }
 }
 
 /**
@@ -257,8 +321,23 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
         return false;
     }
 
-    // In a full implementation, we'd encode and send the actual KRPC message here
-    // For now, just track the transaction
+    // Skip network I/O if no socket (test mode)
+    if (!client.socket) return true;
+
+    char[2] tid = tid_opt;
+
+    // Encode the KRPC ping query
+    String tid_str = (String)((char*)&tid)[:2];
+    String message = krpc::encode_ping_query(tid_str, client.our_id);
+    defer free(message);
+
+    // Send via UDP
+    String target_ip_str = ip_to_string(target_ip);
+    defer free(target_ip_str);
+
+    io::printfn("[DHT] Sending ping to %s:%d", target_ip_str, target_port);
+    udp::send(client.socket, target_ip_str, (int)target_port,
+              (char[])message, &on_udp_send, null);
 
     return true;
 }
@@ -299,9 +378,85 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
         return false;
     }
 
-    // In a full implementation, we'd encode and send the actual KRPC message here
+    // Skip network I/O if no socket (test mode)
+    if (!client.socket) return true;
+
+    char[2] tid = tid_opt;
+
+    // Encode the KRPC find_node query
+    String tid_str = (String)((char*)&tid)[:2];
+    String message = krpc::encode_find_node_query(tid_str, client.our_id, search_id);
+    defer free(message);
+
+    // Send via UDP
+    String target_ip_str = ip_to_string(target_ip);
+    defer free(target_ip_str);
+
+    io::printfn("[DHT] Sending find_node to %s:%d", target_ip_str, target_port);
+    udp::send(client.socket, target_ip_str, (int)target_port,
+              (char[])message, &on_udp_send, null);
 
     return true;
+}
+
+// ============================================================================
+// Message Receiving
+// ============================================================================
+
+/**
+ * UDP receive callback - handles incoming DHT messages
+ */
+fn void on_udp_recv(udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, void* user_data)
+{
+    DhtClient* client = (DhtClient*)user_data;
+
+    if (data.len == 0) return;  // No data or error
+
+    String message = (String)data;
+
+    // Decode bencode
+    bencode::BencodeValue*? root_opt = bencode::decode(message);
+    if (catch err = root_opt)
+    {
+        io::eprintfn("[DHT] Failed to decode bencode message");
+        return;
+    }
+
+    bencode::BencodeValue* root = root_opt;
+    defer bencode::free_bencode_value(root);
+
+    // Try to decode message type
+    krpc::MessageType? type_opt = krpc::decode_message_type(root);
+    if (catch err = type_opt)
+    {
+        io::eprintfn("[DHT] Failed to decode message type");
+        return;
+    }
+
+    krpc::MessageType msg_type = type_opt;
+
+    switch (msg_type)
+    {
+        case krpc::MessageType.RESPONSE:
+            // Handle response (find matching transaction)
+            io::printfn("[DHT] Received DHT response");
+            // In full implementation: decode response and call transaction callback
+        case krpc::MessageType.QUERY:
+            // Handle incoming query
+            io::printfn("[DHT] Received DHT query");
+            // In full implementation: decode query and send response
+        case krpc::MessageType.ERROR:
+            // Handle error
+            io::printfn("[DHT] Received DHT error");
+    }
+}
+
+/**
+ * Allocate buffer for UDP receive
+ */
+fn char[] on_udp_alloc(udp::UdpSocket* socket, usz suggested_size, void* user_data)
+{
+    return mem::new_array(char, suggested_size);
 }
 
 // ============================================================================

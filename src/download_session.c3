@@ -1301,7 +1301,7 @@ fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @publi
     common::NodeId our_node_id = tracker::generate_peer_id();
 
     // Create DHT client
-    ctx.dht_client = dht_client::create_dht_client(our_node_id);
+    ctx.dht_client = dht_client::create_dht_client(our_node_id, ctx.loop, dht_port);
     if (!ctx.dht_client)
     {
         io::eprintfn("[DHT] Failed to create DHT client");
