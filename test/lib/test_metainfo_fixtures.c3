@@ -651,13 +651,15 @@ fn void test_invalid_name2() @test
     String data = load_torrent_file("test/fixtures/invalid_name2.torrent");
     defer free(data);
 
-    TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
-
-    // BEP 3: When name is "..", should use info-hash hex as name
-    assert(torrent.info.name == "b61560c2918f463768cd122b6d2fdd47b77bdb35",
-           "Invalid name '..' should be replaced with info-hash");
-    assert(torrent.info.length == 850, "Should parse multi-file torrent length");
+    // Name is ".." which is a path traversal attack - should be rejected
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected invalid_name2.torrent (name is '..')");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for name '..'");
+    }
 }
 
 // File: test/fixtures/invalid_name3.torrent
@@ -1489,14 +1491,15 @@ fn void test_sanitize_torrent_name_with_traversal() @test
     String data = bencode::encode(root);
     defer free(data);
 
-    TorrentFile* t = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(t);
-
-    // Path traversal should be removed by sanitization
-    io::printfn("Original name in bencode: '../../../etc/file'");
-    io::printfn("Sanitized name: '%s'", t.info.name);
-    assert(!t.info.name.contains(".."), "Path traversal '..' should be removed");
-    assert(t.info.name.len > 0, "Name should not be empty after sanitization");
+    // Path traversal in name should be rejected (strict validation)
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected torrent with path traversal in name");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for name with path traversal");
+    }
 }
 
 fn void test_sanitize_torrent_name_with_null_bytes() @test
@@ -1681,61 +1684,162 @@ fn void test_sanitize_long_file_paths() @test
 }
 
 // ============================================================================
-// TODO: Path Security and Traversal Tests
+// Path Security and Traversal Tests
 // ============================================================================
 
 // File: test/fixtures/slash_path.torrent
 fn void test_parse_slash_path_should_fail() @test
 {
-    return; // TODO: Implement path traversal security checks
+    String data = load_torrent_file("test/fixtures/slash_path.torrent");
+    defer free(data);
+
+    // This torrent contains absolute path components (e.g., "/")
+    // Should be rejected with TORRENT_INVALID_PATH
+    if (catch err = metainfo::parse(data))
+    {
+        // Expected to fail - verify it's the correct error
+        io::printn("✓ Correctly rejected slash_path.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for slash_path.torrent");
+    }
 }
 
 // File: test/fixtures/slash_path2.torrent
 fn void test_parse_slash_path2_should_fail() @test
 {
-    return; // TODO: Implement path traversal security checks
+    String data = load_torrent_file("test/fixtures/slash_path2.torrent");
+    defer free(data);
+
+    // Should be rejected for absolute/invalid path components
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected slash_path2.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for slash_path2.torrent");
+    }
 }
 
 // File: test/fixtures/slash_path3.torrent
 fn void test_parse_slash_path3_should_fail() @test
 {
-    return; // TODO: Implement path traversal security checks
+    String data = load_torrent_file("test/fixtures/slash_path3.torrent");
+    defer free(data);
+
+    // Should be rejected for path traversal in name field
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected slash_path3.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for slash_path3.torrent");
+    }
 }
 
 // File: test/fixtures/backslash_path.torrent
 fn void test_parse_backslash_path_should_fail() @test
 {
-    return; // TODO: Implement path traversal security checks
+    String data = load_torrent_file("test/fixtures/backslash_path.torrent");
+    defer free(data);
+
+    // Should be rejected for backslash path separators
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected backslash_path.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for backslash_path.torrent");
+    }
 }
 
 // File: test/fixtures/absolute_filename.torrent
 fn void test_parse_absolute_filename_should_fail() @test
 {
-    return; // TODO: Implement path traversal security checks
+    String data = load_torrent_file("test/fixtures/absolute_filename.torrent");
+    defer free(data);
+
+    // Should be rejected for absolute path
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected absolute_filename.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for absolute_filename.torrent");
+    }
 }
 
 // File: test/fixtures/parent_path.torrent
 fn void test_parse_parent_path_should_fail() @test
 {
-    return; // TODO: Implement path traversal security checks
+    String data = load_torrent_file("test/fixtures/parent_path.torrent");
+    defer free(data);
+
+    // Should be rejected for ".." directory traversal
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected parent_path.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for parent_path.torrent");
+    }
 }
 
 // File: test/fixtures/hidden_parent_path.torrent
 fn void test_parse_hidden_parent_path_should_fail() @test
 {
-    return; // TODO: Implement path traversal security checks
+    String data = load_torrent_file("test/fixtures/hidden_parent_path.torrent");
+    defer free(data);
+
+    // Should be rejected for hidden ".." traversal
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected hidden_parent_path.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for hidden_parent_path.torrent");
+    }
 }
 
 // File: test/fixtures/empty_path.torrent
 fn void test_parse_empty_path_should_fail() @test
 {
-    return; // TODO: Implement empty path validation
+    String data = load_torrent_file("test/fixtures/empty_path.torrent");
+    defer free(data);
+
+    // Should be rejected for empty path component
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected empty_path.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for empty_path.torrent");
+    }
 }
 
 // File: test/fixtures/empty_path_multi.torrent
 fn void test_parse_empty_path_multi_should_fail() @test
 {
-    return; // TODO: Implement empty path validation
+    String data = load_torrent_file("test/fixtures/empty_path_multi.torrent");
+    defer free(data);
+
+    // Should be rejected for empty path component in multi-file torrent
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected empty_path_multi.torrent");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for empty_path_multi.torrent");
+    }
 }
 
 // ============================================================================

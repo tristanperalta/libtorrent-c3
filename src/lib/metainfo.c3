@@ -90,6 +90,7 @@ faultdef TORRENT_INVALID_FORMAT;
 faultdef TORRENT_MISSING_FIELD;
 faultdef TORRENT_INVALID_INFO;
 faultdef TORRENT_INDEX_OUT_OF_BOUNDS;
+faultdef TORRENT_INVALID_PATH;
 
 /**
  * Parse a .torrent file from bencoded data.
@@ -421,6 +422,13 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
 {
     // Extract 'name' (required)
     BencodeValue* name_val = bencode::dict_get_required(bencode::BencodeType.STRING, info_val, "name", TORRENT_MISSING_FIELD)!;
+
+    // Validate name for security (reject directory traversal, absolute paths, etc.)
+    if (is_invalid_path_component((String)name_val.string))
+    {
+        return TORRENT_INVALID_PATH?;
+    }
+
     // Sanitize the torrent name for filesystem safety
     String? sanitized_name_opt = path_sanitize::sanitize_torrent_path((String)name_val.string);
     if (catch err = sanitized_name_opt)
@@ -496,6 +504,30 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
 }
 
 /**
+ * Check if a path component contains invalid characters or sequences.
+ * This validates against directory traversal attacks and malformed paths.
+ *
+ * @param component Path component to validate
+ * @return true if invalid, false if valid
+ */
+fn bool is_invalid_path_component(String component)
+{
+    // Empty path components are invalid
+    if (component.len == 0) return true;
+
+    // Reject relative path components (. and ..)
+    if (component == "." || component == "..") return true;
+
+    // Reject paths containing directory separators
+    if (component.contains("/") || component.contains("\\")) return true;
+
+    // Reject absolute paths (starting with / or \)
+    if (component.starts_with("/") || component.starts_with("\\")) return true;
+
+    return false;
+}
+
+/**
  * Parse the 'files' list from a multi-file torrent.
  *
  * @param info Pointer to TorrentInfo to fill
@@ -561,6 +593,13 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
             {
                 return TORRENT_INVALID_INFO?;
             }
+
+            // Validate path component for security
+            if (is_invalid_path_component((String)component.string))
+            {
+                return TORRENT_INVALID_PATH?;
+            }
+
             // Sanitize each path component
             String? sanitized_component = path_sanitize::sanitize_torrent_path((String)component.string);
             if (catch err = sanitized_component)
