@@ -1982,55 +1982,150 @@ fn void test_parse_overlapping_symlinks_should_fail() @test
 // File: test/fixtures/invalid_name.torrent
 fn void test_parse_invalid_name_should_fail() @test
 {
-    return; // TODO: Implement name validation
+    String data = load_torrent_file("test/fixtures/invalid_name.torrent");
+    defer free(data);
+
+    // This torrent has an integer (1348) instead of string for name
+    // Should fail during type checking
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected torrent with integer name");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for integer name");
+    }
 }
 
 // File: test/fixtures/invalid_filename.torrent
 fn void test_parse_invalid_filename_should_fail() @test
 {
-    return; // TODO: Implement filename validation
+    String data = load_torrent_file("test/fixtures/invalid_filename.torrent");
+    defer free(data);
+
+    // This torrent has "." as filename which is invalid
+    // Should fail during path validation
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected torrent with '.' as filename");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for '.' filename");
+    }
 }
 
 // File: test/fixtures/invalid_filename2.torrent
 fn void test_parse_invalid_filename2_should_fail() @test
 {
-    return; // TODO: Implement filename validation
+    String data = load_torrent_file("test/fixtures/invalid_filename2.torrent");
+    defer free(data);
+
+    // This torrent has ".." in path for directory traversal attack
+    // Should fail during path validation
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected torrent with '..' traversal");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for '..' traversal");
+    }
 }
 
 // File: test/fixtures/invalid_directory_name.torrent
 fn void test_parse_invalid_directory_name_should_fail() @test
 {
-    return; // TODO: Implement directory name validation
+    String data = load_torrent_file("test/fixtures/invalid_directory_name.torrent");
+    defer free(data);
+
+    // This torrent has "/" and "\\" as directory names which are invalid
+    // Should fail during path validation
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected torrent with invalid directory names");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for invalid directory names");
+    }
 }
 
 // File: test/fixtures/invalid_path_list.torrent
 fn void test_parse_invalid_path_list_should_fail() @test
 {
-    return; // TODO: Implement path list validation
+    String data = load_torrent_file("test/fixtures/invalid_path_list.torrent");
+    defer free(data);
+
+    // This torrent has an integer in the path list instead of string
+    // Should fail during type checking
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected torrent with integer in path list");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for integer in path list");
+    }
 }
 
 // File: test/fixtures/missing_path_list.torrent
 fn void test_parse_missing_path_list_should_fail() @test
 {
-    return; // TODO: Implement path list validation
+    String data = load_torrent_file("test/fixtures/missing_path_list.torrent");
+    defer free(data);
+
+    // This torrent has a file entry missing the required 'path' field
+    // Should fail during parsing
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected torrent with missing path list");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for missing path list");
+    }
 }
 
 // File: test/fixtures/duplicate_files.torrent
 fn void test_parse_duplicate_files() @test
 {
-    return; // TODO: Implement duplicate file detection
+    String data = load_torrent_file("test/fixtures/duplicate_files.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    // Duplicate file paths are valid per BEP 3
+    assert(torrent.info.is_multi_file, "Should be multi-file torrent");
+    assert(torrent.info.files.len > 0, "Should have files");
+    io::printn("✓ Parsed duplicate_files.torrent (duplicate paths are valid)");
 }
 
 // File: test/fixtures/collection2.torrent
 fn void test_parse_collection2() @test
 {
-    return; // TODO: Implement collection parsing
+    String data = load_torrent_file("test/fixtures/collection2.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    io::printn("✓ Parsed collection2.torrent successfully");
 }
 
 // File: test/fixtures/similar2.torrent
 fn void test_parse_similar2() @test
 {
-    return; // TODO: Test similar torrent variant
+    String data = load_torrent_file("test/fixtures/similar2.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    io::printn("✓ Parsed similar2.torrent successfully");
 }
 
 // ============================================================================
@@ -2040,49 +2135,119 @@ fn void test_parse_similar2() @test
 // File: test/fixtures/test1.torrent
 fn void test_parse_test1() @test
 {
-    return; // TODO: Add test for test1.torrent
+    String data = load_torrent_file("test/fixtures/test1.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    // test1.torrent may have announce-list instead of announce
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    assert(torrent.info.piece_length > 0, "Should have piece length");
+    io::printn("✓ Parsed test1.torrent successfully");
 }
 
 // File: test/fixtures/test2.torrent
 fn void test_parse_test2() @test
 {
-    return; // TODO: Add test for test2.torrent
+    String data = load_torrent_file("test/fixtures/test2.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    // test2.torrent may have announce-list instead of announce
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    assert(torrent.info.piece_length > 0, "Should have piece length");
+    io::printn("✓ Parsed test2.torrent successfully");
 }
 
 // File: test/fixtures/test3.torrent
 fn void test_parse_test3() @test
 {
-    return; // TODO: Add test for test3.torrent
+    String data = load_torrent_file("test/fixtures/test3.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    // test3.torrent may have announce-list instead of announce
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    assert(torrent.info.piece_length > 0, "Should have piece length");
+    io::printn("✓ Parsed test3.torrent successfully");
 }
 
 // File: test/fixtures/test1_pad_files.torrent
 fn void test_parse_test1_pad_files() @test
 {
-    return; // TODO: Add test for pad files variant
+    String data = load_torrent_file("test/fixtures/test1_pad_files.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.is_multi_file, "Should be multi-file torrent");
+    assert(torrent.info.files.len > 0, "Should have files");
+    io::printn("✓ Parsed test1_pad_files.torrent successfully");
 }
 
 // File: test/fixtures/test2_pad_files.torrent
 fn void test_parse_test2_pad_files() @test
 {
-    return; // TODO: Add test for pad files variant
+    String data = load_torrent_file("test/fixtures/test2_pad_files.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.is_multi_file, "Should be multi-file torrent");
+    assert(torrent.info.files.len > 0, "Should have files");
+    io::printn("✓ Parsed test2_pad_files.torrent successfully");
 }
 
 // File: test/fixtures/test3_pad_files.torrent
 fn void test_parse_test3_pad_files() @test
 {
-    return; // TODO: Add test for pad files variant
+    String data = load_torrent_file("test/fixtures/test3_pad_files.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.is_multi_file, "Should be multi-file torrent");
+    assert(torrent.info.files.len > 0, "Should have files");
+    io::printn("✓ Parsed test3_pad_files.torrent successfully");
 }
 
 // File: test/fixtures/test1_single_padded.torrent
 fn void test_parse_test1_single_padded() @test
 {
-    return; // TODO: Add test for single padded file
+    String data = load_torrent_file("test/fixtures/test1_single_padded.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    io::printn("✓ Parsed test1_single_padded.torrent successfully");
 }
 
 // File: test/fixtures/pad_file_no_path.torrent
 fn void test_parse_pad_file_no_path_should_fail() @test
 {
-    return; // TODO: Implement pad file path validation
+    String data = load_torrent_file("test/fixtures/pad_file_no_path.torrent");
+    defer free(data);
+
+    // This torrent has a pad file without path field
+    // Should fail during parsing
+    if (catch err = metainfo::parse(data))
+    {
+        io::printn("✓ Correctly rejected pad file without path");
+    }
+    else
+    {
+        assert(false, "Expected parse to fail for pad file without path");
+    }
 }
 
 // ============================================================================
@@ -2092,13 +2257,30 @@ fn void test_parse_pad_file_no_path_should_fail() @test
 // File: test/fixtures/large_piece_size.torrent
 fn void test_parse_large_piece_size() @test
 {
-    return; // TODO: Add test for large piece size handling
+    String data = load_torrent_file("test/fixtures/large_piece_size.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    // Should handle 512 MB piece size
+    assert(torrent.info.piece_length > 0, "Should have piece length");
+    io::printfn("✓ Parsed large_piece_size.torrent (piece length: %d bytes)", torrent.info.piece_length);
 }
 
 // File: test/fixtures/many_pieces.torrent
 fn void test_parse_many_pieces() @test
 {
-    return; // TODO: Add test for many pieces handling
+    String data = load_torrent_file("test/fixtures/many_pieces.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    // Should handle 1.6 TB file with many pieces
+    usz num_pieces = metainfo::get_num_pieces(torrent);
+    assert(num_pieces > 0, "Should have pieces");
+    io::printfn("✓ Parsed many_pieces.torrent (%d pieces)", num_pieces);
 }
 
 // ============================================================================
@@ -2108,11 +2290,25 @@ fn void test_parse_many_pieces() @test
 // File: test/fixtures/url_seed_multi_single_file.torrent
 fn void test_parse_url_seed_multi_single_file() @test
 {
-    return; // TODO: Add test for URL seed in single-file torrent
+    String data = load_torrent_file("test/fixtures/url_seed_multi_single_file.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    io::printn("✓ Parsed url_seed_multi_single_file.torrent successfully");
 }
 
 // File: test/fixtures/empty_httpseed.torrent
 fn void test_parse_empty_httpseed() @test
 {
-    return; // TODO: Add test for empty HTTP seed list
+    String data = load_torrent_file("test/fixtures/empty_httpseed.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Should have torrent name");
+    io::printn("✓ Parsed empty_httpseed.torrent successfully");
 }
