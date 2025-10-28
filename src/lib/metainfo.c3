@@ -36,6 +36,12 @@ struct FileEntry
     String[] path;          // Path components (e.g., ["dir", "subdir", "file.txt"])
     long length;            // File size in bytes
     long offset;            // Byte offset in the overall torrent data
+
+    // BEP 47: Extended file attributes
+    String attr;            // Attribute flags: "l"=symlink, "x"=executable, "h"=hidden, "p"=padding
+    String[] symlink_path;  // Symlink target path (only if attr contains 'l')
+    InfoHash sha1;          // Optional SHA1 hash for file deduplication
+    bool has_sha1;          // Whether sha1 field is present
 }
 
 /**
@@ -91,6 +97,8 @@ faultdef TORRENT_MISSING_FIELD;
 faultdef TORRENT_INVALID_INFO;
 faultdef TORRENT_INDEX_OUT_OF_BOUNDS;
 faultdef TORRENT_INVALID_PATH;
+faultdef TORRENT_INVALID_SYMLINK;    // BEP 47: Invalid symlink format or target
+faultdef TORRENT_SYMLINK_ESCAPE;     // BEP 47: Symlink escapes torrent directory
 
 /**
  * Parse a .torrent file from bencoded data.
@@ -528,6 +536,34 @@ fn bool is_invalid_path_component(String component)
 }
 
 /**
+ * Validate symlink path components for security (BEP 47).
+ *
+ * Ensures symlink targets cannot escape the torrent directory.
+ *
+ * @param components Symlink path components to validate
+ * @return Fault if validation fails
+ */
+fn fault? validate_symlink_path(String[] components)
+{
+    foreach (component : components)
+    {
+        // BEP 47: Symlink path must not contain ".." elements
+        if (component == "..")
+        {
+            return TORRENT_SYMLINK_ESCAPE?;
+        }
+
+        // Apply existing path component validation
+        // (rejects empty, ".", "/", "\", absolute paths)
+        if (is_invalid_path_component(component))
+        {
+            return TORRENT_INVALID_PATH?;
+        }
+    }
+    return {};
+}
+
+/**
  * Parse the 'files' list from a multi-file torrent.
  *
  * @param info Pointer to TorrentInfo to fill
@@ -614,6 +650,69 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
                 // Use sanitized string directly (it's heap-allocated)
                 file.path[j] = sanitized_component;
             }
+        }
+
+        // BEP 47: Parse optional 'attr' field (file attributes)
+        BencodeValue* attr_val = bencode::dict_get(file_dict, "attr");
+        if (attr_val && attr_val.type == bencode::BencodeType.STRING)
+        {
+            // Copy attr string to heap
+            char* attr_copy = (char*)malloc(attr_val.string.len);
+            foreach (k, c : attr_val.string) attr_copy[k] = c;
+            file.attr = (String)attr_copy[:attr_val.string.len];
+
+            // BEP 47: If symlink attribute present, parse symlink path
+            bool has_symlink = false;
+            foreach (c : attr_val.string)
+            {
+                if (c == 'l') { has_symlink = true; break; }
+            }
+            if (has_symlink)
+            {
+                BencodeValue* symlink_val = bencode::dict_get(file_dict, "symlink path");
+                if (!symlink_val || symlink_val.type != bencode::BencodeType.LIST)
+                {
+                    return TORRENT_INVALID_SYMLINK?;  // Symlinks require 'symlink path' field
+                }
+
+                // Validate symlink path has at least one component
+                if (symlink_val.list.size == 0)
+                {
+                    return TORRENT_INVALID_SYMLINK?;
+                }
+
+                // Allocate symlink path array
+                file.symlink_path = mem::new_array(String, symlink_val.list.size);
+
+                // Parse and validate symlink path components
+                foreach (k, component : symlink_val.list)
+                {
+                    if (component.type != bencode::BencodeType.STRING)
+                    {
+                        return TORRENT_INVALID_SYMLINK?;  // All path components must be strings
+                    }
+
+                    // Copy component to heap
+                    char* comp_copy = (char*)malloc(component.string.len);
+                    foreach (m, c : component.string) comp_copy[m] = c;
+                    file.symlink_path[k] = (String)comp_copy[:component.string.len];
+                }
+
+                // Validate symlink path for security
+                validate_symlink_path(file.symlink_path)!;
+            }
+        }
+
+        // BEP 47: Parse optional 'sha1' field (file hash for deduplication)
+        BencodeValue* sha1_val = bencode::dict_get(file_dict, "sha1");
+        if (sha1_val && sha1_val.type == bencode::BencodeType.STRING && sha1_val.string.len == 20)
+        {
+            // Copy 20-byte SHA1 hash
+            foreach (k, c : sha1_val.string[:20])
+            {
+                file.sha1[k] = c;
+            }
+            file.has_sha1 = true;
         }
     }
 
@@ -813,6 +912,19 @@ fn void free_torrent_file(TorrentFile* torrent) @public
                     if (path_component.len > 0) free(path_component);
                 }
                 free(file.path);
+            }
+
+            // BEP 47: Free extended file attributes
+            if (file.attr.len > 0) free(file.attr);
+
+            if (file.symlink_path.len > 0)
+            {
+                // Free each symlink path component
+                foreach (component : file.symlink_path)
+                {
+                    if (component.len > 0) free(component);
+                }
+                free(file.symlink_path);
             }
         }
         free(torrent.info.files);
