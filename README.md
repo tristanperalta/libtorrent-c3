@@ -1,47 +1,41 @@
 # libtorrent-c3
 
-A BitTorrent library implementation written in C3, providing torrent file parsing, bencode encoding/decoding, async I/O networking, and secure path handling.
+A BitTorrent client and library written in C3. Downloads torrents, exchanges peers automatically, and validates paths to prevent security attacks. Supports symlinks, file attributes, and peer exchange (PEX). 492+ tests ensure reliability.
 
 ## Features
 
-- **Bencode Support**: Full bencode encoding and decoding with ergonomic macros
-  - `@blist()` and `@bdict()` macros for concise inline creation
-  - Dictionary iteration with `dict.entries()`
-  - Automatic memory management with temp allocator
-- **Torrent Parsing**: Complete .torrent file parser supporting BEP 3
-  - Single-file and multi-file torrents
-  - Announce lists with multi-tracker support
-  - Web seed URLs (BEP 19)
-  - DHT nodes and extended metadata
-- **Async I/O**: libuv-based event loop and TCP networking
-  - Non-blocking TCP connections
-  - Event-driven architecture
-  - Clean macro-based API for error handling and resource management
-- **Peer Wire Protocol**: Full BEP 3 implementation for peer communication
-  - Connection state machine (handshake, choking, interested)
-  - All message types (choke, unchoke, have, bitfield, request, piece, cancel)
-  - Message buffering for fragmented TCP reads
-  - Bitfield for piece availability tracking
-- **HTTP Client**: curl-based HTTP/HTTPS support for tracker communication
-  - Tracker announces and scrapes
-  - Web seed downloads
-- **Path Sanitization**: Security-focused path handling
-  - Path traversal prevention (removes `../`)
-  - Invalid UTF-8 repair
-  - Unicode directional override removal
-  - Null byte filtering
-  - Path length limits (240 chars)
-- **Memory Safe**: Leverages C3's temp allocator and `defer` for automatic cleanup
+- **Parse .torrent files** including symlinks and file attributes (BEP 47)
+- **Exchange peers automatically** without trackers using PEX (BEP 11)
+- **Download with GUI or CLI** - optional raylib interface with real-time progress
+- **Validates paths** to prevent directory traversal and symlink escapes
+- **Extension protocol** (BEP 10) for capability negotiation
+- **Async I/O** with libuv via c3io library
+- **Web seeds** for HTTP/FTP fallback (BEP 19)
+- **Async logging** that doesn't block downloads
+- **Memory safe** using C3's temp allocator and `defer`
+
+## Quick Start
+
+```bash
+# Download a torrent
+./torrent-client example.torrent
+
+# With GUI
+./torrent-client --gui example.torrent
+
+# With logging
+./torrent-client --log-file download.log --debug example.torrent
+```
 
 ## Targets
 
 1. **libtorrent** - Dynamic library (`libtorrent.so`)
-   - Core torrent parsing and bencode functionality
+   - Core torrent parsing and protocol implementation
    - Built with PIC (Position Independent Code)
-   - Exports public API for use in applications
+   - Exports public API for applications
 
 2. **torrent-client** - Executable application
-   - Command-line torrent client
+   - Command-line and GUI torrent client
    - Links to the libtorrent dynamic library
 
 ## Building
@@ -57,6 +51,8 @@ A BitTorrent library implementation written in C3, providing torrent file parsin
   - Arch Linux: `sudo pacman -S curl`
   - Ubuntu/Debian: `sudo apt install libcurl4-openssl-dev`
   - macOS: `brew install curl`
+- **Optional: raylib55, raygui** - For GUI mode
+  - Arch Linux: `sudo pacman -S raylib`
 
 ### Build all targets
 
@@ -64,7 +60,7 @@ A BitTorrent library implementation written in C3, providing torrent file parsin
 c3c build
 ```
 
-This will generate:
+This generates:
 - `libtorrent.so` - The dynamic library
 - `torrent-client` - The executable
 
@@ -83,7 +79,7 @@ c3c clean
 
 ## Running
 
-To run the executable with the dynamic library:
+Run the executable:
 
 ```bash
 LD_LIBRARY_PATH=. ./torrent-client
@@ -91,7 +87,24 @@ LD_LIBRARY_PATH=. ./torrent-client
 
 Or install `libtorrent.so` to a system library path.
 
+## Security
+
+### Path Validation
+Blocks torrents trying to write outside the download folder:
+- Rejects paths with `..` or `.` components
+- Rejects absolute paths (`/etc/passwd`)
+- Validates symlinks can't escape torrent directory
+- Removes null bytes and Unicode directional overrides
+
+### Peer Exchange Security
+- Filters private IP addresses (10.x, 192.168.x, 127.x)
+- Validates port numbers (rejects port 0)
+- Rate limits to 1 PEX message per minute per peer
+- Maximum 50 peers per message
+
 ## Testing
+
+492+ tests cover all modules with 84 real torrent files for validation.
 
 ### Run all tests
 
@@ -124,7 +137,8 @@ c3c test --test-filter "test_parse_multifile"
 ### Parsing a Torrent File
 
 ```c3
-import libtorrent;
+import libtorrent::metainfo;
+import std::io::file;
 
 fn void parse_example()
 {
@@ -142,7 +156,7 @@ fn void parse_example()
 ### Using Bencode Macros
 
 ```c3
-import libmetainfo::bencode;
+import libtorrent::bencode;
 
 fn void bencode_example()
 {
@@ -169,13 +183,12 @@ fn void bencode_example()
 }
 ```
 
-
-### Peer Wire Protocol (BEP 3)
+### Peer Wire Protocol
 
 ```c3
-import libmetainfo::peer_connection;
-import libmetainfo::peer_wire;
-import libmetainfo::event_loop;
+import libtorrent::peer_connection;
+import libtorrent::peer_wire;
+import async::event_loop;  // From c3io library
 
 fn void on_message(peer_connection::PeerConnection* peer, peer_wire::Message* msg, void* user_data)
 {
@@ -230,8 +243,8 @@ fn void peer_example()
     defer loop.free();
 
     // Prepare info hash and peer ID
-    char[20] info_hash;
-    char[20] peer_id;
+    InfoHash info_hash;
+    PeerId peer_id;
     // ... fill with actual values
 
     // Connect to peer

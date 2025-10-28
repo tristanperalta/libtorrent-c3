@@ -14,6 +14,62 @@ The key architectural decision is the separation between library and executable,
 - The executable (`src/main.c3`) contains the module `torrent_client` and imports `libtorrent`
 - Both targets are built independently but the executable depends on the library at runtime
 
+## Architecture Principle: Non-Blocking Async I/O
+
+**This is a non-blocking torrent client.** All I/O operations must be asynchronous to prevent blocking the event loop.
+
+### Critical Requirements
+
+1. **Never block the event loop** - All I/O (network, disk, DNS) must use async APIs from c3io library
+2. **Use async APIs**:
+   - Network: `async::tcp`, `async::udp` (not blocking sockets)
+   - DNS: `async::dns` (not blocking `getaddrinfo`)
+   - Disk I/O: `async::file` (not blocking `fread`/`fwrite`)
+   - Timers: `async::timer` (not `sleep()`)
+3. **Logging**: Use the async logger (`logger.c3`) which queues messages to prevent I/O blocking
+4. **Event-driven**: All operations driven by event loop callbacks, not polling loops
+
+### Why This Matters
+
+A single blocking call (e.g., `fwrite()`, `getaddrinfo()`, `sleep()`) freezes the entire client:
+- No peer communication while blocked
+- Tracker announces delayed
+- GUI becomes unresponsive
+- Downloads stall across all torrents
+
+### Examples
+
+❌ **Wrong** - Blocks event loop:
+```c3
+// Blocking disk write - freezes client during I/O
+file::write(path, data);
+
+// Blocking DNS lookup - freezes client
+String ip = dns_lookup_blocking(hostname);
+
+// Blocking sleep - freezes client
+thread::sleep(1000);
+```
+
+✅ **Correct** - Non-blocking async I/O:
+```c3
+// Async disk write - client continues during I/O
+async::file::write(&loop, path, data, &on_write_complete);
+
+// Async DNS lookup - client continues during lookup
+async::dns::resolve(&loop, hostname, &on_dns_resolved);
+
+// Async timer - client continues during delay
+async::timer::create(&loop, 1000, &on_timer_fired);
+```
+
+### When Working on This Codebase
+
+- Always ask: "Does this block the event loop?"
+- Use c3io async APIs for all I/O
+- If adding new I/O, ensure it's async
+- Test that GUI remains responsive during operations
+
 ## Build System
 
 This project uses C3's native build system configured via `project.json`:
