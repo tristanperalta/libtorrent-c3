@@ -810,3 +810,36 @@ fn char[]? get_piece_hash(TorrentFile* torrent, usz index) @public
     }
     return hash[..];
 }
+
+/**
+ * Calculate the number of pieces in a torrent.
+ *
+ * Uses ceiling division: (length + piece_length - 1) / piece_length
+ *
+ * @param info Torrent info dictionary
+ * @return Number of pieces
+ */
+fn uint calculate_num_pieces(TorrentInfo* info) @public
+{
+    return (uint)((info.length + info.piece_length - 1) / info.piece_length);
+}
+
+/**
+ * Calculate the length of the last piece in a torrent.
+ *
+ * The last piece may be shorter than piece_length if the file
+ * size is not evenly divisible by piece_length.
+ *
+ * @param info Torrent info dictionary
+ * @return Length of the last piece in bytes
+ */
+fn uint calculate_last_piece_length(TorrentInfo* info) @public
+{
+    uint last_piece_length = (uint)(info.length % info.piece_length);
+    if (last_piece_length == 0)
+    {
+        // If evenly divisible, last piece is full size
+        last_piece_length = (uint)info.piece_length;
+    }
+    return last_piece_length;
+}

@@ -22,6 +22,23 @@ import torrent_client::download_session;
 import raylib_gui;
 
 // ============================================================================
+// Configuration Constants
+// ============================================================================
+
+// Download configuration
+const int MAX_CONCURRENT_PIECES = 5;       // Max simultaneous piece downloads
+const uint BLOCK_SIZE = 16384;             // 16KB standard block size (BEP 3)
+
+// Peer pool configuration defaults
+const int MAX_PEERLIST_SIZE = 1000;        // Track up to 1000 peers
+const int MAX_ACTIVE_CONNECTIONS = 25;     // Maintain 25 concurrent connections
+const int PEER_RETRY_FAILCOUNT = 3;        // Ban peer after 3 failures
+const int MIN_RECONNECT_TIME_SECS = 60;    // Wait 60s before reconnecting
+
+// GUI configuration
+const int GUI_UPDATE_INTERVAL_FRAMES = 60; // Update peer list every 60 frames (~1s at 60 FPS)
+
+// ============================================================================
 // Main Entry Point
 // ============================================================================
 
@@ -812,12 +829,7 @@ fn void on_connect_load_complete(String data, int status, void* user_data)
 
     // Create peer pool (Phase 1 - storage only)
     common::PeerId our_peer_id = tracker::generate_peer_id();
-    peer_pool::PeerPoolConfig pool_config = {
-        .max_peerlist_size = 1000,
-        .max_active_connections = 25,
-        .max_failcount = 3,
-        .min_reconnect_time = 60
-    };
+    peer_pool::PeerPoolConfig pool_config = peer_pool::get_default_config();
     ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
 
     // Get tracker URL
@@ -1034,9 +1046,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     }
 
     // Calculate pieces
-    uint num_pieces = (uint)((torrent.info.length + torrent.info.piece_length - 1) / torrent.info.piece_length);
-    uint last_piece_length = (uint)(torrent.info.length % torrent.info.piece_length);
-    if (last_piece_length == 0) last_piece_length = (uint)torrent.info.piece_length;
+    uint num_pieces = libtorrent::metainfo::calculate_num_pieces(&torrent.info);
+    uint last_piece_length = libtorrent::metainfo::calculate_last_piece_length(&torrent.info);
 
     // Initialize GUI
     raylib_gui::UIState* ui = raylib_gui::init(
@@ -1127,18 +1138,13 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         (uint)torrent.info.piece_length,
         last_piece_length,
         torrent.info.pieces,
-        5,  // Max 5 concurrent pieces
-        16384  // 16KB blocks
+        MAX_CONCURRENT_PIECES,
+        BLOCK_SIZE
     );
 
     // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();
-    peer_pool::PeerPoolConfig pool_config = {
-        .max_peerlist_size = 1000,
-        .max_active_connections = 25,
-        .max_failcount = 3,
-        .min_reconnect_time = 60
-    };
+    peer_pool::PeerPoolConfig pool_config = peer_pool::get_default_config();
     ctx.peer_pool = peer_pool::create(loop, pool_config, &torrent.info_hash, &our_peer_id);
 
     // Set peer pool callbacks
@@ -1159,9 +1165,9 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     {
         // Event loop and rendering handled in run_frame()
 
-        // Update peer list periodically (every 60 frames = ~1 second)
+        // Update peer list periodically
         frame_count++;
-        if (frame_count % 60 == 0 && ctx.peer_pool)
+        if (frame_count % GUI_UPDATE_INTERVAL_FRAMES == 0 && ctx.peer_pool)
         {
             peer_pool::PeerDisplayInfo[] peer_info = ctx.peer_pool.get_peer_display_info();
             raylib_gui::update_peer_list(ui, peer_info);

@@ -52,6 +52,16 @@ const PeerPoolConfig DEFAULT_CONFIG = {
     .min_reconnect_time = 60
 };
 
+<*
+ Get default peer pool configuration.
+
+ @return "Default configuration with recommended values"
+*>
+fn PeerPoolConfig get_default_config() @public
+{
+    return DEFAULT_CONFIG;
+}
+
 // Peer state
 enum PeerState : const char
 {
