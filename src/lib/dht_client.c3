@@ -81,6 +81,7 @@ struct DhtClient
     int bootstrap_node_count;
     udp::UdpSocket* socket;                        // UDP socket for DHT communication
     event_loop::EventLoop* loop;                   // Event loop
+    bencode::BencodeValue* current_response_root;  // Temporarily store response during callback
 }
 
 // ============================================================================
@@ -113,6 +114,7 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
     client.last_refresh_time = 0;
     client.bootstrap_node_count = 0;
     client.loop = loop;
+    client.current_response_root = null;
 
     // Create UDP socket (only if event loop is provided)
     if (loop != null)
@@ -251,6 +253,7 @@ struct RpcCallbackContext
 {
     DhtClient* client;
     krpc::QueryType query_type;
+    String raw_message;  // Store raw message for full decode in callback
 }
 
 /**
@@ -274,15 +277,153 @@ fn void on_udp_send(udp::UdpSocket* socket, int status, void* user_data)
 fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata)
 {
     RpcCallbackContext* ctx = (RpcCallbackContext*)userdata;
+    DhtClient* client = ctx.client;
 
     if (!response)
     {
-        // Timeout - could mark node as failed
+        // Timeout
+        io::printfn("[DHT] Query timed out");
+        free(ctx);
         return;
     }
 
-    // Extract node ID from response and add to routing table
-    // (In a full implementation, we'd parse the response and extract node info)
+    // Access the bencode root stored temporarily in the client
+    if (!client.current_response_root)
+    {
+        free(ctx);
+        return;
+    }
+
+    bencode::BencodeValue* root = client.current_response_root;
+
+    // Extract the response dictionary ("r" key)
+    bencode::BencodeValue* r_dict = bencode::dict_get(root, "r");
+    if (r_dict == null || r_dict.type != bencode::BencodeType.DICT)
+    {
+        io::eprintfn("[DHT] Invalid response format");
+        free(ctx);
+        return;
+    }
+
+    // Extract responding node's ID
+    bencode::BencodeValue* id_val = bencode::dict_get(r_dict, "id");
+    if (id_val != null && id_val.type == bencode::BencodeType.STRING)
+    {
+        if (id_val.string.len >= 20)
+        {
+            common::NodeId node_id;
+            for (int i = 0; i < 20; i++) node_id[i] = id_val.string[i];
+
+            io::printfn("[DHT] Response from node %.8s...", (char*)&node_id[0]);
+        }
+    }
+
+    // Handle based on query type
+    switch (ctx.query_type)
+    {
+        case krpc::QueryType.PING:
+            io::printfn("[DHT] Ping response received");
+
+        case krpc::QueryType.FIND_NODE:
+            // Parse nodes from response
+            bencode::BencodeValue* nodes_val = bencode::dict_get(r_dict, "nodes");
+            if (nodes_val != null && nodes_val.type == bencode::BencodeType.STRING)
+            {
+                char[] nodes_data = nodes_val.string;
+                int node_count = (int)(nodes_data.len / 26);  // Each node is 26 bytes
+
+                io::printfn("[DHT] Received %d nodes from find_node", node_count);
+
+                // Parse and add each node to routing table
+                for (int i = 0; i < node_count; i++)
+                {
+                    usz offset = (usz)i * 26;
+                    if (offset + 26 > nodes_data.len) break;
+
+                    // Extract node ID (20 bytes)
+                    common::NodeId node_id;
+                    for (int j = 0; j < 20; j++)
+                    {
+                        node_id[j] = nodes_data[offset + j];
+                    }
+
+                    // Extract IP (4 bytes)
+                    common::Ipv4Addr ip;
+                    ip[0] = nodes_data[offset + 20];
+                    ip[1] = nodes_data[offset + 21];
+                    ip[2] = nodes_data[offset + 22];
+                    ip[3] = nodes_data[offset + 23];
+
+                    // Extract port (2 bytes, big-endian)
+                    ushort port = ((ushort)nodes_data[offset + 24] << 8) |
+                                   (ushort)nodes_data[offset + 25];
+
+                    // Add node to routing table (with estimated RTT of 100ms)
+                    bool added = dht_routing_table::add_node(client.routing_table,
+                                                              node_id, ip, port, 100);
+
+                    if (added && i < 3)
+                    {
+                        String ip_str = ip_to_string(ip);
+                        defer free(ip_str);
+                        io::printfn("[DHT]   Added node %s:%d", ip_str, port);
+                    }
+                }
+            }
+
+        case krpc::QueryType.GET_PEERS:
+            // Get_peers can return either peers (values) or nodes
+            bencode::BencodeValue* values_val = bencode::dict_get(r_dict, "values");
+            bencode::BencodeValue* nodes_val = bencode::dict_get(r_dict, "nodes");
+
+            if (values_val != null && values_val.type == bencode::BencodeType.LIST)
+            {
+                // Response contains peers
+                int peer_count = (int)values_val.list.len();
+                io::printfn("[DHT] Received %d peers from get_peers", peer_count);
+
+                for (int i = 0; i < peer_count && i < 10; i++)
+                {
+                    bencode::BencodeValue* peer_val = values_val.list.get(i);
+                    if (peer_val && peer_val.type == bencode::BencodeType.STRING &&
+                        peer_val.string.len >= 6)
+                    {
+                        // Compact peer format: 4 bytes IP + 2 bytes port
+                        common::Ipv4Addr ip;
+                        ip[0] = peer_val.string[0];
+                        ip[1] = peer_val.string[1];
+                        ip[2] = peer_val.string[2];
+                        ip[3] = peer_val.string[3];
+
+                        ushort port = ((ushort)peer_val.string[4] << 8) |
+                                       (ushort)peer_val.string[5];
+
+                        String ip_str = ip_to_string(ip);
+                        defer free(ip_str);
+                        io::printfn("[DHT]   Peer: %s:%d", ip_str, port);
+                    }
+                }
+            }
+            else if (nodes_val != null && nodes_val.type == bencode::BencodeType.STRING)
+            {
+                // Response contains nodes (no peers found yet)
+                char[] nodes_data = nodes_val.string;
+                int node_count = (int)(nodes_data.len / 26);
+                io::printfn("[DHT] Received %d nodes from get_peers (no peers yet)", node_count);
+
+                // Could add these nodes to routing table too
+            }
+
+            // Extract token for future announce_peer
+            bencode::BencodeValue* token_val = bencode::dict_get(r_dict, "token");
+            if (token_val != null && token_val.type == bencode::BencodeType.STRING)
+            {
+                io::printfn("[DHT] Received announce token (%d bytes)", token_val.string.len);
+            }
+
+        case krpc::QueryType.ANNOUNCE_PEER:
+            io::printfn("[DHT] Announce_peer response");
+    }
 
     free(ctx);
 }
@@ -399,6 +540,63 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
     return true;
 }
 
+/**
+ * Send a get_peers query to a node
+ *
+ * @param client DHT client
+ * @param target_id Target node ID to query
+ * @param target_ip Target IP address
+ * @param target_port Target port
+ * @param info_hash Torrent info hash to search for
+ * @return true if query was sent
+ */
+fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
+                       common::Ipv4Addr target_ip, ushort target_port,
+                       common::InfoHash info_hash) @public
+{
+    // Create callback context
+    RpcCallbackContext* ctx = mem::new(RpcCallbackContext);
+    ctx.client = client;
+    ctx.query_type = krpc::QueryType.GET_PEERS;
+
+    // Create transaction
+    char[2]? tid_opt = dht_rpc_manager::create_transaction(
+        client.rpc_manager,
+        krpc::QueryType.GET_PEERS,
+        target_id,
+        target_ip,
+        target_port,
+        &rpc_response_callback,
+        ctx
+    );
+
+    if (catch excuse = tid_opt)
+    {
+        free(ctx);
+        return false;
+    }
+
+    // Skip network I/O if no socket (test mode)
+    if (!client.socket) return true;
+
+    char[2] tid = tid_opt;
+
+    // Encode the KRPC get_peers query
+    String tid_str = (String)((char*)&tid)[:2];
+    String message = krpc::encode_get_peers_query(tid_str, client.our_id, info_hash);
+    defer free(message);
+
+    // Send via UDP
+    String target_ip_str = ip_to_string(target_ip);
+    defer free(target_ip_str);
+
+    io::printfn("[DHT] Sending get_peers to %s:%d", target_ip_str, target_port);
+    udp::send(client.socket, target_ip_str, (int)target_port,
+              (char[])message, &on_udp_send, null);
+
+    return true;
+}
+
 // ============================================================================
 // Message Receiving
 // ============================================================================
@@ -425,6 +623,15 @@ fn void on_udp_recv(udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, voi
     bencode::BencodeValue* root = root_opt;
     defer bencode::free_bencode_value(root);
 
+    // Extract transaction ID
+    bencode::BencodeValue* t_val = bencode::dict_get(root, "t");
+    if (t_val == null || t_val.type != bencode::BencodeType.STRING)
+    {
+        io::eprintfn("[DHT] Message missing transaction ID");
+        return;
+    }
+    String transaction_id = (String)t_val.string;
+
     // Try to decode message type
     krpc::MessageType? type_opt = krpc::decode_message_type(root);
     if (catch err = type_opt)
@@ -438,16 +645,33 @@ fn void on_udp_recv(udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, voi
     switch (msg_type)
     {
         case krpc::MessageType.RESPONSE:
-            // Handle response (find matching transaction)
-            io::printfn("[DHT] Received DHT response");
-            // In full implementation: decode response and call transaction callback
+            // Handle response - find matching transaction
+            io::printfn("[DHT] Received response");
+
+            // Store bencode root temporarily so callback can access it
+            client.current_response_root = root;
+
+            // Create a minimal KrpcMessage to pass to RPC manager
+            krpc::KrpcMessage resp_msg;
+            resp_msg.type = krpc::MessageType.RESPONSE;
+            resp_msg.transaction_id = transaction_id;
+            resp_msg.version = "";
+
+            // Handle the response (this will call the transaction callback)
+            dht_rpc_manager::handle_response(client.rpc_manager, &resp_msg);
+
+            // Clear temporary storage
+            client.current_response_root = null;
+
         case krpc::MessageType.QUERY:
             // Handle incoming query
-            io::printfn("[DHT] Received DHT query");
-            // In full implementation: decode query and send response
+            io::printfn("[DHT] Received query (not yet implemented)");
+            // TODO: decode query and send response
+
         case krpc::MessageType.ERROR:
             // Handle error
-            io::printfn("[DHT] Received DHT error");
+            io::printfn("[DHT] Received error response");
+            // TODO: handle error and cancel transaction
     }
 }
 
