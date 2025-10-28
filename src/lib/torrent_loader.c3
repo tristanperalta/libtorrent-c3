@@ -4,6 +4,7 @@ import uv;
 import async::file;
 import async::event_loop;
 import std::io;
+import libtorrent::metainfo;
 
 <*
  Torrent File Loader
@@ -186,4 +187,40 @@ fn void load_file_async(event_loop::EventLoop* loop, String path,
 
     // Start by getting file size
     async::file::stat(loop, path, &on_stat_complete, ctx);
+}
+
+<*
+ Load and parse a torrent file synchronously.
+
+ Reads the file from disk and parses it into a TorrentFile structure.
+ The caller is responsible for freeing the returned TorrentFile.
+
+ @param path : "Path to .torrent file"
+ @return "Parsed torrent file or fault on error"
+*>
+fn metainfo::TorrentFile*? load_torrent_sync(String path) @public
+{
+    // Open file for reading
+    std::io::File file = std::io::file::open(path, "rb")!;
+    defer (void)file.close();
+
+    // Get file size
+    usz file_size = (usz)file.seek(0, std::io::Seek.END)!;
+
+    // Seek back to start
+    file.seek(0, std::io::Seek.SET)!;
+
+    // Read entire file
+    char[] data = mem::new_array(char, file_size);
+    defer free(data);
+
+    usz bytes_read = (usz)file.read(data)!;
+
+    if (bytes_read != file_size)
+    {
+        return TORRENT_LOAD_READ_FAILED?;
+    }
+
+    // Parse torrent file
+    return metainfo::parse((String)data);
 }

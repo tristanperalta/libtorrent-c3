@@ -151,15 +151,6 @@ struct SyncAllContext
 }
 
 <*
- Callback for file close during cleanup.
- Does nothing - just allows async close to complete.
-*>
-fn void on_file_close_cleanup(int status, void* user_data) @private
-{
-    // Nothing to do - async cleanup will handle the rest
-}
-
-<*
  Callback for individual file sync in sync_all_files().
 *>
 fn void on_file_sync_complete(int status, void* user_data) @private
@@ -186,15 +177,13 @@ fn void on_file_sync_complete(int status, void* user_data) @private
 *>
 fn void free(StorageManager* manager) @public
 {
-    // Close all open file handles (already synced periodically)
+    // Note: We don't explicitly close file handles here to avoid memory leaks
+    // from async close requests that never complete. The OS will automatically
+    // close all file descriptors when the process exits. For long-running
+    // applications, proper async shutdown should be implemented separately.
     for (usz i = 0; i < manager.files.len; i++)
     {
-        if (manager.files[i].file >= 0)
-        {
-            async::file::close(manager.loop, manager.files[i].file,
-                             &on_file_close_cleanup, null);
-            manager.files[i].file = -1;
-        }
+        manager.files[i].file = -1;
     }
 
     // Free file paths

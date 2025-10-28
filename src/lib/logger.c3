@@ -223,6 +223,7 @@ fn void free_logger() @public
     if (g_logger.queue_capacity > 0)
     {
         free(g_logger.queue);
+        g_logger.queue = {};  // Reset to empty slice
         g_logger.queue_capacity = 0;
         g_logger.queue_size = 0;
     }

@@ -104,3 +104,106 @@ fn void on_log_message(logger::LogLevel level, String message, void* user_data) 
         output.write_log(level, message);
     }
 }
+
+// ============================================================================
+// Log Setup Helpers
+// ============================================================================
+
+<*
+ Create log sink for GUI logging.
+
+ Sets up logging to the raylib GUI interface and registers
+ the logger callback.
+
+ @param ui : "GUI state"
+ @return "Configured log sink (caller must free outputs array)"
+*>
+fn LogSink* setup_gui_logging(raylib_gui::UIState* ui) @public
+{
+    LogSink* sink = mem::new(LogSink);
+    GuiLogOutput* gui_out = mem::new(GuiLogOutput);
+    gui_out.ui = ui;
+
+    sink.outputs = mem::new_array(logger::LogOutput, 1);
+    sink.outputs[0] = gui_out;
+
+    logger::set_log_callback(&on_log_message, sink);
+    return sink;
+}
+
+<*
+ Create log sink for console logging (file and/or stderr).
+
+ Sets up logging to file and/or stderr based on parameters and
+ registers the logger callback.
+
+ @param log_file_path : "Path to log file (empty string = no file logging)"
+ @param debug_mode : "Enable stderr logging"
+ @return "Configured log sink or null if no outputs (caller must free outputs and individual output structs)"
+*>
+fn LogSink*? setup_console_logging(String log_file_path, bool debug_mode) @public
+{
+    // Count outputs
+    usz num_outputs = 0;
+    if (log_file_path.len > 0) num_outputs++;
+    if (debug_mode) num_outputs++;
+
+    if (num_outputs == 0)
+    {
+        return null;  // No logging requested
+    }
+
+    LogSink* sink = mem::new(LogSink);
+    sink.outputs = mem::new_array(logger::LogOutput, num_outputs);
+    usz output_idx = 0;
+
+    // Add file output if requested
+    if (log_file_path.len > 0)
+    {
+        FileLogOutput* file_out = mem::new(FileLogOutput);
+        file_out.file = file::open(log_file_path, "w")!!;
+        file_out.is_open = true;
+        sink.outputs[output_idx] = file_out;
+        output_idx++;
+        io::printfn("Logging to file: %s", log_file_path);
+    }
+
+    // Add stderr output if requested
+    if (debug_mode)
+    {
+        StderrLogOutput* stderr_out = mem::new(StderrLogOutput);
+        sink.outputs[output_idx] = stderr_out;
+        io::printfn("Debug logging to stderr enabled");
+    }
+
+    logger::set_log_callback(&on_log_message, sink);
+    return sink;
+}
+
+<*
+ Cleanup log sink resources.
+
+ Closes all outputs and frees the sink structure.
+ Call this before program exit.
+
+ @param sink : "Log sink to cleanup (can be null)"
+*>
+fn void cleanup_log_sink(LogSink* sink) @public
+{
+    if (!sink) return;
+
+    // Close all outputs
+    foreach (output : sink.outputs)
+    {
+        output.close();
+    }
+
+    // Free outputs array
+    if (sink.outputs.len > 0)
+    {
+        free(sink.outputs);
+    }
+
+    // Free sink
+    free(sink);
+}

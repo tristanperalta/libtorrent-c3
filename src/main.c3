@@ -1020,28 +1020,11 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
 fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
                         String save_path, int numwant)
 {
-    // Load torrent file synchronously
-    File file = file::open(torrent_path, "rb")!!;
-    defer (void)file.close();
-
-    usz file_size = (usz)file.seek(0, io::Seek.END)!!;
-    file.seek(0, io::Seek.SET)!!;
-
-    char[] data = mem::new_array(char, file_size);
-    defer free(data);
-
-    usz bytes_read = (usz)file.read(data)!!;
-    if (bytes_read != file_size)
-    {
-        io::eprintfn("Error: Read %d bytes but expected %d", bytes_read, file_size);
-        return 1;
-    }
-
-    // Parse torrent
-    libtorrent::metainfo::TorrentFile*? torrent = libtorrent::metainfo::parse((String)data);
+    // Load and parse torrent file
+    libtorrent::metainfo::TorrentFile*? torrent = libtorrent::torrent_loader::load_torrent_sync(torrent_path);
     if (catch err = torrent)
     {
-        io::eprintfn("Error parsing torrent: %s", err);
+        io::eprintfn("Error loading torrent: %s", err);
         return 1;
     }
 
@@ -1066,12 +1049,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     }
 
     // Set up GUI logging
-    log_outputs::LogSink log_sink;
-    log_outputs::GuiLogOutput* gui_out = mem::new(log_outputs::GuiLogOutput);
-    gui_out.ui = ui;
-    log_sink.outputs = mem::new_array(logger::LogOutput, 1);
-    log_sink.outputs[0] = gui_out;
-    logger::set_log_callback(&log_outputs::on_log_message, &log_sink);
+    log_outputs::LogSink* log_sink = log_outputs::setup_gui_logging(ui);
 
     // Create download context
     DownloadContext ctx;
@@ -1123,8 +1101,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         raylib_gui::add_log(ui, "Error creating storage manager");
         raylib_gui::free(ui);
         libtorrent::metainfo::free_torrent_file(torrent);
-        free(log_sink.outputs);
-        free(gui_out);
+        log_outputs::cleanup_log_sink(log_sink);
         return 1;
     }
     ctx.sm = mem::new(storage_manager::StorageManager);
@@ -1256,11 +1233,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Cleanup logging
     io::printfn("Cleaning up logging...");
     logger::flush_logs();
-    if (log_sink.outputs.len > 0)
-    {
-        free(log_sink.outputs);
-    }
-    free(gui_out);
+    log_outputs::cleanup_log_sink(log_sink);
 
     // Free GUI (this also closes the window)
     io::printfn("Freeing GUI...");
@@ -1299,45 +1272,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     io::printfn("=== BitTorrent Download ===");
     io::printfn("");
 
-    // Set up multi-output logging system
-    log_outputs::LogSink log_sink;
-    log_outputs::FileLogOutput* file_out = null;
-    log_outputs::StderrLogOutput* stderr_out = null;
-
-    // Count outputs
-    usz num_outputs = 0;
-    if (log_file_path.len > 0) num_outputs++;
-    if (debug_mode) num_outputs++;
-
-    // Build outputs array
-    if (num_outputs > 0)
-    {
-        log_sink.outputs = mem::new_array(logger::LogOutput, num_outputs);
-        usz output_idx = 0;
-
-        // Add file output if requested
-        if (log_file_path.len > 0)
-        {
-            file_out = mem::new(log_outputs::FileLogOutput);
-            file_out.file = file::open(log_file_path, "w")!!;
-            file_out.is_open = true;
-            log_sink.outputs[output_idx] = file_out;
-            output_idx++;
-            io::printfn("Logging to file: %s", log_file_path);
-        }
-
-        // Add stderr output if requested
-        if (debug_mode)
-        {
-            stderr_out = mem::new(log_outputs::StderrLogOutput);
-            log_sink.outputs[output_idx] = stderr_out;
-            output_idx++;
-            io::printfn("Debug logging to stderr enabled");
-        }
-
-        // Set callback
-        logger::set_log_callback(&log_outputs::on_log_message, &log_sink);
-    }
+    // Set up console logging (file and/or stderr)
+    log_outputs::LogSink*? log_sink = log_outputs::setup_console_logging(log_file_path, debug_mode);
 
     DownloadContext ctx;
     ctx.loop = loop;
@@ -1365,7 +1301,11 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
     async::timer::Timer* flush_timer = null;
-    if (num_outputs > 0)
+    if (catch excuse = log_sink)
+    {
+        // No logging configured, skip flush timer
+    }
+    else
     {
         async::timer::Timer*? flush_timer_opt = async::timer::create(loop);
         if (catch err = flush_timer_opt)
@@ -1433,17 +1373,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Flush any remaining logs before cleanup
     logger::flush_logs();
 
-    // Cleanup log outputs (close files, etc.)
-    if (num_outputs > 0)
-    {
-        foreach (output : log_sink.outputs)
-        {
-            output.close();
-        }
-        if (file_out) free(file_out);
-        if (stderr_out) free(stderr_out);
-        if (log_sink.outputs.len > 0) free(log_sink.outputs);
-    }
+    // Cleanup log sink
+    (void)log_outputs::cleanup_log_sink(log_sink);
 
     // Free logger resources
     logger::free_logger();
