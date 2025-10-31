@@ -29,6 +29,10 @@ const int VERIFICATION_BATCH_SIZE = 100;
 // Flushes all pending writes to disk periodically for data safety
 const int FILE_FLUSH_INTERVAL_MS = 5000;
 
+// Block request timeout check interval (default: 10000ms = 10 seconds)
+// Checks for stuck block requests and resets them for retry
+const int BLOCK_TIMEOUT_CHECK_INTERVAL_MS = 10000;
+
 <*
  Context for async piece write operations.
 *>
@@ -56,6 +60,7 @@ struct DownloadContext
     async::timer::Timer* pex_timer;          // PEX update timer (every 60s)
     async::timer::Timer* keepalive_timer;    // Keepalive timer (every 120s)
     async::timer::Timer* flush_timer;        // File flush timer (configurable interval)
+    async::timer::Timer* block_timeout_timer; // Block request timeout checker (every 10s)
     int announce_retry_count;               // For exponential backoff
     int announce_backoff_ms;                // Current backoff delay
     bool initial_announce_done;             // Has first announce succeeded?
@@ -189,6 +194,11 @@ fn void on_complete_download(DownloadContext* ctx) @public
     {
         async::timer::close(ctx.flush_timer);
         ctx.flush_timer = null;
+    }
+    if (ctx.block_timeout_timer)
+    {
+        async::timer::close(ctx.block_timeout_timer);
+        ctx.block_timeout_timer = null;
     }
 
     // Stop DHT timers
@@ -1112,6 +1122,24 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         }
     }
 
+    // Start block timeout check timer if not already running
+    if (!ctx.block_timeout_timer && download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS > 0)
+    {
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
+        if (catch err = timer_opt)
+        {
+            io::eprintfn("  Warning: Failed to create block timeout timer");
+        }
+        else
+        {
+            ctx.block_timeout_timer = timer_opt;
+            // Start with configured interval (10 seconds)
+            async::timer::start(ctx.block_timeout_timer, download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
+                              download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
+                              &on_block_timeout_timer_tick, ctx);
+        }
+    }
+
     // Call existing tracker completion handler
     on_download_tracker_complete(response, status, ctx);
 }
@@ -1198,6 +1226,28 @@ fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
     {
         ctx.sm.sync_all_files();
     }
+}
+
+<*
+ Timer callback for checking block request timeouts.
+ Runs every 10 seconds to check for blocks stuck in REQUESTED state.
+*>
+fn void on_block_timeout_timer_tick(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (ctx.dm.is_complete())
+    {
+        // Download complete - stop timer
+        async::timer::stop(timer);
+        return;
+    }
+
+    // Check for timed-out blocks and reset them
+    ctx.dm.check_block_timeouts();
+
+    // Try to fill the request pipeline with the newly freed blocks
+    request_blocks_from_peers(ctx);
 }
 
 <*

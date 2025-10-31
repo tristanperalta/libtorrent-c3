@@ -5,6 +5,7 @@ import libtorrent::block_manager;
 import libtorrent::piece_assembler;
 import async::event_loop;
 import std::io;
+import std::time;
 
 <*
  Download Manager - Coordination Layer
@@ -58,6 +59,9 @@ faultdef PIECE_NOT_DOWNLOADING;
 faultdef PIECE_ALREADY_DOWNLOADING;
 faultdef INVALID_BITFIELD_SIZE;
 
+// Block request timeout (seconds)
+const long BLOCK_REQUEST_TIMEOUT_SECONDS = 30;
+
 // Callback for async piece completion
 alias CompletePieceCallback = fn void(uint piece_index, char[] piece_data, bool success, void* user_data);
 
@@ -69,6 +73,7 @@ struct CompletePieceContext
     usz download_slot;           // Index in active_downloads array
     CompletePieceCallback callback;
     void* user_data;
+    char[] piece_data_copy;      // Copied data for async verification
 }
 
 // Information about a piece currently being downloaded
@@ -373,31 +378,31 @@ fn void on_piece_verify_complete(uint piece_index, bool verified, void* user_dat
 
     if (!verified)
     {
-        // Hash mismatch - call user callback with failure
+        // Hash mismatch - mark piece as free for retry
+        ctx.manager.picker.mark_free(piece_index)!!;
+
+        // Call user callback with failure
         if (ctx.callback)
         {
             char[] empty;
             ctx.callback(piece_index, empty, false, ctx.user_data);
         }
+
+        // Free the copied piece data
+        std::core::mem::free(ctx.piece_data_copy);
         std::core::mem::free(ctx);
         return;
     }
 
-    // Get piece data (make a copy for caller to own)
-    char[] source_data = ctx.manager.active_downloads[ctx.download_slot].assembler.get_data();
-    char[] piece_data = mem::new_array(char, source_data.len);
-    for (usz j = 0; j < source_data.len; j++)
-    {
-        piece_data[j] = source_data[j];
-    }
-
-    // Mark piece as complete in picker
+    // Verification succeeded - mark piece as complete in picker
     ctx.manager.picker.mark_complete(piece_index)!!;
 
-    // Free download resources (this frees source_data)
-    block_manager::free(&ctx.manager.active_downloads[ctx.download_slot].blocks);
-    piece_assembler::free(&ctx.manager.active_downloads[ctx.download_slot].assembler);
-    ctx.manager.active_downloads[ctx.download_slot].active = false;
+    // Make a copy of piece data for caller (they will own it)
+    char[] piece_data = mem::new_array(char, ctx.piece_data_copy.len);
+    for (usz j = 0; j < ctx.piece_data_copy.len; j++)
+    {
+        piece_data[j] = ctx.piece_data_copy[j];
+    }
 
     // Call user callback with success
     if (ctx.callback)
@@ -405,7 +410,11 @@ fn void on_piece_verify_complete(uint piece_index, bool verified, void* user_dat
         ctx.callback(piece_index, piece_data, true, ctx.user_data);
     }
 
+    // Free the copied piece data (our copy, not the user's)
+    std::core::mem::free(ctx.piece_data_copy);
     std::core::mem::free(ctx);
+
+    // NOTE: Download slot was already freed in complete_piece() before verification started
 }
 
 <*
@@ -429,6 +438,22 @@ fn void DownloadManager.complete_piece(&self, uint piece_index,
         if (self.active_downloads[i].active &&
             self.active_downloads[i].piece_index == piece_index)
         {
+            // Copy piece data BEFORE freeing the slot (so verification can run independently)
+            char[] source_data = self.active_downloads[i].assembler.get_data();
+            char[] piece_data_copy = mem::new_array(char, source_data.len);
+            for (usz j = 0; j < source_data.len; j++)
+            {
+                piece_data_copy[j] = source_data[j];
+            }
+
+            // Get expected hash for verification
+            char[20] expected_hash;
+            usz hash_offset = (usz)piece_index * 20;
+            for (usz k = 0; k < 20; k++)
+            {
+                expected_hash[k] = self.piece_hashes[hash_offset + k];
+            }
+
             // Create context
             CompletePieceContext* ctx = mem::new(CompletePieceContext);
             ctx.manager = (DownloadManager*)self;
@@ -436,11 +461,18 @@ fn void DownloadManager.complete_piece(&self, uint piece_index,
             ctx.download_slot = i;
             ctx.callback = callback;
             ctx.user_data = user_data;
+            ctx.piece_data_copy = piece_data_copy;
 
-            // Verify piece hash asynchronously
-            self.active_downloads[i].assembler.verify(self.loop,
-                                                       &on_piece_verify_complete,
-                                                       ctx);
+            // Free slot resources IMMEDIATELY (don't wait for verification)
+            block_manager::free(&self.active_downloads[i].blocks);
+            piece_assembler::free(&self.active_downloads[i].assembler);
+            self.active_downloads[i].active = false;
+
+            // Start async verification with copied data
+            // Note: We can't use assembler.verify() anymore since it's freed
+            // We need to call piece_assembler::verify_data() directly
+            piece_assembler::verify_data(self.loop, piece_index, piece_data_copy,
+                                         expected_hash, &on_piece_verify_complete, ctx);
             return;
         }
     }
@@ -554,4 +586,57 @@ fn fault? DownloadManager.get_piece_progress(&self, uint piece_index,
     }
 
     return PIECE_NOT_DOWNLOADING?;
+}
+
+<*
+ Check for timed-out block requests and reset them to FREE state.
+
+ This method scans all active downloads for blocks that have been in REQUESTED
+ state for longer than BLOCK_REQUEST_TIMEOUT_SECONDS (30s). Timed-out blocks
+ are reset to FREE state so they can be re-requested from peers.
+
+ Should be called periodically (e.g., every 10 seconds) to prevent blocks
+ from getting stuck if peers disconnect or become unresponsive.
+*>
+fn void DownloadManager.check_block_timeouts(&self) @public
+{
+    long now = (long)time::now().to_seconds();
+    usz total_timeouts = 0;
+
+    // Check each active download
+    for (usz i = 0; i < self.max_concurrent_pieces; i++)
+    {
+        if (!self.active_downloads[i].active) continue;
+
+        block_manager::BlockManager* bm = &self.active_downloads[i].blocks;
+        uint piece_index = self.active_downloads[i].piece_index;
+
+        // Check each block in this piece
+        for (usz j = 0; j < bm.num_blocks; j++)
+        {
+            block_manager::BlockInfo* block = &bm.blocks[j];
+
+            // Only check blocks in REQUESTED state
+            if (block.state == block_manager::BlockState.REQUESTED)
+            {
+                long elapsed = now - block.request_time;
+
+                if (elapsed >= BLOCK_REQUEST_TIMEOUT_SECONDS)
+                {
+                    // Block timed out - reset it
+                    uint offset = block.offset;
+                    bm.reset_block(offset)!!;
+
+                    total_timeouts++;
+                    io::printfn("  [TIMEOUT] Piece %d, block offset %d (requested %d seconds ago)",
+                               piece_index, offset, elapsed);
+                }
+            }
+        }
+    }
+
+    if (total_timeouts > 0)
+    {
+        io::printfn("  Reset %d timed-out block(s)", total_timeouts);
+    }
 }

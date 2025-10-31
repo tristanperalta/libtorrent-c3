@@ -1065,6 +1065,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.pex_timer = null;
     ctx.keepalive_timer = null;
     ctx.flush_timer = null;
+    ctx.block_timeout_timer = null;
     ctx.announce_retry_count = 0;
     ctx.announce_backoff_ms = 0;
     ctx.initial_announce_done = false;
@@ -1337,6 +1338,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.pex_timer = null;
     ctx.keepalive_timer = null;
     ctx.flush_timer = null;
+    ctx.block_timeout_timer = null;
     ctx.announce_retry_count = 0;
     ctx.announce_backoff_ms = 0;
     ctx.initial_announce_done = false;

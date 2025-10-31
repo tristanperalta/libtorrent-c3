@@ -46,6 +46,7 @@ struct VerifyContext
     VerifyCallback callback;
     void* user_data;
     async::work::WorkContext* work_ctx;
+    bool owns_data;            // True if we should free piece_data after verification
 }
 
 <*
@@ -203,7 +204,7 @@ fn void on_verify_complete(void* output, int status, void* user_data)
         {
             ctx.callback(ctx.piece_index, false, ctx.user_data);
         }
-        std::core::mem::free(ctx.piece_data);
+        if (ctx.owns_data) std::core::mem::free(ctx.piece_data);
         if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
         std::core::mem::free(ctx);
         return;
@@ -227,7 +228,7 @@ fn void on_verify_complete(void* output, int status, void* user_data)
     }
 
     // Clean up
-    std::core::mem::free(ctx.piece_data);
+    if (ctx.owns_data) std::core::mem::free(ctx.piece_data);
     if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
     std::core::mem::free(ctx);
 }
@@ -262,6 +263,7 @@ fn void PieceAssembler.verify(&self, event_loop::EventLoop* loop,
     ctx.piece_index = self.piece_index;
     ctx.callback = callback;
     ctx.user_data = user_data;
+    ctx.owns_data = true;  // We allocate and own the copy
 
     // Copy expected hash
     for (usz i = 0; i < 20; i++)
@@ -296,6 +298,63 @@ fn void PieceAssembler.verify(&self, event_loop::EventLoop* loop,
 
         // Clean up
         std::core::mem::free(ctx.piece_data);
+        std::core::mem::free(work_ctx);
+        std::core::mem::free(ctx);
+    }
+}
+
+<*
+ Verify arbitrary piece data asynchronously using thread pool.
+
+ This is a standalone function that verifies piece data without requiring
+ a PieceAssembler instance. Used when verification needs to happen after
+ the assembler has been freed.
+
+ @param loop : "Event loop"
+ @param piece_index : "Index of piece being verified"
+ @param piece_data : "Piece data to verify (caller retains ownership)"
+ @param expected_hash : "Expected SHA-1 hash (20 bytes)"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
+*>
+fn void verify_data(event_loop::EventLoop* loop, uint piece_index, char[] piece_data,
+                    char[20] expected_hash, VerifyCallback callback, void* user_data) @public
+{
+    // Create verification context
+    VerifyContext* ctx = mem::new(VerifyContext);
+    ctx.piece_index = piece_index;
+    ctx.callback = callback;
+    ctx.user_data = user_data;
+    ctx.owns_data = false;  // Caller owns the data, we just reference it
+
+    // Copy expected hash
+    for (usz i = 0; i < 20; i++)
+    {
+        ctx.expected_hash[i] = expected_hash[i];
+    }
+
+    // Store reference to piece data (caller owns it, will free after callback)
+    ctx.piece_data = piece_data;
+
+    // Create async work context
+    async::work::WorkContext* work_ctx = mem::new(async::work::WorkContext);
+    work_ctx.input = ctx;
+    work_ctx.work_fn = &do_verify_work;
+    work_ctx.callback = &on_verify_complete;
+    work_ctx.user_data = user_data;
+    ctx.work_ctx = work_ctx;
+
+    // Queue work
+    int result = async::work::queue_work(loop, work_ctx);
+    if (result != 0)
+    {
+        // Failed to queue - call callback with error
+        if (callback)
+        {
+            callback(piece_index, false, user_data);
+        }
+
+        // Clean up (but don't free piece_data - caller owns it)
         std::core::mem::free(work_ctx);
         std::core::mem::free(ctx);
     }
