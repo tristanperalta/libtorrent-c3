@@ -124,6 +124,67 @@ struct PeerDisplayInfo
     String state;                // Connection state as string
 }
 
+<*
+ Peer filter criteria for get_peer_display_info_filtered().
+ Multiple criteria can be combined.
+*>
+enum PeerStateFilter : char
+{
+    ALL_STATES,           // Show all peers regardless of state
+    CONNECTED_ONLY,       // Only CONNECTED state
+    ACTIVE_CONNECTIONS,   // CONNECTED + CONNECTING
+    HIDE_DISCONNECTED,    // All except DISCONNECTED + BANNED
+}
+
+<*
+ Sort order for peer display list.
+*>
+enum PeerSortOrder : char
+{
+    SORT_BY_STATE,         // Connected first, then by rank (default)
+    SORT_BY_DOWNLOADED,    // Highest bytes downloaded first
+    SORT_BY_DOWNLOAD_SPEED,   // Fastest current download speed
+    SORT_BY_UPLOAD_SPEED,     // Fastest current upload speed
+    SORT_BY_COMPLETION,       // Highest % complete (seeds first)
+    SORT_BY_RANK,             // Highest peer_rank first
+    SORT_BY_RELIABILITY,      // Fewest failures (hashfails + failcount) first
+}
+
+<*
+ Filter options for peer display.
+ All criteria are AND-ed together.
+*>
+struct PeerFilter
+{
+    PeerStateFilter state_filter;     // Which connection states to include
+    bool active_only;                 // Only peers with download/upload speed > 0
+    bool seeds_only;                  // Only seeds (100% complete)
+    bool leechers_only;               // Only leechers (< 100%)
+    bool filter_by_source;            // Apply source filter?
+    common::PeerSource source_filter; // Which sources (TRACKER, DHT, PEX) - only used if filter_by_source is true
+    int min_completion_percent;       // Minimum % complete (0-100)
+    int max_failures;                 // Maximum hashfails + failcount
+}
+
+<*
+ Create default filter that shows all peers.
+
+ @return "Filter with no restrictions"
+*>
+fn PeerFilter create_default_filter() @public
+{
+    PeerFilter filter;
+    filter.state_filter = PeerStateFilter.ALL_STATES;
+    filter.active_only = false;
+    filter.seeds_only = false;
+    filter.leechers_only = false;
+    filter.filter_by_source = false;  // Don't filter by source by default
+    filter.source_filter = common::PeerSource.TRACKER;  // Unused when filter_by_source is false
+    filter.min_completion_percent = 0;
+    filter.max_failures = 999;
+    return filter;
+}
+
 // Callbacks
 alias PeerConnectedCallback = fn void(peer_connection::PeerConnection* peer,
                                        common::Ipv4Addr ip, ushort port, void* user_data);
@@ -1314,6 +1375,296 @@ fn fault? PeerPool.mark_peer_seed(&self, common::Ipv4Addr ip, ushort port) @publ
     return {};
 }
 
+// ============================================================================
+// Peer Filtering and Sorting
+// ============================================================================
+
+// Thread-local sort order for comparison function
+// Note: Not thread-safe if multiple threads sort simultaneously
+// For better thread safety, consider using a mutex or thread-local storage
+tlocal PeerSortOrder current_sort_order;
+
+<*
+ Check if a peer passes the filter criteria.
+ Helper function for get_peer_display_info_filtered().
+*>
+fn bool peer_passes_filter(TorrentPeer* peer, PeerFilter* filter)
+{
+    // Check state filter
+    switch (filter.state_filter)
+    {
+        case PeerStateFilter.CONNECTED_ONLY:
+            if (peer.state != PeerState.CONNECTED) return false;
+        case PeerStateFilter.ACTIVE_CONNECTIONS:
+            if (peer.state != PeerState.CONNECTED &&
+                peer.state != PeerState.CONNECTING) return false;
+        case PeerStateFilter.HIDE_DISCONNECTED:
+            if (peer.state == PeerState.DISCONNECTED ||
+                peer.state == PeerState.BANNED) return false;
+        case PeerStateFilter.ALL_STATES:
+            // No filtering
+    }
+
+    // Check seed/leecher filter
+    if (filter.seeds_only && !peer.seed) return false;
+    if (filter.leechers_only && peer.seed) return false;
+
+    // Check source filter
+    if (filter.filter_by_source && peer.source != filter.source_filter) return false;
+
+    // Check completion percentage
+    float completion = 0.0;
+    if (peer.seed)
+    {
+        completion = 100.0;
+    }
+    else if (peer.pieces.data.len > 0)
+    {
+        usz set_bits = 0;
+        for (usz i = 0; i < peer.pieces.num_pieces; i++)
+        {
+            if (peer.pieces.has_piece(i)) set_bits++;
+        }
+        completion = peer.pieces.num_pieces > 0 ?
+            (float)set_bits * 100.0 / (float)peer.pieces.num_pieces : 0.0;
+    }
+    if (completion < (float)filter.min_completion_percent) return false;
+
+    // Check failure count
+    int total_failures = (int)(peer.hashfails + peer.failcount);
+    if (total_failures > filter.max_failures) return false;
+
+    // Check active_only (would need speed tracking - for now always pass)
+    // TODO: Add actual speed tracking to enable this filter
+    // if (filter.active_only && download_speed == 0.0 && upload_speed == 0.0) return false;
+
+    return true;
+}
+
+<*
+ Compare two peers for display sorting.
+ Uses current_sort_order from thread-local storage.
+ Returns: negative if a < b, 0 if equal, positive if a > b
+*>
+fn int compare_peers_for_display(TorrentPeer* a, TorrentPeer* b)
+{
+    switch (current_sort_order)
+    {
+        case PeerSortOrder.SORT_BY_STATE:
+            // Connected > Connecting > Candidate > Discovered > Disconnected > Banned
+            int state_order_a = 5 - (int)a.state;  // Invert so CONNECTED (3) becomes highest
+            int state_order_b = 5 - (int)b.state;
+            if (state_order_a != state_order_b) return state_order_b - state_order_a;
+            // Tie-break by rank
+            return b.peer_rank - a.peer_rank;
+
+        case PeerSortOrder.SORT_BY_DOWNLOADED:
+            if (a.prev_amount_download > b.prev_amount_download) return -1;
+            if (a.prev_amount_download < b.prev_amount_download) return 1;
+            return 0;
+
+        case PeerSortOrder.SORT_BY_DOWNLOAD_SPEED:
+            // TODO: Add actual speed tracking
+            // For now, sort by downloaded bytes as proxy
+            if (a.prev_amount_download > b.prev_amount_download) return -1;
+            if (a.prev_amount_download < b.prev_amount_download) return 1;
+            return 0;
+
+        case PeerSortOrder.SORT_BY_UPLOAD_SPEED:
+            // TODO: Add actual speed tracking
+            // For now, sort by uploaded bytes as proxy
+            if (a.prev_amount_upload > b.prev_amount_upload) return -1;
+            if (a.prev_amount_upload < b.prev_amount_upload) return 1;
+            return 0;
+
+        case PeerSortOrder.SORT_BY_COMPLETION:
+            // Seeds first, then by completion %
+            if (a.seed && !b.seed) return -1;
+            if (!a.seed && b.seed) return 1;
+            // Both same seed status, compare piece count
+            usz a_pieces = 0;
+            usz b_pieces = 0;
+            if (a.pieces.data.len > 0)
+            {
+                for (usz i = 0; i < a.pieces.num_pieces; i++)
+                {
+                    if (a.pieces.has_piece(i)) a_pieces++;
+                }
+            }
+            if (b.pieces.data.len > 0)
+            {
+                for (usz i = 0; i < b.pieces.num_pieces; i++)
+                {
+                    if (b.pieces.has_piece(i)) b_pieces++;
+                }
+            }
+            if (a_pieces > b_pieces) return -1;
+            if (a_pieces < b_pieces) return 1;
+            return 0;
+
+        case PeerSortOrder.SORT_BY_RANK:
+            return b.peer_rank - a.peer_rank;  // Higher rank first
+
+        case PeerSortOrder.SORT_BY_RELIABILITY:
+            int a_failures = (int)(a.hashfails + a.failcount);
+            int b_failures = (int)(b.hashfails + b.failcount);
+            return a_failures - b_failures;  // Fewer failures first
+    }
+
+    return 0;  // Shouldn't reach here
+}
+
+<*
+ Build PeerDisplayInfo for a single peer.
+ Helper function to avoid code duplication.
+*>
+fn PeerDisplayInfo build_display_info(TorrentPeer* peer)
+{
+    PeerDisplayInfo info;
+
+    // Format IP address
+    DString ip_str;
+    ip_str.appendf("%d.%d.%d.%d",
+                  peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3]);
+    info.ip_address = ip_str.copy_str(mem);
+    info.port = peer.port;
+
+    // Parse client name from peer_id
+    if (peer.peer_id[0] == '-' && peer.peer_id.len >= 8)
+    {
+        char[2] client_code = { peer.peer_id[1], peer.peer_id[2] };
+        char[4] version_str = { peer.peer_id[3], peer.peer_id[4], peer.peer_id[5], peer.peer_id[6] };
+
+        DString client_name;
+        if (client_code[0] == 'U' && client_code[1] == 'T')
+        {
+            client_name.appendf("μTorrent %c.%c.%c.%c",
+                               version_str[0], version_str[1], version_str[2], version_str[3]);
+        }
+        else if (client_code[0] == 'l' && client_code[1] == 't')
+        {
+            client_name.appendf("libtorrent %c.%c.%c",
+                               version_str[0], version_str[1], version_str[2]);
+        }
+        else if (client_code[0] == 'D' && client_code[1] == 'E')
+        {
+            client_name.appendf("Deluge %c.%c.%c",
+                               version_str[0], version_str[1], version_str[2]);
+        }
+        else
+        {
+            client_name.appendf("%c%c %c.%c.%c.%c",
+                               client_code[0], client_code[1],
+                               version_str[0], version_str[1], version_str[2], version_str[3]);
+        }
+        info.client = client_name.copy_str(mem);
+    }
+    else
+    {
+        info.client = "Unknown".copy(mem);
+    }
+
+    // Calculate percent complete
+    if (peer.seed)
+    {
+        info.percent_complete = 100.0;
+    }
+    else if (peer.pieces.data.len > 0)
+    {
+        usz set_bits = 0;
+        for (usz i = 0; i < peer.pieces.num_pieces; i++)
+        {
+            if (peer.pieces.has_piece(i)) set_bits++;
+        }
+        info.percent_complete = peer.pieces.num_pieces > 0 ?
+            (float)set_bits * 100.0 / (float)peer.pieces.num_pieces : 0.0;
+    }
+    else
+    {
+        info.percent_complete = 0.0;
+    }
+
+    // Speeds - TODO: track actual rates
+    info.download_speed = 0.0;
+    info.upload_speed = 0.0;
+
+    // State as string
+    switch (peer.state)
+    {
+        case PeerState.DISCOVERED:
+            info.state = "Discovered".copy(mem);
+        case PeerState.CANDIDATE:
+            info.state = "Candidate".copy(mem);
+        case PeerState.CONNECTING:
+            info.state = "Connecting".copy(mem);
+        case PeerState.CONNECTED:
+            info.state = "Connected".copy(mem);
+        case PeerState.DISCONNECTED:
+            info.state = "Disconnected".copy(mem);
+        case PeerState.BANNED:
+            info.state = "Banned".copy(mem);
+    }
+
+    return info;
+}
+
+<*
+ Get filtered and sorted peer display information.
+ Applies filter criteria and sorts peers by specified order.
+
+ @param filter: "Filter criteria (use create_default_filter() for no filtering)"
+ @param sort_order: "Sort order for results"
+ @return "Array of peer display info (caller must free)"
+*>
+fn PeerDisplayInfo[] PeerPool.get_peer_display_info_filtered(&self, PeerFilter* filter,
+                                                               PeerSortOrder sort_order) @public => @pool()
+{
+    if (self.peers.len == 0)
+    {
+        PeerDisplayInfo[] empty;
+        return empty;
+    }
+
+    // First pass: filter peers and build array of pointers
+    // Use temp allocator since this is short-lived
+    TorrentPeer*[] filtered_peers = mem::temp_array(TorrentPeer*, self.peers.len);
+
+    usz filtered_count = 0;
+    for (usz i = 0; i < self.peers.len; i++)
+    {
+        if (peer_passes_filter(self.peers[i], filter))
+        {
+            filtered_peers[filtered_count] = self.peers[i];
+            filtered_count++;
+        }
+    }
+
+    if (filtered_count == 0)
+    {
+        PeerDisplayInfo[] empty;
+        return empty;
+    }
+
+    // Resize array to actual filtered count
+    TorrentPeer*[] peers_to_sort = filtered_peers[:filtered_count];
+
+    // Set thread-local sort order for comparison function
+    current_sort_order = sort_order;
+
+    // Sort the filtered peers
+    sort::quicksort(peers_to_sort, fn int(TorrentPeer** a, TorrentPeer** b) => compare_peers_for_display(*a, *b));
+
+    // Build display info array (uses mem since it's returned to caller)
+    PeerDisplayInfo[] info_array = mem::new_array(PeerDisplayInfo, filtered_count);
+    for (usz i = 0; i < filtered_count; i++)
+    {
+        info_array[i] = build_display_info(peers_to_sort[i]);
+    }
+
+    return info_array;
+    // Note: filtered_peers is automatically freed by @pool() when function exits
+}
+
 <*
  Get peer display information for GUI.
  Returns array of PeerDisplayInfo structs allocated with mem allocator.
@@ -1323,114 +1674,7 @@ fn fault? PeerPool.mark_peer_seed(&self, common::Ipv4Addr ip, ushort port) @publ
 *>
 fn PeerDisplayInfo[] PeerPool.get_peer_display_info(&self) @public
 {
-    if (self.peers.len == 0)
-    {
-        PeerDisplayInfo[] empty;
-        return empty;
-    }
-
-    // Allocate array for display info
-    PeerDisplayInfo[] info_array = mem::new_array(PeerDisplayInfo, self.peers.len);
-
-    foreach (i, peer : self.peers)
-    {
-        PeerDisplayInfo* info = &info_array[i];
-
-        // Format IP address
-        DString ip_str;
-        ip_str.appendf("%d.%d.%d.%d",
-                      peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3]);
-        info.ip_address = ip_str.copy_str(mem);
-        info.port = peer.port;
-
-        // Parse client name from peer_id
-        // Format: -XX####- where XX is 2-letter client code
-        if (peer.peer_id[0] == '-' && peer.peer_id.len >= 8)
-        {
-            // Extract client code (2 letters after '-')
-            char[2] client_code = { peer.peer_id[1], peer.peer_id[2] };
-
-            // Extract version numbers
-            char[4] version_str = { peer.peer_id[3], peer.peer_id[4], peer.peer_id[5], peer.peer_id[6] };
-
-            DString client_name;
-            // Map common client codes
-            if (client_code[0] == 'U' && client_code[1] == 'T')
-            {
-                client_name.appendf("μTorrent %c.%c.%c.%c",
-                                   version_str[0], version_str[1], version_str[2], version_str[3]);
-            }
-            else if (client_code[0] == 'l' && client_code[1] == 't')
-            {
-                client_name.appendf("libtorrent %c.%c.%c",
-                                   version_str[0], version_str[1], version_str[2]);
-            }
-            else if (client_code[0] == 'D' && client_code[1] == 'E')
-            {
-                client_name.appendf("Deluge %c.%c.%c",
-                                   version_str[0], version_str[1], version_str[2]);
-            }
-            else
-            {
-                client_name.appendf("%c%c %c.%c.%c.%c",
-                                   client_code[0], client_code[1],
-                                   version_str[0], version_str[1], version_str[2], version_str[3]);
-            }
-            info.client = client_name.copy_str(mem);
-        }
-        else
-        {
-            info.client = "Unknown".copy(mem);
-        }
-
-        // Calculate percent complete from bitfield
-        if (peer.seed)
-        {
-            info.percent_complete = 100.0;
-        }
-        else if (peer.pieces.data.len > 0)
-        {
-            usz set_bits = 0;
-            usz total_pieces = peer.pieces.num_pieces;
-
-            // Count set bits
-            for (usz piece_idx = 0; piece_idx < total_pieces; piece_idx++)
-            {
-                if (peer.pieces.has_piece(piece_idx))
-                {
-                    set_bits++;
-                }
-            }
-
-            info.percent_complete = total_pieces > 0 ?
-                (float)set_bits * 100.0 / (float)total_pieces : 0.0;
-        }
-        else
-        {
-            info.percent_complete = 0.0;
-        }
-
-        // Speeds - TODO: track actual rates over time
-        info.download_speed = 0.0;
-        info.upload_speed = 0.0;
-
-        // State as string
-        switch (peer.state)
-        {
-            case PeerState.DISCOVERED:
-                info.state = "Discovered".copy(mem);
-            case PeerState.CANDIDATE:
-                info.state = "Candidate".copy(mem);
-            case PeerState.CONNECTING:
-                info.state = "Connecting".copy(mem);
-            case PeerState.CONNECTED:
-                info.state = "Connected".copy(mem);
-            case PeerState.DISCONNECTED:
-                info.state = "Disconnected".copy(mem);
-            case PeerState.BANNED:
-                info.state = "Banned".copy(mem);
-        }
-    }
-
-    return info_array;
+    // Use filtered version with default filter and default sort order
+    PeerFilter filter = create_default_filter();
+    return self.get_peer_display_info_filtered(&filter, PeerSortOrder.SORT_BY_STATE);
 }
