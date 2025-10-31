@@ -17,6 +17,8 @@ import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::logger;
+import libtorrent::dht_client;
+import libtorrent::dht_get_peers;
 import torrent_client::log_outputs;
 import torrent_client::download_session;
 import raylib_gui;
@@ -1067,6 +1069,12 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.announce_backoff_ms = 0;
     ctx.initial_announce_done = false;
     ctx.peer_pool = null;
+    ctx.dht_client = null;
+    ctx.dht_search = null;
+    ctx.dht_timer = null;
+    ctx.dht_check_timer = null;
+    ctx.dht_tick_timer = null;
+    ctx.dht_enabled = false;
     ctx.download_complete = false;
     ctx.exit_code = 0;
     ctx.num_pieces = num_pieces;
@@ -1132,6 +1140,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         &ctx
     );
 
+    // Initialize DHT for peer discovery
+    raylib_gui::add_log(ui, "Starting DHT on port 6881...");
+    download_session::init_dht(&ctx, 6881);
+
     // Initialize storage manager (create directories, open files)
     raylib_gui::add_log(ui, "Initializing storage...");
     ctx.sm.initialize(&download_session::on_storage_initialized, &ctx);
@@ -1146,7 +1158,16 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         frame_count++;
         if (frame_count % GUI_UPDATE_INTERVAL_FRAMES == 0 && ctx.peer_pool)
         {
-            peer_pool::PeerDisplayInfo[] peer_info = ctx.peer_pool.get_peer_display_info();
+            // Filter to show only active/connecting peers, sorted by state (CONNECTED first)
+            peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+            filter.state_flags = (char)(peer_pool::PeerStateFlag.DISCOVERED |
+                                         peer_pool::PeerStateFlag.CANDIDATE |
+                                         peer_pool::PeerStateFlag.CONNECTING |
+                                         peer_pool::PeerStateFlag.CONNECTED);
+            peer_pool::PeerDisplayInfo[] peer_info = ctx.peer_pool.get_peer_display_info_filtered(
+                &filter,
+                peer_pool::PeerSortOrder.SORT_BY_STATE
+            );
             raylib_gui::update_peer_list(ui, peer_info);
         }
     }
@@ -1182,6 +1203,24 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         async::timer::close(ctx.flush_timer);
     }
 
+    // Stop and close DHT timers
+    io::printfn("Stopping DHT timers...");
+    if (ctx.dht_timer)
+    {
+        async::timer::stop(ctx.dht_timer);
+        async::timer::close(ctx.dht_timer);
+    }
+    if (ctx.dht_check_timer)
+    {
+        async::timer::stop(ctx.dht_check_timer);
+        async::timer::close(ctx.dht_check_timer);
+    }
+    if (ctx.dht_tick_timer)
+    {
+        async::timer::stop(ctx.dht_tick_timer);
+        async::timer::close(ctx.dht_tick_timer);
+    }
+
     // Disconnect all peers before freeing peer pool
     io::printfn("Gracefully disconnecting peers...");
     if (ctx.peer_pool)
@@ -1205,6 +1244,17 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     if (ctx.peer_pool)
     {
         peer_pool::free(ctx.peer_pool);
+    }
+
+    // Free DHT resources
+    io::printfn("Freeing DHT resources...");
+    if (ctx.dht_search)
+    {
+        dht_get_peers::free_search(ctx.dht_search);
+    }
+    if (ctx.dht_client)
+    {
+        dht_client::free_dht_client(ctx.dht_client);
     }
 
     io::printfn("Freeing download manager...");
