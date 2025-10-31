@@ -3,6 +3,7 @@ module libtorrent::dht_client;
 import std::io;
 import std::time;
 import std::collections::list;
+import std::core::mem::allocator;
 import libtorrent::common;
 import libtorrent::dht_routing_table;
 import libtorrent::dht_rpc_manager;
@@ -82,6 +83,7 @@ struct DhtClient
     udp::UdpSocket* socket;                        // UDP socket for DHT communication
     event_loop::EventLoop* loop;                   // Event loop
     bencode::BencodeValue* current_response_root;  // Temporarily store response during callback
+    allocator::DynamicArenaAllocator arena;        // Arena for RPC contexts and temp allocations
 }
 
 // ============================================================================
@@ -116,6 +118,9 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
     client.loop = loop;
     client.current_response_root = null;
 
+    // Initialize arena allocator for RPC contexts (4KB pages, grows as needed)
+    client.arena.init(mem, 4096);
+
     // Create UDP socket (only if event loop is provided)
     if (loop != null)
     {
@@ -147,13 +152,7 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
     return client;
 }
 
-/**
- * Helper function to free callback context userdata
- */
-fn void free_callback_context(void* userdata)
-{
-    if (userdata) free(userdata);
-}
+// Note: RPC callback contexts are now allocated from arena, no manual free needed
 
 /**
  * Free a DHT client
@@ -170,10 +169,10 @@ fn void free_dht_client(DhtClient* client) @public
         udp::close(client.socket);
     }
 
-    // Cancel all pending transactions and free their callback contexts
+    // Cancel all pending transactions (contexts freed by arena)
     if (client.rpc_manager)
     {
-        dht_rpc_manager::cancel_all_transactions(client.rpc_manager, &free_callback_context);
+        dht_rpc_manager::cancel_all_transactions(client.rpc_manager, null);
         dht_rpc_manager::free_rpc_manager(client.rpc_manager);
     }
 
@@ -181,6 +180,9 @@ fn void free_dht_client(DhtClient* client) @public
     {
         dht_routing_table::free_routing_table(client.routing_table);
     }
+
+    // Free arena (frees all RPC contexts at once)
+    client.arena.free();
 
     free(client);
 }
@@ -237,13 +239,13 @@ fn void add_default_bootstrap_nodes(DhtClient* client) @public
 // ============================================================================
 
 /**
- * Helper: Convert IP address to string
+ * Helper: Convert IP address to string (uses temp allocator)
  */
 fn String ip_to_string(common::Ipv4Addr ip) => @pool()
 {
     DString buf;
     buf.appendf("%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
-    return buf.copy_str(mem);
+    return buf.copy_str(tmem);
 }
 
 /**
@@ -270,27 +272,26 @@ fn void on_udp_send(udp::UdpSocket* socket, int status, void* user_data)
 /**
  * Generic RPC response callback
  * Handles responses and updates routing table
+ * Uses temp allocator for temporary strings
  *
  * @param response Response message (null on timeout)
  * @param userdata RpcCallbackContext pointer
  */
-fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata)
+fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @pool()
 {
     RpcCallbackContext* ctx = (RpcCallbackContext*)userdata;
     DhtClient* client = ctx.client;
 
     if (!response)
     {
-        // Timeout
+        // Timeout (ctx freed by arena, no manual free needed)
         io::printfn("[DHT] Query timed out");
-        free(ctx);
         return;
     }
 
     // Access the bencode root stored temporarily in the client
     if (!client.current_response_root)
     {
-        free(ctx);
         return;
     }
 
@@ -301,7 +302,6 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata)
     if (r_dict == null || r_dict.type != bencode::BencodeType.DICT)
     {
         io::eprintfn("[DHT] Invalid response format");
-        free(ctx);
         return;
     }
 
@@ -365,7 +365,6 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata)
                     if (added && i < 3)
                     {
                         String ip_str = ip_to_string(ip);
-                        defer free(ip_str);
                         io::printfn("[DHT]   Added node %s:%d", ip_str, port);
                     }
                 }
@@ -399,7 +398,6 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata)
                                        (ushort)peer_val.string[5];
 
                         String ip_str = ip_to_string(ip);
-                        defer free(ip_str);
                         io::printfn("[DHT]   Peer: %s:%d", ip_str, port);
                     }
                 }
@@ -425,7 +423,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata)
             io::printfn("[DHT] Announce_peer response");
     }
 
-    free(ctx);
+    // Note: ctx freed by arena, no manual free needed
 }
 
 /**
@@ -440,8 +438,8 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata)
 fn bool send_ping(DhtClient* client, common::NodeId target_id,
                   common::Ipv4Addr target_ip, ushort target_port) @public
 {
-    // Create callback context
-    RpcCallbackContext* ctx = mem::new(RpcCallbackContext);
+    // Create callback context from arena
+    RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
     ctx.client = client;
     ctx.query_type = krpc::QueryType.PING;
 
@@ -474,7 +472,6 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
-    defer free(target_ip_str);
 
     io::printfn("[DHT] Sending ping to %s:%d", target_ip_str, target_port);
     udp::send(client.socket, target_ip_str, (int)target_port,
@@ -497,8 +494,8 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
                        common::Ipv4Addr target_ip, ushort target_port,
                        common::NodeId search_id) @public
 {
-    // Create callback context
-    RpcCallbackContext* ctx = mem::new(RpcCallbackContext);
+    // Create callback context from arena
+    RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
     ctx.client = client;
     ctx.query_type = krpc::QueryType.FIND_NODE;
 
@@ -531,7 +528,6 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
-    defer free(target_ip_str);
 
     io::printfn("[DHT] Sending find_node to %s:%d", target_ip_str, target_port);
     udp::send(client.socket, target_ip_str, (int)target_port,
@@ -554,8 +550,8 @@ fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
                        common::Ipv4Addr target_ip, ushort target_port,
                        common::InfoHash info_hash) @public
 {
-    // Create callback context
-    RpcCallbackContext* ctx = mem::new(RpcCallbackContext);
+    // Create callback context from arena
+    RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
     ctx.client = client;
     ctx.query_type = krpc::QueryType.GET_PEERS;
 
@@ -588,7 +584,6 @@ fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
-    defer free(target_ip_str);
 
     io::printfn("[DHT] Sending get_peers to %s:%d", target_ip_str, target_port);
     udp::send(client.socket, target_ip_str, (int)target_port,
