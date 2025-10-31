@@ -66,7 +66,9 @@ struct DownloadContext
     // DHT peer discovery
     dht_client::DhtClient* dht_client;
     dht_get_peers::GetPeersSearch* dht_search;
-    async::timer::Timer* dht_timer;  // Periodic DHT peer discovery
+    async::timer::Timer* dht_timer;         // Periodic DHT peer discovery
+    async::timer::Timer* dht_check_timer;   // One-shot timer for checking DHT results
+    async::timer::Timer* dht_tick_timer;    // RPC timeout processing timer
     bool dht_enabled;
 
     // Download state
@@ -187,6 +189,35 @@ fn void on_complete_download(DownloadContext* ctx) @public
     {
         async::timer::close(ctx.flush_timer);
         ctx.flush_timer = null;
+    }
+
+    // Stop DHT timers
+    if (ctx.dht_timer)
+    {
+        async::timer::close(ctx.dht_timer);
+        ctx.dht_timer = null;
+    }
+    if (ctx.dht_check_timer)
+    {
+        async::timer::close(ctx.dht_check_timer);
+        ctx.dht_check_timer = null;
+    }
+    if (ctx.dht_tick_timer)
+    {
+        async::timer::close(ctx.dht_tick_timer);
+        ctx.dht_tick_timer = null;
+    }
+
+    // Free DHT resources
+    if (ctx.dht_search)
+    {
+        dht_get_peers::free_search(ctx.dht_search);
+        ctx.dht_search = null;
+    }
+    if (ctx.dht_client)
+    {
+        dht_client::free_dht_client(ctx.dht_client);
+        ctx.dht_client = null;
     }
 
     // Gracefully disconnect from all peers
@@ -1238,6 +1269,20 @@ fn void on_dht_timer_tick(async::timer::Timer* timer, void* user_data) @public
 }
 
 <*
+ DHT tick timer callback - processes RPC timeouts.
+ Called every 1 second.
+*>
+fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (ctx.dht_client)
+    {
+        dht_client::tick(ctx.dht_client);
+    }
+}
+
+<*
  Start DHT peer discovery for the torrent's info hash.
 *>
 fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
@@ -1281,6 +1326,13 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
     }
 
     // Schedule check for results in 5 seconds
+    // Close any existing check timer first
+    if (ctx.dht_check_timer)
+    {
+        async::timer::close(ctx.dht_check_timer);
+        ctx.dht_check_timer = null;
+    }
+
     async::timer::Timer*? check_timer_opt = async::timer::create(ctx.loop);
     if (catch err = check_timer_opt)
     {
@@ -1288,8 +1340,8 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
     }
     else
     {
-        async::timer::Timer* check_timer = check_timer_opt;
-        async::timer::start(check_timer, 5000, 0, &on_dht_check_results, ctx);
+        ctx.dht_check_timer = check_timer_opt;
+        async::timer::start(ctx.dht_check_timer, 5000, 0, &on_dht_check_results, ctx);
     }
 }
 
@@ -1304,6 +1356,7 @@ fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @publi
     if (!ctx.dht_search)
     {
         async::timer::close(timer);
+        ctx.dht_check_timer = null;
         return;
     }
 
@@ -1317,8 +1370,9 @@ fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @publi
         io::printfn("[DHT] No peers found yet, will retry on next timer");
     }
 
-    // Close timer (one-shot)
+    // Close timer (one-shot) and clear reference
     async::timer::close(timer);
+    ctx.dht_check_timer = null;
 }
 
 <*
@@ -1391,6 +1445,19 @@ fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @publi
         ctx.dht_timer = timer_opt;
         async::timer::start(ctx.dht_timer, 300000, 300000,
                           &on_dht_timer_tick, ctx);
+    }
+
+    // Set up DHT tick timer for RPC timeout processing (every 1 second)
+    async::timer::Timer*? tick_timer_opt = async::timer::create(ctx.loop);
+    if (catch err = tick_timer_opt)
+    {
+        io::eprintfn("[DHT] Warning: Failed to create DHT tick timer");
+    }
+    else
+    {
+        ctx.dht_tick_timer = tick_timer_opt;
+        async::timer::start(ctx.dht_tick_timer, 1000, 1000,
+                          &on_dht_tick, ctx);
     }
 }
 

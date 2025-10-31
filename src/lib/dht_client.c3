@@ -478,6 +478,12 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
+    if (!ctx)
+    {
+        io::eprintfn("[DHT] Failed to allocate RPC context");
+        return false;
+    }
+
     ctx.client = client;
     ctx.query_type = krpc::QueryType.PING;
     ctx.search_context = null;
@@ -495,7 +501,7 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
 
     if (catch excuse = tid_opt)
     {
-        free(ctx);
+        // Arena will clean this up, no manual free needed
         return false;
     }
 
@@ -535,6 +541,12 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
+    if (!ctx)
+    {
+        io::eprintfn("[DHT] Failed to allocate RPC context");
+        return false;
+    }
+
     ctx.client = client;
     ctx.query_type = krpc::QueryType.FIND_NODE;
     ctx.search_context = null;
@@ -552,7 +564,7 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
 
     if (catch excuse = tid_opt)
     {
-        free(ctx);
+        // Arena will clean this up, no manual free needed
         return false;
     }
 
@@ -593,6 +605,12 @@ fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
+    if (!ctx)
+    {
+        io::eprintfn("[DHT] Failed to allocate RPC context");
+        return false;
+    }
+
     ctx.client = client;
     ctx.query_type = krpc::QueryType.GET_PEERS;
     ctx.search_context = search_context;
@@ -610,7 +628,7 @@ fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
 
     if (catch excuse = tid_opt)
     {
-        free(ctx);
+        // Arena will clean this up, no manual free needed
         return false;
     }
 
