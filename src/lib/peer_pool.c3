@@ -125,15 +125,23 @@ struct PeerDisplayInfo
 }
 
 <*
- Peer filter criteria for get_peer_display_info_filtered().
- Multiple criteria can be combined.
+ Peer state bitflags for filtering.
+ Can be combined with bitwise OR (|) to show multiple states.
+
+ Examples:
+   PeerStateFlag.CONNECTED - Only connected peers
+   PeerStateFlag.CONNECTED | PeerStateFlag.CONNECTING - Connected or connecting
+   PeerStateFlag.ALL & ~PeerStateFlag.BANNED - All except banned
 *>
-enum PeerStateFilter : char
+enum PeerStateFlag : const char
 {
-    ALL_STATES,           // Show all peers regardless of state
-    CONNECTED_ONLY,       // Only CONNECTED state
-    ACTIVE_CONNECTIONS,   // CONNECTED + CONNECTING
-    HIDE_DISCONNECTED,    // All except DISCONNECTED + BANNED
+    DISCOVERED = 1 << 0,    // 0b000001 - Just learned about this peer
+    CANDIDATE = 1 << 1,     // 0b000010 - Ready to connect
+    CONNECTING = 1 << 2,    // 0b000100 - Connection in progress
+    CONNECTED = 1 << 3,     // 0b001000 - Active connection
+    DISCONNECTED = 1 << 4,  // 0b010000 - Previously connected
+    BANNED = 1 << 5,        // 0b100000 - Banned due to failures
+    ALL = 0x3F,             // 0b111111 - All states (bits 0-5 set)
 }
 
 <*
@@ -156,7 +164,7 @@ enum PeerSortOrder : char
 *>
 struct PeerFilter
 {
-    PeerStateFilter state_filter;     // Which connection states to include
+    char state_flags;                 // Bitfield of PeerStateFlag values to include
     bool active_only;                 // Only peers with download/upload speed > 0
     bool seeds_only;                  // Only seeds (100% complete)
     bool leechers_only;               // Only leechers (< 100%)
@@ -174,7 +182,7 @@ struct PeerFilter
 fn PeerFilter create_default_filter() @public
 {
     PeerFilter filter;
-    filter.state_filter = PeerStateFilter.ALL_STATES;
+    filter.state_flags = (char)PeerStateFlag.ALL;  // Show all states
     filter.active_only = false;
     filter.seeds_only = false;
     filter.leechers_only = false;
@@ -1390,20 +1398,10 @@ tlocal PeerSortOrder current_sort_order;
 *>
 fn bool peer_passes_filter(TorrentPeer* peer, PeerFilter* filter)
 {
-    // Check state filter
-    switch (filter.state_filter)
-    {
-        case PeerStateFilter.CONNECTED_ONLY:
-            if (peer.state != PeerState.CONNECTED) return false;
-        case PeerStateFilter.ACTIVE_CONNECTIONS:
-            if (peer.state != PeerState.CONNECTED &&
-                peer.state != PeerState.CONNECTING) return false;
-        case PeerStateFilter.HIDE_DISCONNECTED:
-            if (peer.state == PeerState.DISCONNECTED ||
-                peer.state == PeerState.BANNED) return false;
-        case PeerStateFilter.ALL_STATES:
-            // No filtering
-    }
+    // Check state filter using bitflags
+    // Convert peer state enum to corresponding bit position
+    char peer_state_flag = (char)(1 << (char)peer.state);
+    if ((filter.state_flags & peer_state_flag) == 0) return false;
 
     // Check seed/leecher filter
     if (filter.seeds_only && !peer.seed) return false;
@@ -1452,9 +1450,27 @@ fn int compare_peers_for_display(TorrentPeer* a, TorrentPeer* b)
     {
         case PeerSortOrder.SORT_BY_STATE:
             // Connected > Connecting > Candidate > Discovered > Disconnected > Banned
-            int state_order_a = 5 - (int)a.state;  // Invert so CONNECTED (3) becomes highest
-            int state_order_b = 5 - (int)b.state;
-            if (state_order_a != state_order_b) return state_order_b - state_order_a;
+            // Map states to priority (higher number = higher priority)
+            int priority_a, priority_b;
+            switch (a.state)
+            {
+                case PeerState.CONNECTED: priority_a = 6;
+                case PeerState.CONNECTING: priority_a = 5;
+                case PeerState.CANDIDATE: priority_a = 4;
+                case PeerState.DISCOVERED: priority_a = 3;
+                case PeerState.DISCONNECTED: priority_a = 2;
+                case PeerState.BANNED: priority_a = 1;
+            }
+            switch (b.state)
+            {
+                case PeerState.CONNECTED: priority_b = 6;
+                case PeerState.CONNECTING: priority_b = 5;
+                case PeerState.CANDIDATE: priority_b = 4;
+                case PeerState.DISCOVERED: priority_b = 3;
+                case PeerState.DISCONNECTED: priority_b = 2;
+                case PeerState.BANNED: priority_b = 1;
+            }
+            if (priority_a != priority_b) return priority_b - priority_a;  // Higher priority first
             // Tie-break by rank
             return b.peer_rank - a.peer_rank;
 

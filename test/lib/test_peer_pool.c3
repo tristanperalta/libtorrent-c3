@@ -1055,3 +1055,661 @@ fn void test_dht_tracker_deduplication() @test
 
     io::printn("✓ DHT/tracker deduplication");
 }
+
+// ============================================================================
+// Phase 7 Tests: Filtering and Sorting
+// ============================================================================
+
+<*
+ Test default filter shows all peers.
+*>
+fn void test_filter_default() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers in different states
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    // Change states
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.state = peer_pool::PeerState.CONNECTED;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.state = peer_pool::PeerState.CONNECTING;
+
+    // Use default filter
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show all 3 peers
+    assert(info.len == 3, "Default filter should show all peers");
+}
+
+<*
+ Test filtering by single state using bitflags.
+*>
+fn void test_filter_single_state() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers in different states
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.state = peer_pool::PeerState.CONNECTED;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.state = peer_pool::PeerState.CONNECTING;
+
+    // Filter for CONNECTED only
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.state_flags = (char)peer_pool::PeerStateFlag.CONNECTED;
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show only 1 peer (CONNECTED)
+    assert(info.len == 1, "Should show only CONNECTED peers");
+    assert(info[0].port == 6881, "Should be peer1");
+}
+
+<*
+ Test combining multiple states with bitwise OR.
+*>
+fn void test_filter_combined_states() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers in different states
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 4 }, 6884, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.state = peer_pool::PeerState.CONNECTED;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.state = peer_pool::PeerState.CONNECTING;
+
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.state = peer_pool::PeerState.DISCONNECTED;
+
+    // Filter for CONNECTED | CONNECTING
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.state_flags = (char)(peer_pool::PeerStateFlag.CONNECTED | peer_pool::PeerStateFlag.CONNECTING);
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show 2 peers (CONNECTED + CONNECTING)
+    assert(info.len == 2, "Should show CONNECTED and CONNECTING peers");
+}
+
+<*
+ Test excluding states with bitwise NOT.
+*>
+fn void test_filter_exclude_states() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers in different states
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.state = peer_pool::PeerState.CONNECTED;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.state = peer_pool::PeerState.BANNED;
+
+    // Filter for ALL except BANNED
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.state_flags = (char)(peer_pool::PeerStateFlag.ALL & ~peer_pool::PeerStateFlag.BANNED);
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show 2 peers (all except banned)
+    assert(info.len == 2, "Should exclude BANNED peers");
+
+    // Verify banned peer is not in results
+    bool found_banned = false;
+    for (usz i = 0; i < info.len; i++)
+    {
+        if (info[i].port == 6882) found_banned = true;
+    }
+    assert(!found_banned, "Banned peer should not be in results");
+}
+
+<*
+ Test filtering by seeds only.
+*>
+fn void test_filter_seeds_only() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers - some seeds, some leechers
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.seed = true;
+
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.seed = true;
+
+    // Filter for seeds only
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.seeds_only = true;
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show 2 seeds
+    assert(info.len == 2, "Should show only seeds");
+}
+
+<*
+ Test filtering by leechers only.
+*>
+fn void test_filter_leechers_only() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers - some seeds, some leechers
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.seed = true;
+
+    // Filter for leechers only
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.leechers_only = true;
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show 2 leechers
+    assert(info.len == 2, "Should show only leechers");
+}
+
+<*
+ Test filtering by peer source.
+*>
+fn void test_filter_by_source() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers from different sources
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.DHT);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.PEX);
+
+    // Filter for TRACKER only
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.filter_by_source = true;
+    filter.source_filter = common::PeerSource.TRACKER;
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show only 1 peer from tracker
+    assert(info.len == 1, "Should show only TRACKER peers");
+    assert(info[0].port == 6881, "Should be tracker peer");
+}
+
+<*
+ Test empty result when all peers filtered out.
+*>
+fn void test_filter_empty_result() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers all in DISCOVERED state
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+
+    // Filter for CONNECTED only (but no peers are connected)
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.state_flags = (char)peer_pool::PeerStateFlag.CONNECTED;
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should return empty array
+    assert(info.len == 0, "Should return empty array when all filtered out");
+}
+
+<*
+ Test sorting by state priority.
+*>
+fn void test_sort_by_state() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers in different states
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.state = peer_pool::PeerState.DISCOVERED;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.state = peer_pool::PeerState.CONNECTED;
+
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.state = peer_pool::PeerState.CONNECTING;
+
+    // Sort by state
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Order should be: CONNECTED, CONNECTING, DISCOVERED
+    assert(info.len == 3, "Should have 3 peers");
+    assert(info[0].port == 6882, "First should be CONNECTED");
+    assert(info[1].port == 6883, "Second should be CONNECTING");
+    assert(info[2].port == 6881, "Third should be DISCOVERED");
+}
+
+<*
+ Test sorting by download amount.
+*>
+fn void test_sort_by_downloaded() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers with different download amounts
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.prev_amount_download = 1000;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.prev_amount_download = 5000;
+
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.prev_amount_download = 3000;
+
+    // Sort by downloaded (highest first)
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_DOWNLOADED);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Order should be: 5000, 3000, 1000
+    assert(info.len == 3, "Should have 3 peers");
+    assert(info[0].port == 6882, "First should have most downloaded");
+    assert(info[1].port == 6883, "Second should have middle downloaded");
+    assert(info[2].port == 6881, "Third should have least downloaded");
+}
+
+<*
+ Test sorting by peer rank.
+*>
+fn void test_sort_by_rank() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers with different characteristics
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    // Mark one as seed (boosts rank)
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.seed = true;
+
+    // Mark one with download history (boosts rank)
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.prev_amount_download = 10000;
+
+    // Update ranks
+    pool.update_candidate_cache();
+
+    // Sort by rank (highest first)
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_RANK);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Verify peers are sorted by rank
+    assert(info.len == 3, "Should have 3 peers");
+    // peer3 should be first (download history gives +100)
+    assert(info[0].port == 6883, "Peer with download history should be first");
+}
+
+<*
+ Test sorting by reliability (failures).
+*>
+fn void test_sort_by_reliability() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add peers with different failure counts
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.failcount = 5;
+    peer1.hashfails = 2;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.failcount = 1;
+    peer2.hashfails = 0;
+
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.failcount = 0;
+    peer3.hashfails = 0;
+
+    // Sort by reliability (fewest failures first)
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_RELIABILITY);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Order should be: peer3 (0 failures), peer2 (1 failure), peer1 (7 failures)
+    assert(info.len == 3, "Should have 3 peers");
+    assert(info[0].port == 6883, "Most reliable peer should be first");
+    assert(info[2].port == 6881, "Least reliable peer should be last");
+}
+
+<*
+ Test filtering on empty pool.
+*>
+fn void test_filter_empty_pool() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Don't add any peers
+
+    // Apply filter
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should return empty array
+    assert(info.len == 0, "Empty pool should return empty array");
+}
+
+<*
+ Test complex filter: multiple criteria combined.
+*>
+fn void test_filter_complex() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    char[20] info_hash;
+    char[20] peer_id;
+
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id);
+    defer peer_pool::free(pool);
+
+    // Add various peers
+    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.DHT);
+    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    pool.add_peer({ 192, 168, 1, 4 }, 6884, common::PeerSource.TRACKER);
+
+    // Set characteristics
+    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer1.state = peer_pool::PeerState.CONNECTED;
+    peer1.seed = true;
+
+    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2.state = peer_pool::PeerState.CONNECTED;
+    peer2.seed = true;
+
+    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer3.state = peer_pool::PeerState.CONNECTING;
+
+    peer_pool::TorrentPeer* peer4 = pool.find_peer({ 192, 168, 1, 4 }, 6884)!!;
+    peer4.state = peer_pool::PeerState.CONNECTED;
+    peer4.seed = false;
+
+    // Complex filter: CONNECTED state + seeds only + from TRACKER only
+    peer_pool::PeerFilter filter = peer_pool::create_default_filter();
+    filter.state_flags = (char)peer_pool::PeerStateFlag.CONNECTED;
+    filter.seeds_only = true;
+    filter.filter_by_source = true;
+    filter.source_filter = common::PeerSource.TRACKER;
+
+    peer_pool::PeerDisplayInfo[] info = pool.get_peer_display_info_filtered(&filter, peer_pool::PeerSortOrder.SORT_BY_STATE);
+    defer {
+        for (usz i = 0; i < info.len; i++)
+        {
+            free(info[i].ip_address);
+            free(info[i].client);
+            free(info[i].state);
+        }
+        free(info);
+    }
+
+    // Should show only peer1 (CONNECTED + seed + TRACKER)
+    // peer2 is excluded (DHT source)
+    // peer3 is excluded (not CONNECTED)
+    // peer4 is excluded (not seed)
+    assert(info.len == 1, "Should match only 1 peer with all criteria");
+    assert(info[0].port == 6881, "Should be peer1");
+}
