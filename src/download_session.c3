@@ -1244,20 +1244,81 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
 {
     if (!ctx.dht_client || !ctx.torrent) return;
 
-    // Create get_peers search for this torrent's info hash
-    ctx.dht_search = dht_get_peers::create_search(ctx.torrent.info_hash);
+    // Create get_peers search if it doesn't exist
+    if (!ctx.dht_search)
+    {
+        ctx.dht_search = dht_get_peers::create_search(ctx.torrent.info_hash);
+    }
 
-    // TODO: Actually send get_peers queries to DHT
-    // For now, this is a placeholder - full DHT query implementation
-    // would integrate with the DHT client's send_get_peers method
+    // Get 8 closest nodes from routing table for this info_hash
+    dht_routing_table::NodeEntry[] nodes =
+        dht_routing_table::find_closest_nodes(
+            ctx.dht_client.routing_table,
+            ctx.torrent.info_hash,
+            8
+        );
+    defer free(nodes);
 
-    io::printfn("[DHT] Searching for peers for torrent...");
+    if (nodes.len == 0)
+    {
+        io::printfn("[DHT] No nodes in routing table yet, will retry later");
+        return;
+    }
 
-    // In a full implementation, we would:
-    // 1. Get closest nodes from routing table
-    // 2. Send get_peers queries to those nodes
-    // 3. Process responses and add peers to peer pool
-    // 4. Handle announce tokens for announcing we have the torrent
+    io::printfn("[DHT] Querying %d DHT nodes for peers...", nodes.len);
+
+    // Send get_peers query to each node
+    for (int i = 0; i < (int)nodes.len; i++)
+    {
+        dht_client::send_get_peers(
+            ctx.dht_client,
+            nodes[i].id,
+            nodes[i].ip,
+            nodes[i].port,
+            ctx.torrent.info_hash,
+            ctx.dht_search
+        );
+    }
+
+    // Schedule check for results in 5 seconds
+    async::timer::Timer*? check_timer_opt = async::timer::create(ctx.loop);
+    if (catch err = check_timer_opt)
+    {
+        io::eprintfn("[DHT] Warning: Failed to create check timer");
+    }
+    else
+    {
+        async::timer::Timer* check_timer = check_timer_opt;
+        async::timer::start(check_timer, 5000, 0, &on_dht_check_results, ctx);
+    }
+}
+
+<*
+ Timer callback to check DHT peer discovery results.
+ Called 5 seconds after sending get_peers queries.
+*>
+fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (!ctx.dht_search)
+    {
+        async::timer::close(timer);
+        return;
+    }
+
+    // Check if we found any peers
+    if (dht_get_peers::found_peers(ctx.dht_search))
+    {
+        on_dht_peers_found(ctx);
+    }
+    else
+    {
+        io::printfn("[DHT] No peers found yet, will retry on next timer");
+    }
+
+    // Close timer (one-shot)
+    async::timer::close(timer);
 }
 
 <*

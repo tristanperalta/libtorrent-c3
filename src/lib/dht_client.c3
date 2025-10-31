@@ -7,6 +7,7 @@ import std::core::mem::allocator;
 import libtorrent::common;
 import libtorrent::dht_routing_table;
 import libtorrent::dht_rpc_manager;
+import libtorrent::dht_get_peers;
 import libtorrent::krpc;
 import libtorrent::bencode;
 import async::udp;
@@ -256,6 +257,7 @@ struct RpcCallbackContext
     DhtClient* client;
     krpc::QueryType query_type;
     String raw_message;  // Store raw message for full decode in callback
+    void* search_context;  // Pointer to GetPeersSearch for get_peers queries (null for other queries)
 }
 
 /**
@@ -371,17 +373,21 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
             }
 
         case krpc::QueryType.GET_PEERS:
+            // Get search context from callback
+            dht_get_peers::GetPeersSearch* search = (dht_get_peers::GetPeersSearch*)ctx.search_context;
+
             // Get_peers can return either peers (values) or nodes
             bencode::BencodeValue* values_val = bencode::dict_get(r_dict, "values");
             bencode::BencodeValue* nodes_val = bencode::dict_get(r_dict, "nodes");
 
             if (values_val != null && values_val.type == bencode::BencodeType.LIST)
             {
-                // Response contains peers
+                // Response contains peers - add them to search
                 int peer_count = (int)values_val.list.len();
                 io::printfn("[DHT] Received %d peers from get_peers", peer_count);
 
-                for (int i = 0; i < peer_count && i < 10; i++)
+                int added = 0;
+                for (int i = 0; i < peer_count; i++)
                 {
                     bencode::BencodeValue* peer_val = values_val.list.get(i);
                     if (peer_val && peer_val.type == bencode::BencodeType.STRING &&
@@ -397,9 +403,22 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                         ushort port = ((ushort)peer_val.string[4] << 8) |
                                        (ushort)peer_val.string[5];
 
-                        String ip_str = ip_to_string(ip);
-                        io::printfn("[DHT]   Peer: %s:%d", ip_str, port);
+                        // Add peer to search if we have search context
+                        if (search && dht_get_peers::add_peer(search, ip, port))
+                        {
+                            added++;
+                            if (added <= 3)  // Log first 3
+                            {
+                                String ip_str = ip_to_string(ip);
+                                io::printfn("[DHT]   Peer: %s:%d", ip_str, port);
+                            }
+                        }
                     }
+                }
+
+                if (search && added > 0)
+                {
+                    search.found_peers = true;
                 }
             }
             else if (nodes_val != null && nodes_val.type == bencode::BencodeType.STRING)
@@ -409,7 +428,26 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                 int node_count = (int)(nodes_data.len / 26);
                 io::printfn("[DHT] Received %d nodes from get_peers (no peers yet)", node_count);
 
-                // Could add these nodes to routing table too
+                // Add these nodes to routing table for future queries
+                for (int i = 0; i < node_count; i++)
+                {
+                    usz offset = (usz)i * 26;
+                    if (offset + 26 > nodes_data.len) break;
+
+                    common::NodeId node_id;
+                    for (int j = 0; j < 20; j++) node_id[j] = nodes_data[offset + j];
+
+                    common::Ipv4Addr ip;
+                    ip[0] = nodes_data[offset + 20];
+                    ip[1] = nodes_data[offset + 21];
+                    ip[2] = nodes_data[offset + 22];
+                    ip[3] = nodes_data[offset + 23];
+
+                    ushort port = ((ushort)nodes_data[offset + 24] << 8) |
+                                   (ushort)nodes_data[offset + 25];
+
+                    dht_routing_table::add_node(client.routing_table, node_id, ip, port, 100);
+                }
             }
 
             // Extract token for future announce_peer
@@ -442,6 +480,7 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
     ctx.client = client;
     ctx.query_type = krpc::QueryType.PING;
+    ctx.search_context = null;
 
     // Create transaction
     char[2]? tid_opt = dht_rpc_manager::create_transaction(
@@ -498,6 +537,7 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
     ctx.client = client;
     ctx.query_type = krpc::QueryType.FIND_NODE;
+    ctx.search_context = null;
 
     // Create transaction
     char[2]? tid_opt = dht_rpc_manager::create_transaction(
@@ -544,16 +584,18 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
  * @param target_ip Target IP address
  * @param target_port Target port
  * @param info_hash Torrent info hash to search for
+ * @param search_context Pointer to GetPeersSearch (for tracking responses)
  * @return true if query was sent
  */
 fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
                        common::Ipv4Addr target_ip, ushort target_port,
-                       common::InfoHash info_hash) @public
+                       common::InfoHash info_hash, void* search_context) @public
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
     ctx.client = client;
     ctx.query_type = krpc::QueryType.GET_PEERS;
+    ctx.search_context = search_context;
 
     // Create transaction
     char[2]? tid_opt = dht_rpc_manager::create_transaction(
