@@ -369,7 +369,6 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
     switch (msg.type)
     {
         case peer_wire::MessageType.BITFIELD:
-            io::printfn("  [DEBUG] === BITFIELD HANDLER ENTERED ===");
             // Peer sent their bitfield - update piece availability
             if (msg.payload.len > 0)
             {
@@ -415,22 +414,12 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 // Start piece downloads based on peer availability
                 // Try to fill all available download slots (up to max_concurrent_pieces)
 
-                // Debug: Check download manager state
-                usz total, complete, downloading;
-                ctx.dm.get_progress(&total, &complete, &downloading);
-                io::printfn("    [DEBUG] DM state: total=%d, complete=%d, downloading=%d",
-                           total, complete, downloading);
-
                 int pieces_started = 0;
                 for (int i = 0; i < 5; i++)
                 {
                     if (catch excuse = ctx.dm.start_piece_download(has_pieces))
                     {
                         // No more pieces to download or no slots available (both are fine)
-                        if (i == 0 && pieces_started == 0)
-                        {
-                            io::printfn("    [DEBUG] Failed to start piece: %s", excuse);
-                        }
                         break;
                     }
                     pieces_started++;
@@ -440,10 +429,6 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 {
                     io::printfn("    Started downloading %d piece%s",
                                pieces_started, pieces_started == 1 ? "" : "s");
-                }
-                else
-                {
-                    io::printfn("    [DEBUG] Could not start any new pieces (may be normal if slots full)");
                 }
 
                 free(has_pieces);
@@ -614,10 +599,6 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
         if (catch err = req)
         {
             // No more blocks available right now
-            if (attempts == 0)
-            {
-                io::printfn("  [DEBUG] No blocks available from download manager");
-            }
             break;
         }
 
@@ -648,11 +629,6 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
                 valid_peer_count++;
 
                 // Send REQUEST message
-                if (requests_sent == 0)
-                {
-                    io::printfn("  [DEBUG] First request: piece=%d offset=%d length=%d",
-                               req.piece_index, req.offset, req.length);
-                }
                 peer_info.connection.send_request(req.piece_index, req.offset, req.length)!!;
                 ctx.dm.mark_block_requested(req.piece_index, req.offset)!!;
                 requests_sent++;
@@ -663,12 +639,6 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
 
         if (!requested)
         {
-            if (attempts == 0)
-            {
-                io::printfn("  [DEBUG] No valid peers: total=%d, has_conn=%d, connected=%d, handshake_ok=%d, valid=%d",
-                           ctx.peer_pool.peers.len, has_connection_count, is_connected_count,
-                           handshake_ok_count, valid_peer_count);
-            }
             break;
         }
     }
@@ -902,18 +872,6 @@ fn void on_verify_existing_piece(uint piece_index, bool verified, int status, vo
     {
         // Piece exists and is valid - mark as complete
         ctx.dm.picker.mark_complete(piece_index)!!;
-        if (ctx.pieces_verified_count <= 5)
-        {
-            io::printfn("  [DEBUG] Piece %d verified and marked complete", piece_index);
-        }
-    }
-    else
-    {
-        if (ctx.pieces_verified_count <= 5)
-        {
-            io::printfn("  [DEBUG] Piece %d NOT verified (status=%d, verified=%s)",
-                       piece_index, status, verified ? "true" : "false");
-        }
     }
 
     // Show progress every 1000 pieces
