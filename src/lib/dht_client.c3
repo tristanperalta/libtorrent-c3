@@ -474,7 +474,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
  * @return true if query was sent
  */
 fn bool send_ping(DhtClient* client, common::NodeId target_id,
-                  common::Ipv4Addr target_ip, ushort target_port) @public
+                  common::Ipv4Addr target_ip, ushort target_port) @public => @pool()
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
@@ -537,7 +537,7 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
  */
 fn bool send_find_node(DhtClient* client, common::NodeId target_id,
                        common::Ipv4Addr target_ip, ushort target_port,
-                       common::NodeId search_id) @public
+                       common::NodeId search_id) @public => @pool()
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
@@ -601,7 +601,7 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
  */
 fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
                        common::Ipv4Addr target_ip, ushort target_port,
-                       common::InfoHash info_hash, void* search_context) @public
+                       common::InfoHash info_hash, void* search_context) @public => @pool()
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
