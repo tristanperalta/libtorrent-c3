@@ -44,7 +44,7 @@ struct LoadContext
     String path;
     LoadCompleteCallback cb;
     void* user_data;
-    async::file::File file;
+    async::file::FileHandle* file;
     char[] file_data;
     long file_size;
 }
@@ -79,7 +79,7 @@ fn void on_stat_complete(uv::FileStat* stat, int status, void* user_data)
 <*
  open() callback - file opened, now read contents.
 *>
-fn void on_open_complete(async::file::File file, int status, void* user_data)
+fn void on_open_complete(async::file::FileHandle* file, int status, void* user_data)
 {
     LoadContext* ctx = (LoadContext*)user_data;
 
@@ -99,7 +99,7 @@ fn void on_open_complete(async::file::File file, int status, void* user_data)
     ctx.file = file;
 
     // Read entire file (offset 0, size from stat)
-    async::file::read(ctx.loop, file, 0, (usz)ctx.file_size,
+    file.read(0, (usz)ctx.file_size,
                      &on_read_complete, ctx);
 }
 
@@ -117,7 +117,7 @@ fn void on_read_complete(char[] data, int status, void* user_data)
         {
             ctx.cb("", status, ctx.user_data);
         }
-        async::file::close(ctx.loop, ctx.file, null, null);
+        ctx.file.close(null, null);
         std::core::mem::free(ctx.path);
         std::core::mem::free(ctx);
         return;
@@ -131,7 +131,7 @@ fn void on_read_complete(char[] data, int status, void* user_data)
     }
 
     // Close file
-    async::file::close(ctx.loop, ctx.file, &on_close_complete, ctx);
+    ctx.file.close(&on_close_complete, ctx);
 }
 
 <*
@@ -181,7 +181,7 @@ fn void load_file_async(event_loop::EventLoop* loop, String path,
     ctx.path = path.copy(mem);  // Copy path since it may be temporary
     ctx.cb = callback;
     ctx.user_data = user_data;
-    ctx.file = -1;
+    ctx.file = null;
     ctx.file_data = {};
     ctx.file_size = 0;
 

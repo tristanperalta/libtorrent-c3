@@ -172,49 +172,49 @@ fn void on_complete_download(DownloadContext* ctx) @public
     // Stop announce timers
     if (ctx.announce_timer)
     {
-        async::timer::close(ctx.announce_timer);
+        ctx.announce_timer.close();
         ctx.announce_timer = null;
     }
     if (ctx.retry_timer)
     {
-        async::timer::close(ctx.retry_timer);
+        ctx.retry_timer.close();
         ctx.retry_timer = null;
     }
     if (ctx.pex_timer)
     {
-        async::timer::close(ctx.pex_timer);
+        ctx.pex_timer.close();
         ctx.pex_timer = null;
     }
     if (ctx.keepalive_timer)
     {
-        async::timer::close(ctx.keepalive_timer);
+        ctx.keepalive_timer.close();
         ctx.keepalive_timer = null;
     }
     if (ctx.flush_timer)
     {
-        async::timer::close(ctx.flush_timer);
+        ctx.flush_timer.close();
         ctx.flush_timer = null;
     }
     if (ctx.block_timeout_timer)
     {
-        async::timer::close(ctx.block_timeout_timer);
+        ctx.block_timeout_timer.close();
         ctx.block_timeout_timer = null;
     }
 
     // Stop DHT timers
     if (ctx.dht_timer)
     {
-        async::timer::close(ctx.dht_timer);
+        ctx.dht_timer.close();
         ctx.dht_timer = null;
     }
     if (ctx.dht_check_timer)
     {
-        async::timer::close(ctx.dht_check_timer);
+        ctx.dht_check_timer.close();
         ctx.dht_check_timer = null;
     }
     if (ctx.dht_tick_timer)
     {
-        async::timer::close(ctx.dht_tick_timer);
+        ctx.dht_tick_timer.close();
         ctx.dht_tick_timer = null;
     }
 
@@ -993,7 +993,7 @@ fn void on_announce_retry_timer(async::timer::Timer* timer, void* user_data) @pu
     io::printfn("  Retrying tracker announce (attempt %d)...", ctx.announce_retry_count + 1);
 
     // Close retry timer
-    async::timer::close(timer);
+    timer.close();
     ctx.retry_timer = null;
 
     // Retry announce
@@ -1043,8 +1043,8 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         }
 
         ctx.retry_timer = timer_opt;
-        async::timer::start(ctx.retry_timer, (ulong)backoff_ms, 0,
-                          &on_announce_retry_timer, ctx);
+        ctx.retry_timer.start((ulong)backoff_ms, 0,
+                              &on_announce_retry_timer, ctx);
         return;
     }
 
@@ -1066,8 +1066,8 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         else
         {
             ctx.announce_timer = timer_opt;
-            async::timer::start(ctx.announce_timer, interval_ms, interval_ms,
-                              &on_announce_timer_tick, ctx);
+            ctx.announce_timer.start(interval_ms, interval_ms,
+                                     &on_announce_timer_tick, ctx);
         }
     }
 
@@ -1083,8 +1083,8 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         {
             ctx.pex_timer = timer_opt;
             // Start after 60 seconds, then repeat every 60 seconds
-            async::timer::start(ctx.pex_timer, 60000, 60000,
-                              &on_pex_timer_tick, ctx);
+            ctx.pex_timer.start(60000, 60000,
+                                &on_pex_timer_tick, ctx);
         }
     }
 
@@ -1100,8 +1100,8 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         {
             ctx.keepalive_timer = timer_opt;
             // Start after 120 seconds, then repeat every 120 seconds
-            async::timer::start(ctx.keepalive_timer, 120000, 120000,
-                              &on_keepalive_timer_tick, ctx);
+            ctx.keepalive_timer.start(120000, 120000,
+                                      &on_keepalive_timer_tick, ctx);
         }
     }
 
@@ -1117,8 +1117,8 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         {
             ctx.flush_timer = timer_opt;
             // Start with configured interval
-            async::timer::start(ctx.flush_timer, download_session::FILE_FLUSH_INTERVAL_MS, download_session::FILE_FLUSH_INTERVAL_MS,
-                              &on_flush_timer_tick, ctx);
+            ctx.flush_timer.start(download_session::FILE_FLUSH_INTERVAL_MS, download_session::FILE_FLUSH_INTERVAL_MS,
+                                  &on_flush_timer_tick, ctx);
         }
     }
 
@@ -1134,9 +1134,9 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         {
             ctx.block_timeout_timer = timer_opt;
             // Start with configured interval (10 seconds)
-            async::timer::start(ctx.block_timeout_timer, download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
-                              download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
-                              &on_block_timeout_timer_tick, ctx);
+            ctx.block_timeout_timer.start(download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
+                                          download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
+                                          &on_block_timeout_timer_tick, ctx);
         }
     }
 
@@ -1154,7 +1154,7 @@ fn void on_announce_timer_tick(async::timer::Timer* timer, void* user_data) @pub
     if (ctx.dm.is_complete())
     {
         // Download complete - stop timer
-        async::timer::stop(timer);
+        timer.stop();
         return;
     }
 
@@ -1176,7 +1176,7 @@ fn void on_pex_timer_tick(async::timer::Timer* timer, void* user_data) @public
     if (ctx.dm.is_complete())
     {
         // Download complete - stop timer
-        async::timer::stop(timer);
+        timer.stop();
         return;
     }
 
@@ -1195,7 +1195,7 @@ fn void on_keepalive_timer_tick(async::timer::Timer* timer, void* user_data) @pu
     if (ctx.dm.is_complete())
     {
         // Download complete - stop timer
-        async::timer::stop(timer);
+        timer.stop();
         return;
     }
 
@@ -1217,7 +1217,7 @@ fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
     if (ctx.dm.is_complete())
     {
         // Download complete - stop timer
-        async::timer::stop(timer);
+        timer.stop();
         return;
     }
 
@@ -1239,7 +1239,7 @@ fn void on_block_timeout_timer_tick(async::timer::Timer* timer, void* user_data)
     if (ctx.dm.is_complete())
     {
         // Download complete - stop timer
-        async::timer::stop(timer);
+        timer.stop();
         return;
     }
 
@@ -1379,7 +1379,7 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
     // Close any existing check timer first
     if (ctx.dht_check_timer)
     {
-        async::timer::close(ctx.dht_check_timer);
+        ctx.dht_check_timer.close();
         ctx.dht_check_timer = null;
     }
 
@@ -1391,7 +1391,7 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
     else
     {
         ctx.dht_check_timer = check_timer_opt;
-        async::timer::start(ctx.dht_check_timer, 5000, 0, &on_dht_check_results, ctx);
+        ctx.dht_check_timer.start(5000, 0, &on_dht_check_results, ctx);
     }
 }
 
@@ -1405,7 +1405,7 @@ fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @publi
 
     if (!ctx.dht_search)
     {
-        async::timer::close(timer);
+        timer.close();
         ctx.dht_check_timer = null;
         return;
     }
@@ -1421,7 +1421,7 @@ fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @publi
     }
 
     // Close timer (one-shot) and clear reference
-    async::timer::close(timer);
+    timer.close();
     ctx.dht_check_timer = null;
 }
 
@@ -1493,8 +1493,8 @@ fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @publi
     else
     {
         ctx.dht_timer = timer_opt;
-        async::timer::start(ctx.dht_timer, 300000, 300000,
-                          &on_dht_timer_tick, ctx);
+        ctx.dht_timer.start(300000, 300000,
+                            &on_dht_timer_tick, ctx);
     }
 
     // Set up DHT tick timer for RPC timeout processing (every 1 second)
@@ -1506,8 +1506,8 @@ fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @publi
     else
     {
         ctx.dht_tick_timer = tick_timer_opt;
-        async::timer::start(ctx.dht_tick_timer, 1000, 1000,
-                          &on_dht_tick, ctx);
+        ctx.dht_tick_timer.start(1000, 1000,
+                                 &on_dht_tick, ctx);
     }
 }
 

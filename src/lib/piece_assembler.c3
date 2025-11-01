@@ -45,7 +45,7 @@ struct VerifyContext
     char[20] actual_hash;      // Result computed in thread pool
     VerifyCallback callback;
     void* user_data;
-    async::work::WorkContext* work_ctx;
+    async::event_loop::WorkContext* work_ctx;
     bool owns_data;            // True if we should free piece_data after verification
 }
 
@@ -279,7 +279,7 @@ fn void PieceAssembler.verify(&self, event_loop::EventLoop* loop,
     }
 
     // Create async work context
-    async::work::WorkContext* work_ctx = mem::new(async::work::WorkContext);
+    async::event_loop::WorkContext* work_ctx = mem::new(async::event_loop::WorkContext);
     work_ctx.input = ctx;
     work_ctx.work_fn = &do_verify_work;
     work_ctx.callback = &on_verify_complete;
@@ -287,7 +287,7 @@ fn void PieceAssembler.verify(&self, event_loop::EventLoop* loop,
     ctx.work_ctx = work_ctx;
 
     // Queue work
-    int result = async::work::queue_work(loop, work_ctx);
+    int result = loop.queue_work(work_ctx);
     if (result != 0)
     {
         // Failed to queue - call callback with error
@@ -337,7 +337,7 @@ fn void verify_data(event_loop::EventLoop* loop, uint piece_index, char[] piece_
     ctx.piece_data = piece_data;
 
     // Create async work context
-    async::work::WorkContext* work_ctx = mem::new(async::work::WorkContext);
+    async::event_loop::WorkContext* work_ctx = mem::new(async::event_loop::WorkContext);
     work_ctx.input = ctx;
     work_ctx.work_fn = &do_verify_work;
     work_ctx.callback = &on_verify_complete;
@@ -345,7 +345,7 @@ fn void verify_data(event_loop::EventLoop* loop, uint piece_index, char[] piece_
     ctx.work_ctx = work_ctx;
 
     // Queue work
-    int result = async::work::queue_work(loop, work_ctx);
+    int result = loop.queue_work(work_ctx);
     if (result != 0)
     {
         // Failed to queue - call callback with error

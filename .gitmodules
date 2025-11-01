@@ -1,3 +1,6 @@
 [submodule "vendor/c3-vendor"]
 	path = vendor/c3-vendor
 	url = https://github.com/c3lang/vendor.git
+[submodule "lib/c3io.c3l"]
+	path = lib/c3io.c3l
+	url = https://github.com/tristanperalta/c3io.git

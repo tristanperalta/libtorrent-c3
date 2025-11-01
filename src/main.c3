@@ -1180,46 +1180,46 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     io::printfn("Stopping timers...");
     if (ctx.announce_timer)
     {
-        async::timer::stop(ctx.announce_timer);
-        async::timer::close(ctx.announce_timer);
+        ctx.announce_timer.stop();
+        ctx.announce_timer.close();
     }
     if (ctx.retry_timer)
     {
-        async::timer::stop(ctx.retry_timer);
-        async::timer::close(ctx.retry_timer);
+        ctx.retry_timer.stop();
+        ctx.retry_timer.close();
     }
     if (ctx.pex_timer)
     {
-        async::timer::stop(ctx.pex_timer);
-        async::timer::close(ctx.pex_timer);
+        ctx.pex_timer.stop();
+        ctx.pex_timer.close();
     }
     if (ctx.keepalive_timer)
     {
-        async::timer::stop(ctx.keepalive_timer);
-        async::timer::close(ctx.keepalive_timer);
+        ctx.keepalive_timer.stop();
+        ctx.keepalive_timer.close();
     }
     if (ctx.flush_timer)
     {
-        async::timer::stop(ctx.flush_timer);
-        async::timer::close(ctx.flush_timer);
+        ctx.flush_timer.stop();
+        ctx.flush_timer.close();
     }
 
     // Stop and close DHT timers
     io::printfn("Stopping DHT timers...");
     if (ctx.dht_timer)
     {
-        async::timer::stop(ctx.dht_timer);
-        async::timer::close(ctx.dht_timer);
+        ctx.dht_timer.stop();
+        ctx.dht_timer.close();
     }
     if (ctx.dht_check_timer)
     {
-        async::timer::stop(ctx.dht_check_timer);
-        async::timer::close(ctx.dht_check_timer);
+        ctx.dht_check_timer.stop();
+        ctx.dht_check_timer.close();
     }
     if (ctx.dht_tick_timer)
     {
-        async::timer::stop(ctx.dht_tick_timer);
-        async::timer::close(ctx.dht_tick_timer);
+        ctx.dht_tick_timer.stop();
+        ctx.dht_tick_timer.close();
     }
 
     // Disconnect all peers before freeing peer pool
@@ -1368,7 +1368,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         {
             flush_timer = flush_timer_opt;
             // Start after 2 seconds, then repeat every 2 seconds
-            async::timer::start(flush_timer, 2000, 2000,
+            flush_timer.start(2000, 2000,
                               fn void(async::timer::Timer* timer, void* user_data) {
                                   logger::flush_logs();
                               }, null);
@@ -1419,7 +1419,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Stop and close log flush timer
     if (flush_timer)
     {
-        async::timer::close(flush_timer);
+        flush_timer.close();
     }
 
     // Flush any remaining logs before cleanup

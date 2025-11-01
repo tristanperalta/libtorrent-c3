@@ -413,6 +413,7 @@ struct AnnounceContext
     // Network resources
     async::udp::UdpSocket* socket;
     async::timer::Timer* timeout_timer;
+    async::dns::DnsResolver* dns_resolver;
     uv::Sockaddr* tracker_addr;
     String tracker_host;  // Keep hostname alive for async DNS
     String tracker_port_str;  // Keep port string alive for async DNS
@@ -438,17 +439,24 @@ fn void cleanup_and_callback(AnnounceContext* ctx)
     // Stop and close timer if active
     if (ctx.timeout_timer)
     {
-        async::timer::stop(ctx.timeout_timer);
-        async::timer::close(ctx.timeout_timer);
+        ctx.timeout_timer.stop();
+        ctx.timeout_timer.close();
         ctx.timeout_timer = null;
     }
 
     // Close socket if open
     if (ctx.socket)
     {
-        async::udp::recv_stop(ctx.socket);
-        async::udp::close(ctx.socket);
+        ctx.socket.recv_stop();
+        ctx.socket.close();
         ctx.socket = null;
+    }
+
+    // Free DNS resolver
+    if (ctx.dns_resolver)
+    {
+        free(ctx.dns_resolver);
+        ctx.dns_resolver = null;
     }
 
     // Free tracker address
@@ -508,7 +516,7 @@ fn void on_timeout(async::timer::Timer* timer, void* user_data)
     AnnounceContext* ctx = (AnnounceContext*)user_data;
 
     // Stop timer
-    async::timer::stop(timer);
+    timer.stop();
 
     // Check if we should retry
     if (ctx.retry < udp_tracker::UDP_MAX_RETRIES)
@@ -547,9 +555,9 @@ fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Soc
     }
 
     // Stop receiving and timer
-    async::udp::recv_stop(socket);
+    socket.recv_stop();
     ctx.receiving = false;  // Reset flag so next phase can start receiving
-    async::timer::stop(ctx.timeout_timer);
+    ctx.timeout_timer.stop();
 
     // Copy response data
     ctx.announce_response = mem::new_array(char, data.len);
@@ -644,18 +652,18 @@ fn void start_announce_attempt(AnnounceContext* ctx)
     // Start receiving (only on first attempt - after connect phase recv was stopped)
     if (!ctx.receiving)
     {
-        async::udp::recv_start(ctx.socket, null, &on_announce_response, ctx);
+        ctx.socket.recv_start(null, &on_announce_response, ctx);
         ctx.receiving = true;
     }
 
     // Send announce request
-    async::udp::send_to(ctx.socket, ctx.tracker_addr, ctx.announce_request[..],
+    ctx.socket.send_to(ctx.tracker_addr, ctx.announce_request[..],
                        &on_announce_sent, ctx);
 
     // Start timeout timer
     int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : udp_tracker::UDP_INITIAL_TIMEOUT_SECONDS;
     int timeout_ms = (base_timeout * (1 << ctx.retry)) * 1000;
-    async::timer::start(ctx.timeout_timer, (ulong)timeout_ms, 0, &on_timeout, ctx);
+    ctx.timeout_timer.start((ulong)timeout_ms, 0, &on_timeout, ctx);
 }
 
 <*
@@ -671,9 +679,9 @@ fn void on_connect_response(async::udp::UdpSocket* socket, char[] data, uv::Sock
     }
 
     // Stop receiving and timer
-    async::udp::recv_stop(socket);
+    socket.recv_stop();
     ctx.receiving = false;  // Reset flag so next phase can start receiving
-    async::timer::stop(ctx.timeout_timer);
+    ctx.timeout_timer.stop();
 
     // Copy response
     ctx.connect_response[..] = data[0..CONNECT_RESPONSE_SIZE-1];
@@ -749,18 +757,18 @@ fn void start_connect_attempt(AnnounceContext* ctx)
     // Start receiving (only on first attempt)
     if (!ctx.receiving)
     {
-        async::udp::recv_start(ctx.socket, null, &on_connect_response, ctx);
+        ctx.socket.recv_start(null, &on_connect_response, ctx);
         ctx.receiving = true;
     }
 
     // Send connect request
-    async::udp::send_to(ctx.socket, ctx.tracker_addr, ctx.connect_request[..],
+    ctx.socket.send_to(ctx.tracker_addr, ctx.connect_request[..],
                        &on_connect_sent, ctx);
 
     // Start timeout timer
     int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : udp_tracker::UDP_INITIAL_TIMEOUT_SECONDS;
     int timeout_ms = (base_timeout * (1 << ctx.retry)) * 1000;
-    async::timer::start(ctx.timeout_timer, (ulong)timeout_ms, 0, &on_timeout, ctx);
+    ctx.timeout_timer.start((ulong)timeout_ms, 0, &on_timeout, ctx);
 }
 
 <*
@@ -902,9 +910,12 @@ fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torre
     ctx.announce_response = {};
     ctx.result.peers = {};
 
+    // Create DNS resolver
+    ctx.dns_resolver = async::dns::create(loop);
+
     // Start DNS resolution
     DString port_str;
     port_str.appendf("%d", tracker_port);
     ctx.tracker_port_str = port_str.copy_str(mem);  // Copy to heap for async DNS
-    async::dns::resolve(loop, host, ctx.tracker_port_str, &on_dns_resolved, ctx);
+    ctx.dns_resolver.resolve(host, ctx.tracker_port_str, &on_dns_resolved, ctx);
 }

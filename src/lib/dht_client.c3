@@ -138,10 +138,10 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
         // Bind to DHT port
         DString addr_str;
         addr_str.appendf("0.0.0.0");
-        udp::bind(client.socket, addr_str.str_view(), (int)port);
+        client.socket.bind(addr_str.str_view(), (int)port);
 
         // Start receiving UDP datagrams
-        udp::recv_start(client.socket, &on_udp_alloc, &on_udp_recv, client);
+        client.socket.recv_start(&on_udp_alloc, &on_udp_recv, client);
 
         io::printfn("[DHT] UDP socket bound to port %d", port);
     }
@@ -167,7 +167,7 @@ fn void free_dht_client(DhtClient* client) @public
     // Close UDP socket
     if (client.socket)
     {
-        udp::close(client.socket);
+        client.socket.close();
     }
 
     // Cancel all pending transactions (contexts freed by arena)
@@ -519,7 +519,7 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
     String target_ip_str = ip_to_string(target_ip);
 
     io::printfn("[DHT] Sending ping to %s:%d", target_ip_str, target_port);
-    udp::send(client.socket, target_ip_str, (int)target_port,
+    client.socket.send(target_ip_str, (int)target_port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -582,7 +582,7 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
     String target_ip_str = ip_to_string(target_ip);
 
     io::printfn("[DHT] Sending find_node to %s:%d", target_ip_str, target_port);
-    udp::send(client.socket, target_ip_str, (int)target_port,
+    client.socket.send(target_ip_str, (int)target_port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -646,7 +646,7 @@ fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
     String target_ip_str = ip_to_string(target_ip);
 
     io::printfn("[DHT] Sending get_peers to %s:%d", target_ip_str, target_port);
-    udp::send(client.socket, target_ip_str, (int)target_port,
+    client.socket.send(target_ip_str, (int)target_port,
               (char[])message, &on_udp_send, null);
 
     return true;

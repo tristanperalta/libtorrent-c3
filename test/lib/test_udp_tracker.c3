@@ -83,7 +83,7 @@ fn void mock_tracker_on_recv(async::udp::UdpSocket* socket, char[] data, uv::Soc
         response[14] = (char)(conn_id >> 8);
         response[15] = (char)conn_id;
 
-        async::udp::send_to(socket, addr, response[..], null, null);
+        socket.send_to(addr, response[..], null, null);
     }
     else if (action == udp_tracker::ACTION_ANNOUNCE)
     {
@@ -110,7 +110,7 @@ fn void mock_tracker_on_recv(async::udp::UdpSocket* socket, char[] data, uv::Soc
                 invalid_response[i] = 0;
             }
 
-            async::udp::send_to(socket, addr, invalid_response[..], null, null);
+            socket.send_to(addr, invalid_response[..], null, null);
             return;
         }
 
@@ -147,7 +147,7 @@ fn void mock_tracker_on_recv(async::udp::UdpSocket* socket, char[] data, uv::Soc
         response[18] = 0;
         response[19] = 10;
 
-        async::udp::send_to(socket, addr, response[..], null, null);
+        socket.send_to(addr, response[..], null, null);
     }
 }
 
@@ -165,7 +165,7 @@ fn MockTrackerServer*? create_mock_tracker(event_loop::EventLoop* loop, int port
     server.socket = socket_opt;
 
     // Bind to localhost
-    async::udp::bind(server.socket, "127.0.0.1", port);
+    server.socket.bind("127.0.0.1", port);
 
     // Start receiving
     server.loop = loop;
@@ -174,15 +174,15 @@ fn MockTrackerServer*? create_mock_tracker(event_loop::EventLoop* loop, int port
     server.should_respond = true;
     server.send_invalid_response = false;
 
-    async::udp::recv_start(server.socket, null, &mock_tracker_on_recv, server);
+    server.socket.recv_start(null, &mock_tracker_on_recv, server);
 
     return server;
 }
 
 fn void close_mock_tracker(MockTrackerServer* server)
 {
-    async::udp::recv_stop(server.socket);
-    async::udp::close(server.socket);
+    server.socket.recv_stop();
+    server.socket.close();
     free(server);
 }
 

@@ -48,7 +48,7 @@ struct FileInfo
     String path;           // Relative path within torrent
     ulong length;          // File length in bytes
     ulong offset;          // Offset within torrent (cumulative)
-    async::file::File file; // File handle (or -1 if not open)
+    async::file::FileHandle* file; // File handle (or null if not open)
 }
 
 // Storage manager
@@ -114,7 +114,7 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
         manager.files[0].path = info.name.copy(mem);
         manager.files[0].length = (ulong)info.length;
         manager.files[0].offset = 0;
-        manager.files[0].file = -1;
+        manager.files[0].file = null;
     }
     else
     {
@@ -134,7 +134,7 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
             manager.files[i].path = path_builder.copy_str(mem);
             manager.files[i].length = (ulong)info.files[i].length;
             manager.files[i].offset = (ulong)info.files[i].offset;
-            manager.files[i].file = -1;
+            manager.files[i].file = null;
         }
     }
 
@@ -177,13 +177,18 @@ fn void on_file_sync_complete(int status, void* user_data) @private
 *>
 fn void free(StorageManager* manager) @public
 {
-    // Note: We don't explicitly close file handles here to avoid memory leaks
-    // from async close requests that never complete. The OS will automatically
-    // close all file descriptors when the process exits. For long-running
-    // applications, proper async shutdown should be implemented separately.
+    // Free file handle structs directly without async close
+    // Note: We can't use async close() here because the event loop may be
+    // destroyed before close callbacks run, causing CloseContext leaks.
+    // The file descriptors will be closed by the OS when the process exits.
+    // For long-running applications, use a proper async shutdown sequence.
     for (usz i = 0; i < manager.files.len; i++)
     {
-        manager.files[i].file = -1;
+        if (manager.files[i].file != null)
+        {
+            std::core::mem::free(manager.files[i].file);
+            manager.files[i].file = null;
+        }
     }
 
     // Free file paths
@@ -320,7 +325,7 @@ fn void on_file_truncate_complete(int status, void* user_data)
     open_next_file(ctx);
 }
 
-fn void on_file_open_complete(async::file::File file, int status, void* user_data)
+fn void on_file_open_complete(async::file::FileHandle* file, int status, void* user_data)
 {
     InitContext* ctx = (InitContext*)user_data;
 
@@ -343,8 +348,8 @@ fn void on_file_open_complete(async::file::File file, int status, void* user_dat
     if (ctx.manager.pre_allocate)
     {
         ulong file_length = ctx.manager.files[ctx.current_file].length;
-        async::file::ftruncate(ctx.manager.loop, file, (long)file_length,
-                              &on_file_truncate_complete, ctx);
+        file.ftruncate((long)file_length,
+                       &on_file_truncate_complete, ctx);
     }
     else
     {
@@ -491,7 +496,7 @@ fn void write_next_span(WriteContext* ctx)
 
     // Write to file (note: file handle would need to be opened first)
     // For now, this is simplified - assumes files are open
-    if (file.file == -1)
+    if (file.file == null)
     {
         // File not open - error - clean up
         if (ctx.cb)
@@ -503,8 +508,8 @@ fn void write_next_span(WriteContext* ctx)
         return;
     }
 
-    async::file::write(ctx.manager.loop, file.file, (long)span.file_offset,
-                      span_data, &on_write_block_complete, ctx);
+    file.file.write((long)span.file_offset,
+                    span_data, &on_write_block_complete, ctx);
 }
 
 <*
@@ -610,7 +615,7 @@ fn void read_next_span(ReadContext* ctx)
     FileSpan* span = &ctx.spans[ctx.current_span];
     FileInfo* file = &ctx.manager.files[span.file_index];
 
-    if (file.file == -1)
+    if (file.file == null)
     {
         // File not open - error - clean up
         if (ctx.cb)
@@ -622,8 +627,8 @@ fn void read_next_span(ReadContext* ctx)
         return;
     }
 
-    async::file::read(ctx.manager.loop, file.file, (long)span.file_offset,
-                     (usz)span.length, &on_read_block_complete, ctx);
+    file.file.read((long)span.file_offset,
+                   (usz)span.length, &on_read_block_complete, ctx);
 }
 
 <*
@@ -687,7 +692,7 @@ struct Sha1WorkContext
     char[20] actual_hash;       // Result computed in thread pool
     VerifyCompleteCallback cb;
     void* user_data;
-    async::work::WorkContext* work_ctx;
+    async::event_loop::WorkContext* work_ctx;
 }
 
 <*
@@ -772,7 +777,7 @@ fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status,
     sha1_ctx.user_data = ctx.user_data;
 
     // Create async work context
-    async::work::WorkContext* work_ctx = mem::new(async::work::WorkContext);
+    async::event_loop::WorkContext* work_ctx = mem::new(async::event_loop::WorkContext);
     work_ctx.input = sha1_ctx;
     work_ctx.work_fn = &do_sha1_work;
     work_ctx.callback = &on_sha1_complete;
@@ -780,7 +785,7 @@ fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status,
     sha1_ctx.work_ctx = work_ctx;
 
     // Queue SHA-1 computation to thread pool
-    int result = async::work::queue_work(ctx.manager.loop, work_ctx);
+    int result = ctx.manager.loop.queue_work(work_ctx);
     if (result != 0)
     {
         // Failed to queue - call callback with error
@@ -845,7 +850,7 @@ fn void StorageManager.sync_all_files(&self) @public
     usz files_to_sync = 0;
     for (usz i = 0; i < self.files.len; i++)
     {
-        if (self.files[i].file >= 0)
+        if (self.files[i].file != null)
         {
             files_to_sync++;
         }
@@ -861,10 +866,9 @@ fn void StorageManager.sync_all_files(&self) @public
     // Sync each open file (all run in parallel)
     for (usz i = 0; i < self.files.len; i++)
     {
-        if (self.files[i].file >= 0)
+        if (self.files[i].file != null)
         {
-            async::file::fsync(self.loop, self.files[i].file,
-                             &on_file_sync_complete, ctx);
+            self.files[i].file.fsync(&on_file_sync_complete, ctx);
         }
     }
 }
