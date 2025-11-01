@@ -515,11 +515,42 @@ fn TorrentPeer*? PeerPool.pick_best_candidate(&self) @public
 }
 
 <*
+ Convert disconnect reason enum to string for logging.
+*>
+fn String disconnect_reason_to_string(peer_connection::DisconnectReason reason)
+{
+    switch (reason)
+    {
+        case peer_connection::DisconnectReason.TCP_CONNECT_FAILED:
+            return "TCP_CONNECT_FAILED";
+        case peer_connection::DisconnectReason.READ_START_FAILED:
+            return "READ_START_FAILED";
+        case peer_connection::DisconnectReason.HANDSHAKE_SEND_FAILED:
+            return "HANDSHAKE_SEND_FAILED";
+        case peer_connection::DisconnectReason.HANDSHAKE_WRITE_FAILED:
+            return "HANDSHAKE_WRITE_FAILED";
+        case peer_connection::DisconnectReason.REMOTE_CLOSED:
+            return "REMOTE_CLOSED";
+        case peer_connection::DisconnectReason.INVALID_HANDSHAKE:
+            return "INVALID_HANDSHAKE";
+        case peer_connection::DisconnectReason.WRONG_INFO_HASH:
+            return "WRONG_INFO_HASH";
+        case peer_connection::DisconnectReason.INVALID_MESSAGE:
+            return "INVALID_MESSAGE";
+        case peer_connection::DisconnectReason.USER_CLOSED:
+            return "USER_CLOSED";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+<*
  Internal bridge: Called when peer_connection state changes.
  Routes to user's on_connected/on_disconnected callbacks with IP/port.
 *>
 fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
                                  peer_connection::PeerState state,
+                                 peer_connection::DisconnectReason reason,
                                  void* user_data)
 {
     PeerPool* pool = (PeerPool*)user_data;
@@ -551,8 +582,33 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             return;
 
         case peer_connection::PeerState.CLOSED:
-            // Peer disconnected - update state and notify user
-            peer_info.state = PeerState.DISCONNECTED;
+            // Peer disconnected - increment failcount and possibly ban
+            peer_info.failcount++;
+
+            // Log disconnect with reason and failcount
+            logger::logf(logger::LogLevel.DEBUG,
+                "Peer %d.%d.%d.%d:%d disconnected (reason: %s, failcount: %d/%d)",
+                peer_info.ip[0], peer_info.ip[1], peer_info.ip[2], peer_info.ip[3],
+                peer_info.port,
+                disconnect_reason_to_string(reason),
+                peer_info.failcount,
+                pool.config.max_failcount);
+
+            // Ban peer if too many failures
+            if (peer_info.failcount >= pool.config.max_failcount)
+            {
+                peer_info.state = PeerState.BANNED;
+                logger::logf(logger::LogLevel.WARN,
+                    "Banned peer %d.%d.%d.%d:%d after %d failures",
+                    peer_info.ip[0], peer_info.ip[1], peer_info.ip[2], peer_info.ip[3],
+                    peer_info.port,
+                    peer_info.failcount);
+            }
+            else
+            {
+                peer_info.state = PeerState.DISCONNECTED;
+            }
+
             pool.num_active_connections--;
 
             // Don't call close() from here - it causes recursion since close()
@@ -568,8 +624,8 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             // Broadcast this peer drop to all other connected peers via PEX
             broadcast_pex_update(pool, peer_info.ip, peer_info.port, false);
 
-            // Try to replace this connection (unless we're shutting down)
-            if (!pool.shutting_down)
+            // Try to replace this connection (unless we're shutting down or peer is banned)
+            if (!pool.shutting_down && peer_info.state != PeerState.BANNED)
             {
                 pool.connect_to_peers();
             }

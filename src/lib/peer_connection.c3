@@ -40,13 +40,31 @@ enum PeerState : const char
     CLOSED = 3        // Connection terminated
 }
 
+<*
+ Reason why a peer connection was closed.
+ Used for diagnostics and determining whether to retry connection.
+*>
+enum DisconnectReason : const char
+{
+    UNKNOWN = 0,
+    TCP_CONNECT_FAILED = 1,      // Initial TCP connection failed
+    READ_START_FAILED = 2,       // Failed to start reading from socket
+    HANDSHAKE_SEND_FAILED = 3,   // Failed to send handshake
+    HANDSHAKE_WRITE_FAILED = 4,  // Failed to write handshake (callback)
+    REMOTE_CLOSED = 5,           // Socket closed by remote peer (EOF)
+    INVALID_HANDSHAKE = 6,       // Received invalid handshake format
+    WRONG_INFO_HASH = 7,         // Info hash mismatch in handshake
+    INVALID_MESSAGE = 8,         // Invalid protocol message received
+    USER_CLOSED = 9              // Explicitly closed by user
+}
+
 // Callback for when a message is received from peer.
 // Parameters: peer (connection), msg (received message), user_data (context)
 alias MessageCallback = fn void(PeerConnection* peer, peer_wire::Message* msg, void* user_data);
 
 // Callback for when connection state changes.
-// Parameters: peer (connection), state (new state), user_data (context)
-alias StateCallback = fn void(PeerConnection* peer, PeerState state, void* user_data);
+// Parameters: peer (connection), state (new state), reason (disconnect reason, only valid when state==CLOSED), user_data (context)
+alias StateCallback = fn void(PeerConnection* peer, PeerState state, DisconnectReason reason, void* user_data);
 
 // Callback for when PEX message is received.
 // Parameters: peer (connection), pex_message (decoded PEX message), user_data (context)
@@ -59,6 +77,7 @@ struct PeerConnection
     async::tcp::TcpConnection* tcp;
     event_loop::EventLoop* loop;
     PeerState state;
+    DisconnectReason last_disconnect_reason;  // Reason for disconnect (valid when state==CLOSED)
 
     // Torrent info
     common::InfoHash info_hash;
@@ -176,7 +195,8 @@ fn void close(PeerConnection* peer) @public
     if (peer.state != PeerState.CLOSED)
     {
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.USER_CLOSED;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
     }
 
     if (peer.tcp)
@@ -248,13 +268,14 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
         // Don't call close() as the connection never succeeded
         peer.tcp = null;
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.TCP_CONNECT_FAILED;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
         return;
     }
 
     // Connected - send handshake
     peer.state = PeerState.HANDSHAKING;
-    if (peer.state_cb) peer.state_cb(peer, PeerState.HANDSHAKING, peer.user_data);
+    if (peer.state_cb) peer.state_cb(peer, PeerState.HANDSHAKING, DisconnectReason.UNKNOWN, peer.user_data);
 
     char[] handshake = peer_wire::encode_handshake(peer.info_hash, peer.our_peer_id);
     defer free(handshake);
@@ -269,7 +290,8 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
             peer.tcp = null;
         }
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.READ_START_FAILED;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
         return;
     }
 
@@ -283,7 +305,8 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
             peer.tcp = null;
         }
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.HANDSHAKE_SEND_FAILED;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
         return;
     }
 }
@@ -303,7 +326,8 @@ fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* use
             peer.tcp = null;
         }
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.HANDSHAKE_WRITE_FAILED;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
     }
     // Otherwise just wait for handshake response in on_tcp_read
 }
@@ -332,7 +356,8 @@ fn void on_tcp_read(async::tcp::TcpConnection* conn, char[] data, void* user_dat
             peer.tcp = null;
         }
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.REMOTE_CLOSED;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
         return;
     }
 
@@ -366,7 +391,8 @@ fn void process_handshake(PeerConnection* peer)
     {
         logger::log(logger::LogLevel.ERROR, "Invalid handshake from peer");
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.INVALID_HANDSHAKE;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
         return;
     }
 
@@ -387,7 +413,8 @@ fn void process_handshake(PeerConnection* peer)
     {
         logger::log(logger::LogLevel.ERROR, "Peer sent wrong info hash");
         peer.state = PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+        peer.last_disconnect_reason = DisconnectReason.WRONG_INFO_HASH;
+        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
         return;
     }
 
@@ -405,7 +432,7 @@ fn void process_handshake(PeerConnection* peer)
 
     // Handshake complete - ready for messages
     peer.state = PeerState.READY;
-    if (peer.state_cb) peer.state_cb(peer, PeerState.READY, peer.user_data);
+    if (peer.state_cb) peer.state_cb(peer, PeerState.READY, DisconnectReason.UNKNOWN, peer.user_data);
 
     // Send extension handshake if supported
     if (peer.supports_extensions && !peer.sent_ext_handshake)
@@ -449,7 +476,8 @@ fn void process_messages(PeerConnection* peer)
         {
             logger::log(logger::LogLevel.ERROR, "Invalid message from peer");
             peer.state = PeerState.CLOSED;
-            if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.user_data);
+            peer.last_disconnect_reason = DisconnectReason.INVALID_MESSAGE;
+            if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
             return;
         }
 

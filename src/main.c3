@@ -643,6 +643,7 @@ struct ConnectContext
 
 fn void on_connect_peer_state(peer_connection::PeerConnection* peer,
                                peer_connection::PeerState state,
+                               peer_connection::DisconnectReason reason,
                                void* user_data)
 {
     ConnectContext* ctx = (ConnectContext*)user_data;
