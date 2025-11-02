@@ -28,7 +28,6 @@ import raylib_gui;
 // ============================================================================
 
 // Download configuration
-const int MAX_CONCURRENT_PIECES = 5;       // Max simultaneous piece downloads
 const uint BLOCK_SIZE = 16384;             // 16KB standard block size (BEP 3)
 
 // Peer pool configuration defaults
@@ -1084,6 +1083,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.next_piece_to_verify = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
+    ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
     ctx.gui_state = ui;
 
     // Build storage path (for multi-file torrents, append torrent name)
@@ -1125,7 +1125,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         (uint)torrent.info.piece_length,
         last_piece_length,
         torrent.info.pieces,
-        MAX_CONCURRENT_PIECES,
+        (usz)ctx.max_concurrent_pieces,
         BLOCK_SIZE
     );
 
@@ -1351,6 +1351,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.next_piece_to_verify = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
+    ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
+    ctx.gui_state = null;  // Console mode has no GUI
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
     async::timer::Timer* flush_timer = null;

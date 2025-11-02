@@ -33,6 +33,12 @@ const int FILE_FLUSH_INTERVAL_MS = 5000;
 // Checks for stuck block requests and resets them for retry
 const int BLOCK_TIMEOUT_CHECK_INTERVAL_MS = 10000;
 
+// Default maximum concurrent piece downloads
+// Default: 30 pieces - good balance for typical torrents (256KB-1MB pieces)
+// Allows full utilization of available peers while avoiding excessive memory usage
+// Library users can override this via DownloadContext.max_concurrent_pieces
+const int DEFAULT_MAX_CONCURRENT_PIECES = 30;
+
 <*
  Context for async piece write operations.
 *>
@@ -88,6 +94,7 @@ struct DownloadContext
     // Options
     int numwant;
     String save_path;
+    int max_concurrent_pieces;          // Max pieces to download simultaneously
 
     // GUI integration (null in CLI mode)
     raylib_gui::UIState* gui_state;
@@ -415,7 +422,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 // Try to fill all available download slots (up to max_concurrent_pieces)
 
                 int pieces_started = 0;
-                for (int i = 0; i < 5; i++)
+                for (int i = 0; i < ctx.max_concurrent_pieces; i++)
                 {
                     if (catch excuse = ctx.dm.start_piece_download(has_pieces))
                     {
@@ -523,7 +530,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
 
                 // Start piece downloads
                 int pieces_started = 0;
-                for (int i = 0; i < 5; i++)
+                for (int i = 0; i < ctx.max_concurrent_pieces; i++)
                 {
                     if (catch excuse = ctx.dm.start_piece_download(has_all_pieces))
                     {
@@ -548,7 +555,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
             // Try to start new pieces if we have available slots
             usz total, complete, downloading;
             ctx.dm.get_progress(&total, &complete, &downloading);
-            if (downloading < 5)  // We have free slots
+            if (downloading < (usz)ctx.max_concurrent_pieces)  // We have free slots
             {
                 // Convert peer's Bitfield to bool[] for piece picker
                 bool[] peer_pieces = mem::new_array(bool, total);
@@ -561,7 +568,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
 
                 // Try to fill available slots
                 int pieces_started = 0;
-                for (int i = 0; i < (5 - (int)downloading); i++)
+                for (int i = 0; i < (ctx.max_concurrent_pieces - (int)downloading); i++)
                 {
                     if (catch excuse = ctx.dm.start_piece_download(peer_pieces))
                     {
@@ -574,7 +581,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 {
                     io::printfn("    Started %d new piece%s (slots: %d/%d)",
                                pieces_started, pieces_started == 1 ? "" : "s",
-                               downloading + pieces_started, 5);
+                               downloading + pieces_started, ctx.max_concurrent_pieces);
                 }
             }
 
@@ -1551,7 +1558,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         (uint)torrent.info.piece_length,
         last_piece_length,
         torrent.info.pieces,
-        5,  // Max 5 concurrent pieces
+        (usz)ctx.max_concurrent_pieces,  // Configurable concurrent pieces
         16384  // 16KB blocks
     );
 
