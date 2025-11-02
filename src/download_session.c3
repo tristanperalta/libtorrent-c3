@@ -643,7 +643,14 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
 
                 // Send REQUEST message
                 peer_info.connection.send_request(req.piece_index, req.offset, req.length)!!;
-                ctx.dm.mark_block_requested(req.piece_index, req.offset)!!;
+
+                // Mark block as requested (handle race where piece completes)
+                if (catch excuse = ctx.dm.mark_block_requested(req.piece_index, req.offset))
+                {
+                    // Piece no longer downloading (race condition) - ignore this request
+                    break;
+                }
+
                 requests_sent++;
                 requested = true;
                 break;

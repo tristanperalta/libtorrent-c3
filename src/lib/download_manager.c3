@@ -359,7 +359,13 @@ fn fault? DownloadManager.receive_block(&self, uint piece_index, uint offset, ch
             self.active_downloads[i].piece_index == piece_index)
         {
             // Mark block as received in block manager
-            self.active_downloads[i].blocks.mark_received(offset, data)!!;
+            // Handle BLOCK_ALREADY_RECEIVED gracefully (duplicate from multiple peers)
+            if (catch excuse = self.active_downloads[i].blocks.mark_received(offset, data))
+            {
+                // Block already received from another peer - ignore duplicate
+                // This is normal when multiple peers send the same block concurrently
+                return {};
+            }
 
             // Add block to piece assembler
             return self.active_downloads[i].assembler.add_block(offset, data);
