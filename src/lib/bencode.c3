@@ -165,19 +165,18 @@ fn void encode_recursive(DString* buf, BencodeValue* value)
 /**
  * Encode a BencodeValue into its byte representation.
  *
- * @param value The value to encode
  * @return The bencoded byte string (caller must free)
  *
  * Example:
  *   BencodeValue* val = make_integer(42);
- *   defer free_bencode_value(val);
- *   String encoded = encode(val);
+ *   defer val.free();
+ *   String encoded = val.encode();
  *   defer free(encoded);
  */
-fn String encode(BencodeValue* value) @public
+fn String BencodeValue.encode(&self) @public
 {
     DString buf;
-    encode_recursive(&buf, value);
+    encode_recursive(&buf, self);
     // Copy to mem allocator so it persists (C3 0.7.4+: use 'mem' not 'allocator::heap()')
     return buf.copy_str(mem);
 }
@@ -353,7 +352,7 @@ fn BencodeValue*? decode_value(DecodeState* state)
             if (next == 'e') break;
 
             BencodeValue* item = decode_value(state)!;
-            list_append(list, item);
+            list.list_append(item);
         }
 
         consume(state)!; // consume 'e'
@@ -386,8 +385,8 @@ fn BencodeValue*? decode_value(DecodeState* state)
 
             if (key_val.type != BencodeType.STRING)
             {
-                free_bencode_value(key_val);
-                free_bencode_value(dict);
+                key_val.free();
+                dict.free();
                 return BENCODE_INVALID_DICT_KEY?;
             }
 
@@ -398,10 +397,10 @@ fn BencodeValue*? decode_value(DecodeState* state)
             BencodeValue* value = decode_value(state)!;
 
             // Add to dictionary
-            dict_set(dict, key, value);
+            dict.dict_set(key, value);
 
             // Free the key BencodeValue (we copied the string)
-            free_bencode_value(key_val);
+            key_val.free();
         }
 
         consume(state)!; // consume 'e'
@@ -434,15 +433,14 @@ fn BencodeValue*? decode(String data) @public => @pool()
 /**
  * Get a value from a dictionary by key.
  *
- * @param dict The dictionary BencodeValue
  * @param key The key to look up
  * @return The value if found, or null if not found
  */
-fn BencodeValue* dict_get(BencodeValue* dict, String key) @public
+fn BencodeValue* BencodeValue.dict_get(&self, String key) @public
 {
-    if (dict.type != BencodeType.DICT) return null;
+    if (self.type != BencodeType.DICT) return null;
 
-    foreach (entry : dict.dict.entries())
+    foreach (entry : self.dict.entries())
     {
         if (entry.key == key)
         {
@@ -464,7 +462,7 @@ fn BencodeValue* dict_get(BencodeValue* dict, String key) @public
  */
 macro dict_get_required(btype, dict, key, fault_type)
 {
-    BencodeValue* val = dict_get(dict, key);
+    BencodeValue* val = dict.dict_get(key);
     if (!val || val.type != btype)
     {
         return fault_type?;
@@ -475,47 +473,43 @@ macro dict_get_required(btype, dict, key, fault_type)
 /**
  * Free a BencodeValue and all its nested data.
  * Use with defer for automatic cleanup.
- *
- * @param value The value to free (can be null)
  */
-fn void free_bencode_value(BencodeValue* value) @public
+fn void BencodeValue.free(&self) @public
 {
-    if (!value) return;
-
-    switch (value.type)
+    switch (self.type)
     {
         case STRING:
-            free(value.string);
+            std::core::mem::free(self.string);
         case LIST:
-            foreach (item : value.list.array_view())
+            foreach (item : self.list.array_view())
             {
-                free_bencode_value(item);
+                item.free();
             }
-            value.list.free();
+            self.list.free();
         case DICT:
-            foreach (key : value.dict.keys.array_view())
+            foreach (key : self.dict.keys.array_view())
             {
-                free(key);
+                std::core::mem::free(key);
             }
-            value.dict.keys.free();
-            foreach (val : value.dict.values.array_view())
+            self.dict.keys.free();
+            foreach (val : self.dict.values.array_view())
             {
-                free_bencode_value(val);
+                val.free();
             }
-            value.dict.values.free();
+            self.dict.values.free();
         case INTEGER:
             // No nested allocation
     }
-    free(value);
+    std::core::mem::free(self);
 }
 
 /**
  * Create a bencode integer value.
- * Caller is responsible for freeing with free_bencode_value().
+ * Caller is responsible for freeing with .free().
  *
  * Usage:
  *   BencodeValue* val = make_integer(42);
- *   defer free_bencode_value(val);
+ *   defer val.free();
  *
  * @param value The integer value
  * @return A BencodeValue representing the integer
@@ -530,11 +524,11 @@ fn BencodeValue* make_integer(long value) @public
 
 /**
  * Create a bencode string value.
- * Caller is responsible for freeing with free_bencode_value().
+ * Caller is responsible for freeing with .free().
  *
  * Usage:
  *   BencodeValue* val = make_string("hello");
- *   defer free_bencode_value(val);
+ *   defer val.free();
  *
  * @param value The string value (will be copied)
  * @return A BencodeValue representing the string
@@ -554,11 +548,11 @@ fn BencodeValue* make_string(String value) @public
 
 /**
  * Create a bencode list value.
- * Caller is responsible for freeing with free_bencode_value().
+ * Caller is responsible for freeing with .free().
  *
  * Usage:
  *   BencodeValue* val = make_list();
- *   defer free_bencode_value(val);
+ *   defer val.free();
  *
  * @return An empty BencodeValue list
  */
@@ -572,11 +566,11 @@ fn BencodeValue* make_list() @public
 
 /**
  * Create a bencode dictionary value.
- * Caller is responsible for freeing with free_bencode_value().
+ * Caller is responsible for freeing with .free().
  *
  * Usage:
  *   BencodeValue* val = make_dict();
- *   defer free_bencode_value(val);
+ *   defer val.free();
  *
  * @return An empty BencodeValue dictionary
  */
@@ -592,12 +586,11 @@ fn BencodeValue* make_dict() @public
 /**
  * Append a value to a bencode list.
  *
- * @param list The list to append to (must be a LIST type)
  * @param value The value to append
  */
-fn void list_append(BencodeValue* list, BencodeValue* value) @public
+fn void BencodeValue.list_append(&self, BencodeValue* value) @public
 {
-    list.list.push(value);
+    self.list.push(value);
 }
 
 /**
@@ -623,16 +616,15 @@ fn int compare_strings_lexicographic(String a, String b)
  * Keys must be added in lexicographically sorted order.
  * This function validates that keys are inserted in sorted order.
  *
- * @param dict The dictionary to add to (must be a DICT type)
  * @param key The key (will be copied)
  * @param value The value
  */
-fn void dict_set(BencodeValue* dict, String key, BencodeValue* value) @public
+fn void BencodeValue.dict_set(&self, String key, BencodeValue* value) @public
 {
     // Validate that key is lexicographically greater than last key
-    if (dict.dict.keys.size > 0)
+    if (self.dict.keys.size > 0)
     {
-        char[] last_key = dict.dict.keys.array_view()[dict.dict.keys.size - 1];
+        char[] last_key = self.dict.keys.array_view()[self.dict.keys.size - 1];
         int cmp = compare_strings_lexicographic((String)last_key, key);
         if (cmp >= 0)
         {
@@ -652,8 +644,8 @@ fn void dict_set(BencodeValue* dict, String key, BencodeValue* value) @public
     }
 
     // Add key and value to lists
-    dict.dict.keys.push(key_copy);
-    dict.dict.values.push(value);
+    self.dict.keys.push(key_copy);
+    self.dict.values.push(value);
 }
 
 /**
@@ -716,13 +708,12 @@ fn void to_string_recursive(DString* buf, BencodeValue* value, int indent_level)
 /**
  * Convert a BencodeValue to a human-readable string for debugging.
  *
- * @param value The value to print
  * @return A formatted string representation (caller must free)
  */
-fn String to_string(BencodeValue* value) @public
+fn String BencodeValue.to_string(&self) @public
 {
     DString buf;
-    to_string_recursive(&buf, value, 0);
+    to_string_recursive(&buf, self, 0);
     return buf.copy_str(mem);
 }
 
@@ -782,9 +773,9 @@ fn BencodeDictEntry[] BencodeValue.dict_entries(&self) @public @inline
  *   BencodeValue* list = @blist(item1, item2, item3);
  *   // Equivalent to:
  *   BencodeValue* list = make_list();
- *   list_append(list, item1);
- *   list_append(list, item2);
- *   list_append(list, item3);
+ *   list.list_append(item1);
+ *   list.list_append(item2);
+ *   list.list_append(item3);
  *
  * @param ... Variable number of BencodeValue* items to add to the list
  * @return A BencodeValue* containing the list
@@ -793,7 +784,7 @@ macro BencodeValue* @blist(...)
 {
     BencodeValue* list = make_list();
     $for var $i = 0; $i < $vacount; $i++:
-        list_append(list, $vaarg[$i]);
+        list.list_append($vaarg[$i]);
     $endfor
     return list;
 }
@@ -811,8 +802,8 @@ macro BencodeValue* @blist(...)
  *   );
  *   // Equivalent to:
  *   BencodeValue* dict = make_dict();
- *   dict_set(dict, "name", make_string("example"));
- *   dict_set(dict, "size", make_integer(1024));
+ *   dict.dict_set("name", make_string("example"));
+ *   dict.dict_set("size", make_integer(1024));
  *
  * @param ... Variable number of arguments as key-value pairs (must be even)
  * @return A BencodeValue* containing the dictionary
@@ -822,7 +813,7 @@ macro BencodeValue* @bdict(...)
     $assert $vacount % 2 == 0;
     BencodeValue* dict = make_dict();
     $for var $i = 0; $i < $vacount; $i += 2:
-        dict_set(dict, $vaarg[$i], $vaarg[$i + 1]);
+        dict.dict_set($vaarg[$i], $vaarg[$i + 1]);
     $endfor
     return dict;
 }
@@ -882,7 +873,7 @@ macro BencodeValue* @blist_wrap(...)
 {
     BencodeValue* list = make_list();
     $for var $i = 0; $i < $vacount; $i++:
-        list_append(list, @wrap_value($vaarg[$i]));
+        list.list_append(@wrap_value($vaarg[$i]));
     $endfor
     return list;
 }
@@ -912,7 +903,7 @@ macro BencodeValue* @bdict_wrap(...)
     $assert $vacount % 2 == 0;
     BencodeValue* dict = make_dict();
     $for var $i = 0; $i < $vacount; $i += 2:
-        dict_set(dict, $vaarg[$i], @wrap_value($vaarg[$i + 1]));
+        dict.dict_set($vaarg[$i], @wrap_value($vaarg[$i + 1]));
     $endfor
     return dict;
 }

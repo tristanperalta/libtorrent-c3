@@ -164,37 +164,34 @@ fn Traversal* create_traversal(common::NodeId target) @public
 
 /**
  * Free a traversal
- *
- * @param traversal Traversal to free
  */
-fn void free_traversal(Traversal* traversal) @public
+fn void Traversal.free(&self) @public
 {
-    if (traversal) free(traversal);
+    free(self);
 }
 
 /**
  * Add initial nodes from routing table to traversal
  *
- * @param traversal Traversal state
  * @param initial_nodes Initial candidate nodes from routing table
  * @return Number of nodes added
  */
-fn int add_initial_nodes(Traversal* traversal, dht_routing_table::NodeEntry[] initial_nodes) @public
+fn int Traversal.add_initial_nodes(&self, dht_routing_table::NodeEntry[] initial_nodes) @public
 {
     int added = 0;
 
-    for (usz i = 0; i < initial_nodes.len && traversal.node_count < MAX_TRAVERSAL_NODES; i++)
+    for (usz i = 0; i < initial_nodes.len && self.node_count < MAX_TRAVERSAL_NODES; i++)
     {
-        TraversalNode* node = &traversal.nodes[traversal.node_count];
+        TraversalNode* node = &self.nodes[self.node_count];
 
         // Copy node data
         for (int j = 0; j < 20; j++) node.id[j] = initial_nodes[i].id[j];
         for (int j = 0; j < 4; j++) node.ip[j] = initial_nodes[i].ip[j];
         node.port = initial_nodes[i].port;
         node.state = NodeState.UNQUERIED;
-        node.distance_exp = distance_exp(node.id, traversal.target);
+        node.distance_exp = distance_exp(node.id, self.target);
 
-        traversal.node_count++;
+        self.node_count++;
         added++;
     }
 
@@ -204,29 +201,28 @@ fn int add_initial_nodes(Traversal* traversal, dht_routing_table::NodeEntry[] in
 /**
  * Add a discovered node to the traversal candidate list
  *
- * @param traversal Traversal state
  * @param id Node ID
  * @param ip IP address
  * @param port Port number
  * @return true if node was added (not a duplicate)
  */
-fn bool add_node(Traversal* traversal, common::NodeId id, common::Ipv4Addr ip, ushort port) @public
+fn bool Traversal.add_node(&self, common::NodeId id, common::Ipv4Addr ip, ushort port) @public
 {
     // Check if node already exists
-    if (find_node(traversal, id) >= 0) return false;
+    if (find_node(self, id) >= 0) return false;
 
     // Check if we have space
-    if (traversal.node_count >= MAX_TRAVERSAL_NODES) return false;
+    if (self.node_count >= MAX_TRAVERSAL_NODES) return false;
 
     // Add node
-    TraversalNode* node = &traversal.nodes[traversal.node_count];
+    TraversalNode* node = &self.nodes[self.node_count];
     for (int i = 0; i < 20; i++) node.id[i] = id[i];
     for (int i = 0; i < 4; i++) node.ip[i] = ip[i];
     node.port = port;
     node.state = NodeState.UNQUERIED;
-    node.distance_exp = distance_exp(node.id, traversal.target);
+    node.distance_exp = distance_exp(node.id, self.target);
 
-    traversal.node_count++;
+    self.node_count++;
     return true;
 }
 
@@ -234,20 +230,19 @@ fn bool add_node(Traversal* traversal, common::NodeId id, common::Ipv4Addr ip, u
  * Get the next nodes to query
  * Returns up to alpha unqueried nodes closest to the target
  *
- * @param traversal Traversal state
  * @param max_nodes Maximum number of nodes to return (typically alpha)
  * @return Array of node indices to query
  */
-fn int[] get_next_queries(Traversal* traversal, int max_nodes) @public
+fn int[] Traversal.get_next_queries(&self, int max_nodes) @public
 {
     // Find unqueried nodes
     List{int} candidates;
     candidates.init(mem);
     defer candidates.free();
 
-    for (int i = 0; i < traversal.node_count; i++)
+    for (int i = 0; i < self.node_count; i++)
     {
-        if (traversal.nodes[i].state == NodeState.UNQUERIED)
+        if (self.nodes[i].state == NodeState.UNQUERIED)
         {
             candidates.push(i);
         }
@@ -261,7 +256,7 @@ fn int[] get_next_queries(Traversal* traversal, int max_nodes) @public
             int idx_i = candidates[i];
             int idx_j = candidates[j];
 
-            if (traversal.nodes[idx_j].distance_exp < traversal.nodes[idx_i].distance_exp)
+            if (self.nodes[idx_j].distance_exp < self.nodes[idx_i].distance_exp)
             {
                 // Swap
                 candidates[i] = idx_j;
@@ -286,47 +281,44 @@ fn int[] get_next_queries(Traversal* traversal, int max_nodes) @public
 /**
  * Mark a node as querying
  *
- * @param traversal Traversal state
  * @param id Node ID
  */
-fn void mark_querying(Traversal* traversal, common::NodeId id) @public
+fn void Traversal.mark_querying(&self, common::NodeId id) @public
 {
-    int idx = find_node(traversal, id);
+    int idx = find_node(self, id);
     if (idx >= 0)
     {
-        traversal.nodes[idx].state = NodeState.QUERYING;
-        traversal.queries_sent++;
+        self.nodes[idx].state = NodeState.QUERYING;
+        self.queries_sent++;
     }
 }
 
 /**
  * Mark a node as responded
  *
- * @param traversal Traversal state
  * @param id Node ID
  */
-fn void mark_responded(Traversal* traversal, common::NodeId id) @public
+fn void Traversal.mark_responded(&self, common::NodeId id) @public
 {
-    int idx = find_node(traversal, id);
+    int idx = find_node(self, id);
     if (idx >= 0)
     {
-        traversal.nodes[idx].state = NodeState.RESPONDED;
-        traversal.responses_received++;
+        self.nodes[idx].state = NodeState.RESPONDED;
+        self.responses_received++;
     }
 }
 
 /**
  * Mark a node as failed
  *
- * @param traversal Traversal state
  * @param id Node ID
  */
-fn void mark_failed(Traversal* traversal, common::NodeId id) @public
+fn void Traversal.mark_failed(&self, common::NodeId id) @public
 {
-    int idx = find_node(traversal, id);
+    int idx = find_node(self, id);
     if (idx >= 0)
     {
-        traversal.nodes[idx].state = NodeState.FAILED;
+        self.nodes[idx].state = NodeState.FAILED;
     }
 }
 
@@ -405,19 +397,18 @@ fn bool is_done(Traversal* traversal) @public
 /**
  * Get the k closest responded nodes
  *
- * @param traversal Traversal state
  * @return Array of closest nodes (caller must free)
  */
-fn TraversalNode[] get_closest_nodes(Traversal* traversal) @public
+fn TraversalNode[] Traversal.get_closest_nodes(&self) @public
 {
     // Collect responded nodes
     List{int} responded_indices;
     responded_indices.init(mem);
     defer responded_indices.free();
 
-    for (int i = 0; i < traversal.node_count; i++)
+    for (int i = 0; i < self.node_count; i++)
     {
-        if (traversal.nodes[i].state == NodeState.RESPONDED)
+        if (self.nodes[i].state == NodeState.RESPONDED)
         {
             responded_indices.push(i);
         }
@@ -431,7 +422,7 @@ fn TraversalNode[] get_closest_nodes(Traversal* traversal) @public
             int idx_i = responded_indices[i];
             int idx_j = responded_indices[j];
 
-            if (traversal.nodes[idx_j].distance_exp < traversal.nodes[idx_i].distance_exp)
+            if (self.nodes[idx_j].distance_exp < self.nodes[idx_i].distance_exp)
             {
                 responded_indices[i] = idx_j;
                 responded_indices[j] = idx_i;
@@ -446,7 +437,7 @@ fn TraversalNode[] get_closest_nodes(Traversal* traversal) @public
     TraversalNode[] result = mem::new_array(TraversalNode, take);
     for (int i = 0; i < take; i++)
     {
-        result[i] = traversal.nodes[responded_indices[i]];
+        result[i] = self.nodes[responded_indices[i]];
     }
 
     return result;
@@ -455,15 +446,14 @@ fn TraversalNode[] get_closest_nodes(Traversal* traversal) @public
 /**
  * Get traversal statistics
  *
- * @param traversal Traversal state
  * @param total_nodes Output: total candidate nodes
  * @param queries_sent Output: queries sent
  * @param responses_received Output: responses received
  */
-fn void get_stats(Traversal* traversal, int* total_nodes, int* queries_sent,
-                  int* responses_received) @public
+fn void Traversal.get_stats(&self, int* total_nodes, int* queries_sent,
+                            int* responses_received) @public
 {
-    *total_nodes = traversal.node_count;
-    *queries_sent = traversal.queries_sent;
-    *responses_received = traversal.responses_received;
+    *total_nodes = self.node_count;
+    *queries_sent = self.queries_sent;
+    *responses_received = self.responses_received;
 }

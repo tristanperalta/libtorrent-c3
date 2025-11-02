@@ -35,7 +35,7 @@ fn void test_inspect_real_torrent_numbers() @test
 
     // Decode as bencode first to see structure
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     io::printfn("=== numbers.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
@@ -55,7 +55,7 @@ fn void test_parse_real_torrent_numbers() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -74,7 +74,7 @@ fn void test_parse_real_torrent_sintel() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify basic fields (announce is optional)
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -111,7 +111,7 @@ fn void test_parse_leaves() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify basic fields
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -148,7 +148,7 @@ fn void test_parse_libtorrent_base() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify basic fields
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -170,7 +170,7 @@ fn void test_parse_libtorrent_test1_single() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify basic fields
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -196,7 +196,7 @@ fn void test_parse_url_seed() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.info.length > 0, "Expected file length");
@@ -224,7 +224,7 @@ fn void test_parse_url_seed_multi() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -248,7 +248,7 @@ fn void test_parse_duplicate_web_seeds() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -279,7 +279,7 @@ fn void test_parse_pad_file() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -308,7 +308,7 @@ fn void test_parse_collection() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.collections.len > 0, "Expected collections");
@@ -333,7 +333,7 @@ fn void test_parse_similar() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.similar_count > 0, "Expected similar torrents");
@@ -362,7 +362,7 @@ fn void test_parse_dht_nodes() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.nodes.len > 0, "Expected DHT nodes");
@@ -392,7 +392,7 @@ fn void test_url_list() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // url-list contains empty string - should be filtered out
@@ -410,7 +410,7 @@ fn void test_url_list2() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // url-list contains nested list (invalid) - should be ignored
@@ -427,7 +427,7 @@ fn void test_url_list3() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // url-list contains integer (invalid) - should be ignored
@@ -444,7 +444,7 @@ fn void test_url_seed_multi_space() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.url_list.len == 1, "Expected 1 URL seed");
@@ -467,7 +467,7 @@ fn void test_url_seed_multi_space_nolist() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.url_list.len == 1, "Expected 1 URL seed");
@@ -490,7 +490,7 @@ fn void test_whitespace_url() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.announce.len > 0, "Expected announce URL");
@@ -510,7 +510,7 @@ fn void test_empty_files_1() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -528,7 +528,7 @@ fn void test_empty_files_2() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -546,7 +546,7 @@ fn void test_empty_files_3() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -564,7 +564,7 @@ fn void test_empty_files_4() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -582,7 +582,7 @@ fn void test_empty_files_5() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -600,7 +600,7 @@ fn void test_large_torrent() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -608,7 +608,7 @@ fn void test_large_torrent() @test
     io::printfn("  name: %s", torrent.info.name);
     io::printfn("  total length: %d bytes", torrent.info.length);
     io::printfn("  num files: %d", torrent.info.files.len);
-    io::printfn("  num pieces: %d", metainfo::get_num_pieces(torrent));
+    io::printfn("  num pieces: %d", torrent.get_num_pieces());
 }
 
 // File: test/fixtures/unordered.torrent
@@ -618,7 +618,7 @@ fn void test_unordered_torrent() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -635,7 +635,7 @@ fn void test_single_multi_file() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -669,7 +669,7 @@ fn void test_invalid_name3() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
 
@@ -687,7 +687,7 @@ fn void test_bad_name() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Name with null bytes is now sanitized (null bytes replaced with '_')
     // instead of being replaced with info-hash
@@ -712,12 +712,12 @@ fn void test_inspect_announce_list() @test
     defer free(data);
 
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     io::printfn("=== Checking for announce-list in zero2.torrent ===");
 
     // Check for announce-list
-    BencodeValue* announce_list = bencode::dict_get(root, "announce-list");
+    BencodeValue* announce_list = root.dict_get("announce-list");
     if (announce_list)
     {
         io::printfn("announce-list found! Type: %d", announce_list.type.ordinal);
@@ -745,7 +745,7 @@ fn void test_inspect_announce_list() @test
         io::printn("No announce-list found");
 
         // Check for single announce
-        BencodeValue* announce = bencode::dict_get(root, "announce");
+        BencodeValue* announce = root.dict_get("announce");
         if (announce && announce.type == bencode::BencodeType.STRING)
         {
             io::printfn("Single announce: %s", (String)announce.string);
@@ -754,7 +754,7 @@ fn void test_inspect_announce_list() @test
 
     // Inspect info dict
     io::printn("\n=== Info dictionary structure ===");
-    BencodeValue* info = bencode::dict_get(root, "info");
+    BencodeValue* info = root.dict_get("info");
     if (info && info.type == bencode::BencodeType.DICT)
     {
         io::printfn("Info dict keys (%d):", info.dict.keys.size);
@@ -790,7 +790,7 @@ fn void test_multitracker_numbers_torrent() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify announce-list is parsed
     assert(torrent.announce_list.len > 0, "Expected announce-list to be present");
@@ -829,7 +829,7 @@ fn void test_inspect_creation_date() @test
 
     // Inspect as bencode first
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     io::printfn("=== creation_date.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
@@ -841,7 +841,7 @@ fn void test_inspect_creation_date() @test
         }
 
         // Check info dict
-        BencodeValue* info = bencode::dict_get(root, "info");
+        BencodeValue* info = root.dict_get("info");
         if (info && info.type == bencode::BencodeType.DICT)
         {
             io::printfn("Info dict keys (%d):", info.dict.keys.size);
@@ -861,7 +861,7 @@ fn void test_inspect_url_seed() @test
 
     // Inspect as bencode first
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     io::printfn("=== url_seed.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
@@ -873,7 +873,7 @@ fn void test_inspect_url_seed() @test
         }
 
         // Check for url-list field
-        BencodeValue* url_list = bencode::dict_get(root, "url-list");
+        BencodeValue* url_list = root.dict_get("url-list");
         if (url_list)
         {
             io::printfn("url-list type: %d", url_list.type.ordinal);
@@ -904,7 +904,7 @@ fn void test_inspect_httpseed() @test
 
     // Inspect as bencode first
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     io::printfn("=== httpseed.torrent structure ===");
     if (root.type == bencode::BencodeType.DICT)
@@ -916,7 +916,7 @@ fn void test_inspect_httpseed() @test
         }
 
         // Check for httpseeds field
-        BencodeValue* httpseeds = bencode::dict_get(root, "httpseeds");
+        BencodeValue* httpseeds = root.dict_get("httpseeds");
         if (httpseeds)
         {
             io::printfn("httpseeds type: %d", httpseeds.type.ordinal);
@@ -942,7 +942,7 @@ fn void test_parse_creation_date() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -963,7 +963,7 @@ fn void test_parse_no_creation_date() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -983,7 +983,7 @@ fn void test_parse_httpseed() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     assert(torrent.info.length > 0, "Expected file length");
@@ -1008,7 +1008,7 @@ fn void test_parse_long_name() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Expected file name");
     // long_name.torrent should have a very long filename
@@ -1025,7 +1025,7 @@ fn void test_parse_sample() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify it's a multi-file torrent
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -1045,7 +1045,7 @@ fn void test_web_seeds_optional() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify torrent parses successfully
     assert(torrent.info.name.len > 0, "Expected file name");
@@ -1072,7 +1072,7 @@ fn void test_multifile_file_details() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify it's multi-file
     assert(torrent.info.is_multi_file, "Expected multi-file torrent");
@@ -1111,7 +1111,7 @@ fn void test_multifile_offsets_sequential() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     io::printfn("=== Validating file offsets ===");
 
@@ -1135,7 +1135,7 @@ fn void test_multifile_total_length() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     io::printfn("=== Validating total length ===");
 
@@ -1161,7 +1161,7 @@ fn void test_multifile_path_components() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     io::printfn("=== Validating path components ===");
 
@@ -1195,7 +1195,7 @@ fn void test_multifile_numbers_torrent() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     io::printfn("=== numbers.torrent file structure ===");
     io::printfn("  name: %s", torrent.info.name);
@@ -1485,10 +1485,10 @@ fn void test_sanitize_torrent_name_with_traversal() @test
         "announce", bencode::make_string("http://tracker.example.com/announce"),
         "info", info
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Encode to bencode
-    String data = bencode::encode(root);
+    String data = root.encode();
     defer free(data);
 
     // Path traversal in name should be rejected (strict validation)
@@ -1523,13 +1523,13 @@ fn void test_sanitize_torrent_name_with_null_bytes() @test
         "announce", bencode::make_string("http://tracker.example.com/announce"),
         "info", info
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    String data = bencode::encode(root);
+    String data = root.encode();
     defer free(data);
 
     TorrentFile* t = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(t);
+    defer t.free();
 
     // Null bytes should be replaced
     io::printfn("Sanitized name (null bytes replaced): '%s'", t.info.name);
@@ -1571,13 +1571,13 @@ fn void test_sanitize_file_paths_with_invalid_utf8() @test
         "announce", bencode::make_string("http://tracker.example.com/announce"),
         "info", info
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    String data = bencode::encode(root);
+    String data = root.encode();
     defer free(data);
 
     TorrentFile* t = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(t);
+    defer t.free();
 
     // Check that invalid UTF-8 was repaired
     assert(t.info.is_multi_file, "Should be multi-file torrent");
@@ -1621,13 +1621,13 @@ fn void test_sanitize_file_paths_with_directional_chars() @test
         "announce", bencode::make_string("http://tracker.example.com/announce"),
         "info", info
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    String data = bencode::encode(root);
+    String data = root.encode();
     defer free(data);
 
     TorrentFile* t = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(t);
+    defer t.free();
 
     // Check that directional characters were removed
     assert(t.info.is_multi_file, "Should be multi-file torrent");
@@ -1666,13 +1666,13 @@ fn void test_sanitize_long_file_paths() @test
         "announce", bencode::make_string("http://tracker.example.com/announce"),
         "info", info
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    String data = bencode::encode(root);
+    String data = root.encode();
     defer free(data);
 
     TorrentFile* t = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(t);
+    defer t.free();
 
     // Check that path was truncated to 240 chars
     io::printfn("Original length: %d", long_name.len());
@@ -1853,7 +1853,7 @@ fn void test_parse_symlink1() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify multi-file torrent with symlink
     assert(torrent.info.is_multi_file, "Should be multi-file torrent");
@@ -1885,7 +1885,7 @@ fn void test_parse_symlink2() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // macOS framework with executable symlinks
     assert(torrent.info.is_multi_file, "Should be multi-file torrent");
@@ -1952,7 +1952,7 @@ fn void test_parse_overlapping_symlinks_should_fail() @test
 
     // Complex SDL2.framework - should parse (no loop detection yet)
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify it's a large framework
     assert(torrent.info.is_multi_file, "Should be multi-file torrent");
@@ -2094,7 +2094,7 @@ fn void test_parse_duplicate_files() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Duplicate file paths are valid per BEP 3
     assert(torrent.info.is_multi_file, "Should be multi-file torrent");
@@ -2109,7 +2109,7 @@ fn void test_parse_collection2() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Should have torrent name");
     io::printn("✓ Parsed collection2.torrent successfully");
@@ -2122,7 +2122,7 @@ fn void test_parse_similar2() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Should have torrent name");
     io::printn("✓ Parsed similar2.torrent successfully");
@@ -2139,7 +2139,7 @@ fn void test_parse_test1() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // test1.torrent may have announce-list instead of announce
     assert(torrent.info.name.len > 0, "Should have torrent name");
@@ -2154,7 +2154,7 @@ fn void test_parse_test2() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // test2.torrent may have announce-list instead of announce
     assert(torrent.info.name.len > 0, "Should have torrent name");
@@ -2169,7 +2169,7 @@ fn void test_parse_test3() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // test3.torrent may have announce-list instead of announce
     assert(torrent.info.name.len > 0, "Should have torrent name");
@@ -2184,7 +2184,7 @@ fn void test_parse_test1_pad_files() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.is_multi_file, "Should be multi-file torrent");
     assert(torrent.info.files.len > 0, "Should have files");
@@ -2198,7 +2198,7 @@ fn void test_parse_test2_pad_files() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.is_multi_file, "Should be multi-file torrent");
     assert(torrent.info.files.len > 0, "Should have files");
@@ -2212,7 +2212,7 @@ fn void test_parse_test3_pad_files() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.is_multi_file, "Should be multi-file torrent");
     assert(torrent.info.files.len > 0, "Should have files");
@@ -2226,7 +2226,7 @@ fn void test_parse_test1_single_padded() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Should have torrent name");
     io::printn("✓ Parsed test1_single_padded.torrent successfully");
@@ -2261,7 +2261,7 @@ fn void test_parse_large_piece_size() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Should handle 512 MB piece size
     assert(torrent.info.piece_length > 0, "Should have piece length");
@@ -2275,10 +2275,10 @@ fn void test_parse_many_pieces() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Should handle 1.6 TB file with many pieces
-    usz num_pieces = metainfo::get_num_pieces(torrent);
+    usz num_pieces = torrent.get_num_pieces();
     assert(num_pieces > 0, "Should have pieces");
     io::printfn("✓ Parsed many_pieces.torrent (%d pieces)", num_pieces);
 }
@@ -2294,7 +2294,7 @@ fn void test_parse_url_seed_multi_single_file() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Should have torrent name");
     io::printn("✓ Parsed url_seed_multi_single_file.torrent successfully");
@@ -2307,7 +2307,7 @@ fn void test_parse_empty_httpseed() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     assert(torrent.info.name.len > 0, "Should have torrent name");
     io::printn("✓ Parsed empty_httpseed.torrent successfully");

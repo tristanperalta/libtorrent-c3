@@ -26,7 +26,7 @@ fn void on_message(peer_connection::PeerConnection* peer, peer_wire::Message* ms
     ctx.last_message_type = msg.type;
 }
 
-fn void on_state_change(peer_connection::PeerConnection* peer, peer_connection::PeerState state, void* user_data)
+fn void on_state_change(peer_connection::PeerConnection* peer, peer_connection::PeerState state, peer_connection::DisconnectReason reason, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.state_changes++;
@@ -53,12 +53,6 @@ fn void test_peer_state_enum() @test
 // Connection Lifecycle Tests
 // ============================================================================
 
-fn void test_close_null_peer() @test
-{
-    // Should not crash on null
-    peer_connection::close(null);
-}
-
 fn void test_close_sets_state() @test
 {
     // Create a minimal peer structure for testing
@@ -78,7 +72,7 @@ fn void test_close_sets_state() @test
     if (peer.state != peer_connection::PeerState.CLOSED)
     {
         peer.state = peer_connection::PeerState.CLOSED;
-        if (peer.state_cb) peer.state_cb(&peer, peer_connection::PeerState.CLOSED, peer.user_data);
+        if (peer.state_cb) peer.state_cb(&peer, peer_connection::PeerState.CLOSED, peer_connection::DisconnectReason.UNKNOWN, peer.user_data);
     }
 
     assert(ctx.state_changes == 1, "Should have one state change");
@@ -465,7 +459,7 @@ fn void test_callback_invocation() @test
     // Simulate state change
     if (peer.state_cb)
     {
-        peer.state_cb(&peer, peer_connection::PeerState.READY, peer.user_data);
+        peer.state_cb(&peer, peer_connection::PeerState.READY, peer_connection::DisconnectReason.UNKNOWN, peer.user_data);
     }
 
     assert(ctx.state_changes == 1, "Should have invoked state callback");

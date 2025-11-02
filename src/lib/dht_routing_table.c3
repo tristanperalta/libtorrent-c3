@@ -108,13 +108,12 @@ fn int distance_exp(common::NodeId a, common::NodeId b)
 /**
  * Get the bucket index for a given node ID
  *
- * @param table Routing table
  * @param id Node ID to find bucket for
  * @return Bucket index (0-159)
  */
-fn int bucket_index(RoutingTable* table, common::NodeId id)
+fn int RoutingTable.bucket_index(&self, common::NodeId id)
 {
-    int dist = distance_exp(table.our_id, id);
+    int dist = distance_exp(self.our_id, id);
     if (dist >= 160) return 159;  // Our own ID goes in last bucket
     return 159 - dist;  // Invert so closest nodes are in higher buckets
 }
@@ -198,9 +197,9 @@ fn RoutingTable* create_routing_table(common::NodeId our_id) @public
  *
  * @param table Routing table to free
  */
-fn void free_routing_table(RoutingTable* table) @public
+fn void RoutingTable.free(&self) @public
 {
-    if (table) free(table);
+    free(self);
 }
 
 /**
@@ -214,14 +213,14 @@ fn void free_routing_table(RoutingTable* table) @public
  * @param rtt_ms Round-trip time in milliseconds
  * @return true if node was added/updated successfully
  */
-fn bool add_node(RoutingTable* table, common::NodeId id, common::Ipv4Addr ip,
-                 ushort port, ushort rtt_ms) @public
+fn bool RoutingTable.add_node(&self, common::NodeId id, common::Ipv4Addr ip,
+                              ushort port, ushort rtt_ms) @public
 {
     // Don't add ourselves
     bool is_our_id = true;
     for (int i = 0; i < 20; i++)
     {
-        if (id[i] != table.our_id[i])
+        if (id[i] != self.our_id[i])
         {
             is_our_id = false;
             break;
@@ -230,8 +229,8 @@ fn bool add_node(RoutingTable* table, common::NodeId id, common::Ipv4Addr ip,
     if (is_our_id) return false;
 
     // Find the appropriate bucket
-    int bucket_idx = bucket_index(table, id);
-    KBucket* bucket = &table.buckets[bucket_idx];
+    int bucket_idx = self.bucket_index(id);
+    KBucket* bucket = &self.buckets[bucket_idx];
 
     // Check if node already exists
     int existing_idx = find_node_in_bucket(bucket, id);
@@ -263,7 +262,7 @@ fn bool add_node(RoutingTable* table, common::NodeId id, common::Ipv4Addr ip,
         bucket.live_count++;
 
         // Update active bucket count if this bucket was empty
-        if (bucket.live_count == 1) table.num_active_buckets++;
+        if (bucket.live_count == 1) self.num_active_buckets++;
 
         return true;
     }
@@ -335,10 +334,10 @@ fn bool try_replace_node(KBucket* bucket, common::NodeId new_id, common::Ipv4Add
  * @param table Routing table
  * @param id Node ID that failed
  */
-fn void node_failed(RoutingTable* table, common::NodeId id) @public
+fn void RoutingTable.node_failed(&self, common::NodeId id) @public
 {
-    int bucket_idx = bucket_index(table, id);
-    KBucket* bucket = &table.buckets[bucket_idx];
+    int bucket_idx = self.bucket_index(id);
+    KBucket* bucket = &self.buckets[bucket_idx];
 
     int node_idx = find_node_in_bucket(bucket, id);
     if (node_idx < 0) return;  // Node not found
@@ -355,14 +354,14 @@ fn void node_failed(RoutingTable* table, common::NodeId id) @public
  * @param count Maximum number of nodes to return (typically 8)
  * @return Array of closest nodes (caller must free)
  */
-fn NodeEntry[] find_closest_nodes(RoutingTable* table, common::NodeId target, int count) @public
+fn NodeEntry[] RoutingTable.find_closest_nodes(&self, common::NodeId target, int count) @public
 {
     // Allocate result array
     NodeEntry[] results = mem::new_array(NodeEntry, count);
     int result_count = 0;
 
     // Find the bucket containing the target
-    int target_bucket = bucket_index(table, target);
+    int target_bucket = self.bucket_index(target);
 
     // Collect nodes from target bucket and surrounding buckets
     // Search outward from target bucket in both directions
@@ -371,7 +370,7 @@ fn NodeEntry[] find_closest_nodes(RoutingTable* table, common::NodeId target, in
         // Try bucket at target + offset
         if (target_bucket + offset < NUM_BUCKETS)
         {
-            KBucket* bucket = &table.buckets[target_bucket + offset];
+            KBucket* bucket = &self.buckets[target_bucket + offset];
             for (int i = 0; i < bucket.live_count && result_count < count; i++)
             {
                 results[result_count++] = bucket.live_nodes[i];
@@ -381,7 +380,7 @@ fn NodeEntry[] find_closest_nodes(RoutingTable* table, common::NodeId target, in
         // Try bucket at target - offset (if different from +offset)
         if (offset > 0 && target_bucket - offset >= 0 && result_count < count)
         {
-            KBucket* bucket = &table.buckets[target_bucket - offset];
+            KBucket* bucket = &self.buckets[target_bucket - offset];
             for (int i = 0; i < bucket.live_count && result_count < count; i++)
             {
                 results[result_count++] = bucket.live_nodes[i];
@@ -411,15 +410,15 @@ fn NodeEntry[] find_closest_nodes(RoutingTable* table, common::NodeId target, in
  * @param total_nodes Output: total number of nodes in routing table
  * @param active_buckets Output: number of buckets with at least one node
  */
-fn void get_stats(RoutingTable* table, int* total_nodes, int* active_buckets) @public
+fn void RoutingTable.get_stats(&self, int* total_nodes, int* active_buckets) @public
 {
     int total = 0;
     int active = 0;
 
     for (int i = 0; i < NUM_BUCKETS; i++)
     {
-        total += table.buckets[i].live_count;
-        if (table.buckets[i].live_count > 0) active++;
+        total += self.buckets[i].live_count;
+        if (self.buckets[i].live_count > 0) active++;
     }
 
     *total_nodes = total;

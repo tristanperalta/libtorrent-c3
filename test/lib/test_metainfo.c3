@@ -51,10 +51,10 @@ fn String create_test_torrent()
         "announce", bencode::make_string("http://tracker.example.com:8080/announce"),
         "info", info
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Encode and return
-    String encoded = bencode::encode(root);
+    String encoded = root.encode();
     return encoded;  // Already copied to persistent memory
 }
 
@@ -65,7 +65,7 @@ fn void test_debug_torrent_structure() @test
 
     // Just try to decode as bencode first
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     io::printfn("Root type: %d (DICT=%d)", root.type.ordinal, bencode::BencodeType.DICT.ordinal);
     if (root.type == bencode::BencodeType.DICT)
@@ -84,7 +84,7 @@ fn void test_parse_valid_torrent() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify we got a valid torrent
     assert(torrent != null, "Expected non-null torrent");
@@ -143,7 +143,7 @@ fn void test_extract_announce() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Check that announce field exists and is non-empty
     assert(torrent.announce.len > 0, "Expected non-empty announce URL");
@@ -156,7 +156,7 @@ fn void test_extract_info_name() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Check that name exists
     assert(torrent.info.name.len > 0, "Expected non-empty file name");
@@ -169,7 +169,7 @@ fn void test_extract_info_length() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Check that length is positive
     assert(torrent.info.length > 0, "Expected positive file length");
@@ -182,7 +182,7 @@ fn void test_extract_piece_length() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Check that piece_length is positive
     assert(torrent.info.piece_length > 0, "Expected positive piece length");
@@ -195,7 +195,7 @@ fn void test_extract_pieces() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Check that pieces exist and are multiples of 20
     assert(torrent.info.pieces.len > 0, "Expected non-empty pieces");
@@ -213,7 +213,7 @@ fn void test_optional_created_by() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // created_by is optional, just print it if it exists
     if (torrent.created_by.len > 0)
@@ -232,7 +232,7 @@ fn void test_optional_creation_date() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // creation_date is optional
     if (torrent.creation_date > 0)
@@ -255,9 +255,9 @@ fn void test_get_num_pieces() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
-    usz num_pieces = metainfo::get_num_pieces(torrent);
+    usz num_pieces = torrent.get_num_pieces();
     assert(num_pieces > 0, "Expected at least one piece");
     io::printfn("Number of pieces: %d", num_pieces);
 }
@@ -268,10 +268,10 @@ fn void test_get_piece_hash_valid() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Get first piece hash
-    char[] hash = metainfo::get_piece_hash(torrent, 0)!!;
+    char[] hash = torrent.get_piece_hash( 0)!!;
     assert(hash.len == 20, "Expected 20-byte hash");
 
     io::printf("First piece hash: ");
@@ -288,12 +288,12 @@ fn void test_get_piece_hash_invalid_index() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
-    usz num_pieces = metainfo::get_num_pieces(torrent);
+    usz num_pieces = torrent.get_num_pieces();
 
     // Try to get hash beyond the last piece
-    if (catch err = metainfo::get_piece_hash(torrent, num_pieces))
+    if (catch err = torrent.get_piece_hash( num_pieces))
     {
         // Expected to fail
         io::printn("Correctly rejected out-of-bounds index");
@@ -317,7 +317,7 @@ fn void test_info_hash_calculated() @test
     defer free(data);
 
     TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Verify info_hash is not all zeros
     bool all_zeros = true;
@@ -347,13 +347,13 @@ fn void test_info_hash_deterministic() @test
     defer free(data1);
 
     TorrentFile* torrent1 = metainfo::parse(data1)!!;
-    defer metainfo::free_torrent_file(torrent1);
+    defer torrent1.free();
 
     String data2 = create_test_torrent();
     defer free(data2);
 
     TorrentFile* torrent2 = metainfo::parse(data2)!!;
-    defer metainfo::free_torrent_file(torrent2);
+    defer torrent2.free();
 
     // Verify both have the same info_hash
     for (usz i = 0; i < 20; i++)

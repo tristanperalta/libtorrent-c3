@@ -390,50 +390,46 @@ fn PeerPool* create(event_loop::EventLoop* loop,
 
 <*
  Free peer pool and all associated resources.
-
- @param pool : "Peer pool to free"
 *>
-fn void free(PeerPool* pool) @public
+fn void PeerPool.free(&self) @public
 {
-    if (!pool) return;
-
     // Set shutdown flag to prevent reconnection attempts during cleanup
-    pool.shutting_down = true;
+    self.shutting_down = true;
 
     // Clear callbacks to prevent user notifications during cleanup
-    pool.on_connected = null;
-    pool.on_message = null;
-    pool.on_disconnected = null;
+    self.on_connected = null;
+    self.on_message = null;
+    self.on_disconnected = null;
 
     // Disconnect all active connections (Phase 3)
-    pool.disconnect_all();
+    self.disconnect_all();
 
     // Free all peer structures
-    for (usz i = 0; i < pool.peers.len; i++)
+    for (usz i = 0; i < self.peers.len; i++)
     {
         // Free bitfield if allocated
-        if (pool.peers[i].pieces.data.len > 0)
+        if (self.peers[i].pieces.data.len > 0)
         {
-            bitfield::free(&pool.peers[i].pieces);
+            self.peers[i].pieces.free();
         }
-        std::core::mem::free(pool.peers[i]);
+        std::core::mem::free(self.peers[i]);
     }
 
     // Free peer array
-    if (pool.peers.len > 0)
+    if (self.peers.len > 0)
     {
-        std::core::mem::free(pool.peers);
+        std::core::mem::free(self.peers);
     }
 
     // Free candidate cache (Phase 2)
     // Note: candidate_cache contains pointers to same peers, so don't free the peers again
-    if (pool.candidate_cache.len > 0)
+    if (self.candidate_cache.len > 0)
     {
-        std::core::mem::free(pool.candidate_cache);
+        std::core::mem::free(self.candidate_cache);
     }
 
     // Free pool itself
-    std::core::mem::free(pool);
+    std::core::mem::free(self);
 }
 
 <*
@@ -872,7 +868,7 @@ fn void PeerPool.erase_peer(&self, TorrentPeer* peer) @public
     // Free bitfield if allocated
     if (self.peers[idx].pieces.data.len > 0)
     {
-        bitfield::free(&self.peers[idx].pieces);
+        self.peers[idx].pieces.free();
     }
 
     // Free the peer structure
@@ -963,7 +959,7 @@ fn void PeerPool.disconnect_peer(&self, common::Ipv4Addr ip, ushort port) @publi
     // Close connection if active
     if (peer.connection)
     {
-        peer_connection::close(peer.connection);
+        peer.connection.close();
         peer.connection = null;
         self.num_active_connections--;
     }
@@ -990,7 +986,7 @@ fn void PeerPool.disconnect_all(&self) @public
     {
         if (self.peers[i].connection)
         {
-            peer_connection::close(self.peers[i].connection);
+            self.peers[i].connection.close();
             self.peers[i].connection = null;
             self.peers[i].state = PeerState.DISCONNECTED;
         }
@@ -1029,7 +1025,7 @@ fn void PeerPool.disconnect_all_gracefully(&self) @public
     {
         if (self.peers[i].connection)
         {
-            peer_connection::graceful_close(self.peers[i].connection);
+            self.peers[i].connection.graceful_close();
             self.peers[i].connection = null;
             self.peers[i].state = PeerState.DISCONNECTED;
         }
@@ -1202,11 +1198,11 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
         // Queue the PEX update for this peer
         if (added)
         {
-            peer_connection::add_pex_peer(peer.connection, ip, port, flags);
+            peer.connection.add_pex_peer(ip, port, flags);
         }
         else
         {
-            peer_connection::drop_pex_peer(peer.connection, ip, port);
+            peer.connection.drop_pex_peer(ip, port);
         }
         notified_count++;
     }
@@ -1236,7 +1232,7 @@ fn void PeerPool.send_pex_updates(&self) @public
         {
             // send_pex_message handles rate limiting internally
             // Ignore any errors (peer may have disconnected, etc.)
-            (void)peer_connection::send_pex_message(peer.connection);
+            (void)peer.connection.send_pex_message();
         }
     }
 }

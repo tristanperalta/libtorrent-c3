@@ -185,36 +185,32 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
 
 <*
  Close a peer connection and free resources.
-
- @param peer : "Peer to close"
 *>
-fn void close(PeerConnection* peer) @public
+fn void PeerConnection.close(&self) @public
 {
-    if (!peer) return;
-
-    if (peer.state != PeerState.CLOSED)
+    if (self.state != PeerState.CLOSED)
     {
-        peer.state = PeerState.CLOSED;
-        peer.last_disconnect_reason = DisconnectReason.USER_CLOSED;
-        if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
+        self.state = PeerState.CLOSED;
+        self.last_disconnect_reason = DisconnectReason.USER_CLOSED;
+        if (self.state_cb) self.state_cb(self, PeerState.CLOSED, self.last_disconnect_reason, self.user_data);
     }
 
-    if (peer.tcp)
+    if (self.tcp)
     {
-        peer.tcp.close();
-        peer.tcp = null;
+        self.tcp.close();
+        self.tcp = null;
     }
 
-    if (peer.recv_buffer.len() > 0)
+    if (self.recv_buffer.len() > 0)
     {
-        peer.recv_buffer.free();
+        self.recv_buffer.free();
     }
 
     // Free PEX arrays
-    if (peer.added_peers.len > 0) free(peer.added_peers);
-    if (peer.dropped_peers.len > 0) free(peer.dropped_peers);
+    if (self.added_peers.len > 0) free(self.added_peers);
+    if (self.dropped_peers.len > 0) free(self.dropped_peers);
 
-    free(peer);
+    free(self);
 }
 
 <*
@@ -222,33 +218,30 @@ fn void close(PeerConnection* peer) @public
 
  Sends NOT_INTERESTED and final PEX messages before closing the TCP connection,
  allowing the peer to properly handle our disconnection.
-
- @param peer : "Peer to gracefully close"
 *>
-fn void graceful_close(PeerConnection* peer) @public
+fn void PeerConnection.graceful_close(&self) @public
 {
-    if (!peer) return;
-    if (peer.state == PeerState.CLOSED) return;
+    if (self.state == PeerState.CLOSED) return;
 
     // Log graceful disconnect
     logger::log(logger::LogLevel.INFO, "[Shutdown] Gracefully disconnecting from peer");
 
     // Step 1: Send NOT_INTERESTED if we were interested
     // This tells the peer we're intentionally leaving, not crashing
-    if (peer.am_interested)
+    if (self.am_interested)
     {
-        (void)peer.send_not_interested();  // Ignore errors - we're closing anyway
+        (void)self.send_not_interested();  // Ignore errors - we're closing anyway
     }
 
     // Step 2: Send final PEX message if we have queued peer updates
     // This shares our peer list one last time before leaving the swarm
-    if (peer.supports_pex && (peer.added_peers.len > 0 || peer.dropped_peers.len > 0))
+    if (self.supports_pex && (self.added_peers.len > 0 || self.dropped_peers.len > 0))
     {
-        (void)send_pex_message(peer);  // Ignore errors - best effort delivery
+        (void)self.send_pex_message();  // Ignore errors - best effort delivery
     }
 
     // Step 3: Close the connection (TCP will flush buffers before sending FIN)
-    close(peer);
+    self.close();
 }
 
 // ============================================================================
@@ -823,21 +816,20 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
 
  BEP 11 rate limiting: Maximum 1 PEX message per minute per peer.
 
- @param peer : "Peer to send PEX message to"
  @return "void or fault"
 *>
-fn void? send_pex_message(PeerConnection* peer) @public
+fn void? PeerConnection.send_pex_message(&self) @public
 {
-    if (!peer.supports_pex || peer.peer_pex_msg_id == 0)
+    if (!self.supports_pex || self.peer_pex_msg_id == 0)
     {
         return;  // Peer doesn't support PEX
     }
 
     // Rate limiting: enforce 1 message per minute (BEP 11)
-    if (peer.pex_initialized)
+    if (self.pex_initialized)
     {
         long now_sec = (long)time::now().to_seconds();
-        long elapsed_sec = now_sec - peer.last_pex_sent_sec;
+        long elapsed_sec = now_sec - self.last_pex_sent_sec;
 
         if (elapsed_sec < 60)
         {
@@ -847,25 +839,25 @@ fn void? send_pex_message(PeerConnection* peer) @public
     }
 
     // Check if we have any peers to send
-    if (peer.added_peers.len == 0 && peer.dropped_peers.len == 0)
+    if (self.added_peers.len == 0 && self.dropped_peers.len == 0)
     {
         return;  // Nothing to send
     }
 
     // Build PEX message
     pex::PexMessage pex_msg;
-    pex_msg.added = peer.added_peers;
-    pex_msg.dropped = peer.dropped_peers;
+    pex_msg.added = self.added_peers;
+    pex_msg.dropped = self.dropped_peers;
 
     char[] pex_payload = pex::encode_pex_message(&pex_msg);
     defer free(pex_payload);
 
     // Encode as extension message
-    char[] ext_msg = peer_wire::encode_extension_message(peer.peer_pex_msg_id, pex_payload);
+    char[] ext_msg = peer_wire::encode_extension_message(self.peer_pex_msg_id, pex_payload);
     defer free(ext_msg);
 
     // Send message
-    if (catch err = send_message(peer, ext_msg))
+    if (catch err = send_message(self, ext_msg))
     {
         logger::log(logger::LogLevel.ERROR, "Failed to send PEX message");
         return err?;
@@ -873,22 +865,22 @@ fn void? send_pex_message(PeerConnection* peer) @public
 
     // Log PEX activity
     logger::logf(logger::LogLevel.INFO, "[PEX] Sent %d added, %d dropped peers",
-                 peer.added_peers.len, peer.dropped_peers.len);
+                 self.added_peers.len, self.dropped_peers.len);
 
     // Update rate limit timestamp
-    peer.last_pex_sent_sec = (long)time::now().to_seconds();
-    peer.pex_initialized = true;
+    self.last_pex_sent_sec = (long)time::now().to_seconds();
+    self.pex_initialized = true;
 
     // Clear the peer lists
-    if (peer.added_peers.len > 0)
+    if (self.added_peers.len > 0)
     {
-        free(peer.added_peers);
-        peer.added_peers = {};
+        free(self.added_peers);
+        self.added_peers = {};
     }
-    if (peer.dropped_peers.len > 0)
+    if (self.dropped_peers.len > 0)
     {
-        free(peer.dropped_peers);
-        peer.dropped_peers = {};
+        free(self.dropped_peers);
+        self.dropped_peers = {};
     }
 }
 
@@ -898,36 +890,35 @@ fn void? send_pex_message(PeerConnection* peer) @public
  The peer will be sent in the next PEX message (subject to rate limiting).
  BEP 11: Maximum 50 peers per PEX message.
 
- @param peer : "Peer connection"
  @param ip : "IPv4 address of peer to add"
  @param port : "Port of peer to add"
  @param flags : "PEX flags for this peer"
 *>
-fn void add_pex_peer(PeerConnection* peer, common::Ipv4Addr ip, ushort port, char flags) @public
+fn void PeerConnection.add_pex_peer(&self, common::Ipv4Addr ip, ushort port, char flags) @public
 {
     // BEP 11: Limit to 50 peers per message
-    if (peer.added_peers.len >= 50)
+    if (self.added_peers.len >= 50)
     {
         return;
     }
 
     // Allocate new array with space for one more peer
-    pex::PexPeer[] new_peers = mem::new_array(pex::PexPeer, peer.added_peers.len + 1);
+    pex::PexPeer[] new_peers = mem::new_array(pex::PexPeer, self.added_peers.len + 1);
 
     // Copy existing peers
-    for (usz i = 0; i < peer.added_peers.len; i++)
+    for (usz i = 0; i < self.added_peers.len; i++)
     {
-        new_peers[i] = peer.added_peers[i];
+        new_peers[i] = self.added_peers[i];
     }
 
     // Add new peer
-    new_peers[peer.added_peers.len].ip = ip;
-    new_peers[peer.added_peers.len].port = port;
-    new_peers[peer.added_peers.len].flags = flags;
+    new_peers[self.added_peers.len].ip = ip;
+    new_peers[self.added_peers.len].port = port;
+    new_peers[self.added_peers.len].flags = flags;
 
     // Replace old array
-    if (peer.added_peers.len > 0) free(peer.added_peers);
-    peer.added_peers = new_peers;
+    if (self.added_peers.len > 0) free(self.added_peers);
+    self.added_peers = new_peers;
 }
 
 <*
@@ -936,33 +927,32 @@ fn void add_pex_peer(PeerConnection* peer, common::Ipv4Addr ip, ushort port, cha
  The peer will be sent in the next PEX message (subject to rate limiting).
  BEP 11: Maximum 50 peers per PEX message.
 
- @param peer : "Peer connection"
  @param ip : "IPv4 address of peer that dropped"
  @param port : "Port of peer that dropped"
 *>
-fn void drop_pex_peer(PeerConnection* peer, common::Ipv4Addr ip, ushort port) @public
+fn void PeerConnection.drop_pex_peer(&self, common::Ipv4Addr ip, ushort port) @public
 {
     // BEP 11: Limit to 50 peers per message
-    if (peer.dropped_peers.len >= 50)
+    if (self.dropped_peers.len >= 50)
     {
         return;
     }
 
     // Allocate new array with space for one more peer
-    pex::PexPeer[] new_peers = mem::new_array(pex::PexPeer, peer.dropped_peers.len + 1);
+    pex::PexPeer[] new_peers = mem::new_array(pex::PexPeer, self.dropped_peers.len + 1);
 
     // Copy existing peers
-    for (usz i = 0; i < peer.dropped_peers.len; i++)
+    for (usz i = 0; i < self.dropped_peers.len; i++)
     {
-        new_peers[i] = peer.dropped_peers[i];
+        new_peers[i] = self.dropped_peers[i];
     }
 
     // Add dropped peer (flags don't matter for dropped peers)
-    new_peers[peer.dropped_peers.len].ip = ip;
-    new_peers[peer.dropped_peers.len].port = port;
-    new_peers[peer.dropped_peers.len].flags = 0;
+    new_peers[self.dropped_peers.len].ip = ip;
+    new_peers[self.dropped_peers.len].port = port;
+    new_peers[self.dropped_peers.len].flags = 0;
 
     // Replace old array
-    if (peer.dropped_peers.len > 0) free(peer.dropped_peers);
-    peer.dropped_peers = new_peers;
+    if (self.dropped_peers.len > 0) free(self.dropped_peers);
+    self.dropped_peers = new_peers;
 }

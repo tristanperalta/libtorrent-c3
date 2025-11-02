@@ -272,7 +272,7 @@ fn PexPeer[]? decode_compact_peers(char[] compact, char[] flags) @public
 fn char[] encode_pex_message(PexMessage* msg) @public
 {
     bencode::BencodeValue* dict = bencode::make_dict();
-    defer bencode::free_bencode_value(dict);
+    defer dict.free();
 
     // Encode "added" peers
     if (msg.added.len > 0)
@@ -281,7 +281,7 @@ fn char[] encode_pex_message(PexMessage* msg) @public
         defer free(added_compact);
 
         bencode::BencodeValue* added_val = bencode::make_string((String)added_compact);
-        bencode::dict_set(dict, "added", added_val);
+        dict.dict_set("added", added_val);
 
         // Encode "added.f" flags
         char[] flags = mem::new_array(char, msg.added.len);
@@ -291,7 +291,7 @@ fn char[] encode_pex_message(PexMessage* msg) @public
             flags[i] = peer.flags;
         }
         bencode::BencodeValue* flags_val = bencode::make_string((String)flags);
-        bencode::dict_set(dict, "added.f", flags_val);
+        dict.dict_set("added.f", flags_val);
     }
 
     // Encode "dropped" peers
@@ -301,11 +301,11 @@ fn char[] encode_pex_message(PexMessage* msg) @public
         defer free(dropped_compact);
 
         bencode::BencodeValue* dropped_val = bencode::make_string((String)dropped_compact);
-        bencode::dict_set(dict, "dropped", dropped_val);
+        dict.dict_set("dropped", dropped_val);
     }
 
     // Encode the dictionary using bencode module
-    String encoded = bencode::encode(dict);
+    String encoded = dict.encode();
     return (char[])encoded;
 }
 
@@ -325,7 +325,7 @@ fn PexMessage? decode_pex_message(char[] data) @public
     }
 
     bencode::BencodeValue* root = root_opt;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     if (root.type != bencode::BencodeType.DICT)
     {
@@ -337,12 +337,12 @@ fn PexMessage? decode_pex_message(char[] data) @public
     msg.dropped = {};
 
     // Parse "added" field
-    bencode::BencodeValue* added_val = bencode::dict_get(root, "added");
+    bencode::BencodeValue* added_val = root.dict_get("added");
     if (added_val && added_val.type == bencode::BencodeType.STRING)
     {
         // Parse "added.f" flags (optional)
         char[] flags = {};
-        bencode::BencodeValue* flags_val = bencode::dict_get(root, "added.f");
+        bencode::BencodeValue* flags_val = root.dict_get("added.f");
         if (flags_val && flags_val.type == bencode::BencodeType.STRING)
         {
             flags = flags_val.string;
@@ -358,7 +358,7 @@ fn PexMessage? decode_pex_message(char[] data) @public
     }
 
     // Parse "dropped" field
-    bencode::BencodeValue* dropped_val = bencode::dict_get(root, "dropped");
+    bencode::BencodeValue* dropped_val = root.dict_get("dropped");
     if (dropped_val && dropped_val.type == bencode::BencodeType.STRING)
     {
         // Dropped peers don't have flags

@@ -686,7 +686,7 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
     }
 
     bencode::BencodeValue* root = root_opt;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     if (root.type != bencode::BencodeType.DICT)
     {
@@ -700,11 +700,11 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
     handshake.reqq = 0;
 
     // Parse "m" dictionary (extension name -> message ID mappings)
-    bencode::BencodeValue* m_dict = bencode::dict_get(root, "m");
+    bencode::BencodeValue* m_dict = root.dict_get("m");
     if (m_dict && m_dict.type == bencode::BencodeType.DICT)
     {
         // Look for "ut_pex" key
-        bencode::BencodeValue* pex_val = bencode::dict_get(m_dict, "ut_pex");
+        bencode::BencodeValue* pex_val = m_dict.dict_get("ut_pex");
         if (pex_val && pex_val.type == bencode::BencodeType.INTEGER)
         {
             handshake.ut_pex_id = (char)pex_val.integer;
@@ -712,14 +712,14 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
     }
 
     // Parse "p" (port)
-    bencode::BencodeValue* p_val = bencode::dict_get(root, "p");
+    bencode::BencodeValue* p_val = root.dict_get("p");
     if (p_val && p_val.type == bencode::BencodeType.INTEGER)
     {
         handshake.port = (ushort)p_val.integer;
     }
 
     // Parse "v" (client version)
-    bencode::BencodeValue* v_val = bencode::dict_get(root, "v");
+    bencode::BencodeValue* v_val = root.dict_get("v");
     if (v_val && v_val.type == bencode::BencodeType.STRING)
     {
         // Copy the string
@@ -727,7 +727,7 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
     }
 
     // Parse "reqq" (max outstanding requests)
-    bencode::BencodeValue* reqq_val = bencode::dict_get(root, "reqq");
+    bencode::BencodeValue* reqq_val = root.dict_get("reqq");
     if (reqq_val && reqq_val.type == bencode::BencodeType.INTEGER)
     {
         handshake.reqq = (uint)reqq_val.integer;

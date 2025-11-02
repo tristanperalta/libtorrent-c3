@@ -40,7 +40,7 @@ fn void test_create_routing_table() @test
 {
     common::NodeId our_id = create_test_node_id(0x10);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     // Verify our ID was copied correctly
     for (usz i = 0; i < 20; i++)
@@ -50,7 +50,7 @@ fn void test_create_routing_table() @test
 
     // Verify table is empty
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 0, "New table should have no nodes");
     assert(active == 0, "New table should have no active buckets");
 
@@ -116,16 +116,16 @@ fn void test_add_single_node() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
     common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
 
-    bool added = dht_routing_table::add_node(table, node_id, ip, 6881, 100);
+    bool added = table.add_node( node_id, ip, 6881, 100);
     assert(added, "Should add first node successfully");
 
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 1, "Table should have 1 node");
     assert(active == 1, "Table should have 1 active bucket");
 
@@ -136,19 +136,19 @@ fn void test_add_multiple_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     // Add 5 different nodes
     for (int i = 0; i < 5; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
         common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        bool added = dht_routing_table::add_node(table, node_id, ip, (ushort)(6881 + i), 100);
+        bool added = table.add_node( node_id, ip, (ushort)(6881 + i), 100);
         assert(added, "Should add node successfully");
     }
 
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 5, "Table should have 5 nodes");
 
     io::printn("✓ Add multiple nodes");
@@ -158,22 +158,22 @@ fn void test_add_duplicate_node() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
     common::Ipv4Addr ip1 = create_test_ip(192, 168, 1, 100);
     common::Ipv4Addr ip2 = create_test_ip(192, 168, 1, 200);
 
     // Add node first time
-    bool added1 = dht_routing_table::add_node(table, node_id, ip1, 6881, 100);
+    bool added1 = table.add_node( node_id, ip1, 6881, 100);
     assert(added1, "Should add node first time");
 
     // Add same node ID with different IP (update)
-    bool added2 = dht_routing_table::add_node(table, node_id, ip2, 6882, 150);
+    bool added2 = table.add_node( node_id, ip2, 6882, 150);
     assert(added2, "Should update existing node");
 
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 1, "Should still have only 1 node (updated)");
 
     io::printn("✓ Add duplicate node (update)");
@@ -183,16 +183,16 @@ fn void test_add_our_own_id() @test
 {
     common::NodeId our_id = create_test_node_id(0x10);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     common::Ipv4Addr ip = create_test_ip(127, 0, 0, 1);
 
     // Try to add our own ID
-    bool added = dht_routing_table::add_node(table, our_id, ip, 6881, 100);
+    bool added = table.add_node( our_id, ip, 6881, 100);
     assert(!added, "Should not add our own ID");
 
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 0, "Table should remain empty");
 
     io::printn("✓ Reject our own ID");
@@ -204,7 +204,7 @@ fn void test_bucket_full() @test
     for (usz i = 0; i < 20; i++) our_id[i] = 0;
 
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     // Add 8 nodes to same bucket (all have first byte = 0xFF, so they go in same bucket)
     for (int i = 0; i < 8; i++)
@@ -214,12 +214,12 @@ fn void test_bucket_full() @test
         node_id[19] = (char)i;  // Make each unique
 
         common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        bool added = dht_routing_table::add_node(table, node_id, ip, (ushort)(6881 + i), 100);
+        bool added = table.add_node( node_id, ip, (ushort)(6881 + i), 100);
         assert(added, "Should add node to bucket");
     }
 
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 8, "Bucket should be full with 8 nodes");
 
     // Try to add 9th node (bucket full, no failed nodes to replace)
@@ -228,10 +228,10 @@ fn void test_bucket_full() @test
     node9[19] = 0x99;
 
     common::Ipv4Addr ip9 = create_test_ip(192, 168, 1, 200);
-    bool added9 = dht_routing_table::add_node(table, node9, ip9, 6889, 100);
+    bool added9 = table.add_node( node9, ip9, 6889, 100);
     assert(!added9, "Should not add 9th node (bucket full)");
 
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 8, "Should still have only 8 nodes");
 
     io::printn("✓ Bucket full handling");
@@ -245,19 +245,19 @@ fn void test_node_failed() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
     common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
 
-    dht_routing_table::add_node(table, node_id, ip, 6881, 100);
+    table.add_node( node_id, ip, 6881, 100);
 
     // Mark node as failed
-    dht_routing_table::node_failed(table, node_id);
+    table.node_failed( node_id);
 
     // Node should still be in table (not removed until timeout count threshold)
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 1, "Failed node should still be in table");
 
     io::printn("✓ Node failure tracking");
@@ -269,7 +269,7 @@ fn void test_replace_failed_node() @test
     for (usz i = 0; i < 20; i++) our_id[i] = 0;
 
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     // Add 8 nodes to same bucket
     for (int i = 0; i < 8; i++)
@@ -279,7 +279,7 @@ fn void test_replace_failed_node() @test
         node_id[19] = (char)i;
 
         common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        dht_routing_table::add_node(table, node_id, ip, (ushort)(6881 + i), 100);
+        table.add_node( node_id, ip, (ushort)(6881 + i), 100);
     }
 
     // Mark first node as failed 3 times (threshold)
@@ -289,7 +289,7 @@ fn void test_replace_failed_node() @test
 
     for (int i = 0; i < 3; i++)
     {
-        dht_routing_table::node_failed(table, failed_node);
+        table.node_failed( failed_node);
     }
 
     // Try to add new node - should replace failed node
@@ -298,11 +298,11 @@ fn void test_replace_failed_node() @test
     new_node[19] = 0xAA;
 
     common::Ipv4Addr new_ip = create_test_ip(192, 168, 1, 250);
-    bool added = dht_routing_table::add_node(table, new_node, new_ip, 6899, 100);
+    bool added = table.add_node( new_node, new_ip, 6899, 100);
     assert(added, "Should replace failed node");
 
     int total, active;
-    dht_routing_table::get_stats(table, &total, &active);
+    table.get_stats( &total, &active);
     assert(total == 8, "Should still have 8 nodes");
 
     io::printn("✓ Replace failed node");
@@ -316,10 +316,10 @@ fn void test_find_closest_nodes_empty() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     common::NodeId target = create_test_node_id(0x50);
-    dht_routing_table::NodeEntry[] closest = dht_routing_table::find_closest_nodes(table, target, 8);
+    dht_routing_table::NodeEntry[] closest = table.find_closest_nodes( target, 8);
     defer free(closest);
 
     assert(closest.len == 0, "Empty table should return no nodes");
@@ -331,14 +331,14 @@ fn void test_find_closest_nodes_single() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
     common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    dht_routing_table::add_node(table, node_id, ip, 6881, 100);
+    table.add_node( node_id, ip, 6881, 100);
 
     common::NodeId target = create_test_node_id(0x50);
-    dht_routing_table::NodeEntry[] closest = dht_routing_table::find_closest_nodes(table, target, 8);
+    dht_routing_table::NodeEntry[] closest = table.find_closest_nodes( target, 8);
     defer free(closest);
 
     assert(closest.len == 1, "Should return 1 node");
@@ -350,18 +350,18 @@ fn void test_find_closest_nodes_multiple() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     // Add 10 nodes
     for (int i = 0; i < 10; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
         common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        dht_routing_table::add_node(table, node_id, ip, (ushort)(6881 + i), 100);
+        table.add_node( node_id, ip, (ushort)(6881 + i), 100);
     }
 
     common::NodeId target = create_test_node_id(0x50);
-    dht_routing_table::NodeEntry[] closest = dht_routing_table::find_closest_nodes(table, target, 8);
+    dht_routing_table::NodeEntry[] closest = table.find_closest_nodes( target, 8);
     defer free(closest);
 
     assert(closest.len == 8, "Should return 8 closest nodes");
@@ -373,18 +373,18 @@ fn void test_find_closest_nodes_fewer_than_requested() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
-    defer dht_routing_table::free_routing_table(table);
+    defer table.free();
 
     // Add only 3 nodes
     for (int i = 0; i < 3; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
         common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        dht_routing_table::add_node(table, node_id, ip, (ushort)(6881 + i), 100);
+        table.add_node( node_id, ip, (ushort)(6881 + i), 100);
     }
 
     common::NodeId target = create_test_node_id(0x50);
-    dht_routing_table::NodeEntry[] closest = dht_routing_table::find_closest_nodes(table, target, 8);
+    dht_routing_table::NodeEntry[] closest = table.find_closest_nodes( target, 8);
     defer free(closest);
 
     assert(closest.len == 3, "Should return only 3 nodes (all available)");

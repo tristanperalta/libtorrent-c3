@@ -40,7 +40,7 @@ fn void test_create_dht_client() @test
 {
     common::NodeId our_id = create_test_node_id(0x42);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     // Verify our ID was copied
     for (usz i = 0; i < 20; i++)
@@ -60,9 +60,9 @@ fn void test_get_state() @test
 {
     common::NodeId our_id = create_test_node_id(0x50);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
-    dht_client::DhtState state = dht_client::get_state(client);
+    dht_client::DhtState state = client.get_state();
     assert(state == dht_client::DhtState.UNINITIALIZED, "Should be uninitialized");
 
     io::printn("✓ Get DHT state");
@@ -76,10 +76,10 @@ fn void test_add_bootstrap_node() @test
 {
     common::NodeId our_id = create_test_node_id(0x60);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     common::Ipv4Addr ip = create_test_ip(192, 168, 1, 1);
-    bool added = dht_client::add_bootstrap_node(client, ip, 6881);
+    bool added = client.add_bootstrap_node( ip, 6881);
     assert(added, "Should add bootstrap node");
 
     assert(client.bootstrap_node_count == 1, "Should have 1 bootstrap node");
@@ -91,13 +91,13 @@ fn void test_add_multiple_bootstrap_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0x70);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     // Add 5 bootstrap nodes
     for (int i = 0; i < 5; i++)
     {
         common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(10 + i));
-        bool added = dht_client::add_bootstrap_node(client, ip, (ushort)(6881 + i));
+        bool added = client.add_bootstrap_node( ip, (ushort)(6881 + i));
         assert(added, "Should add bootstrap node");
     }
 
@@ -110,9 +110,9 @@ fn void test_add_default_bootstrap_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0x80);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
-    dht_client::add_default_bootstrap_nodes(client);
+    client.add_default_bootstrap_nodes();
 
     assert(client.bootstrap_node_count > 0, "Should add default bootstrap nodes");
     assert(client.bootstrap_node_count <= 10, "Should not exceed max bootstrap nodes");
@@ -128,17 +128,17 @@ fn void test_send_ping() @test
 {
     common::NodeId our_id = create_test_node_id(0x90);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     common::NodeId target_id = create_test_node_id(0xA0);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
-    bool sent = dht_client::send_ping(client, target_id, target_ip, 6881);
+    bool sent = client.send_ping( target_id, target_ip, 6881);
     assert(sent, "Should send ping query");
 
     // Verify transaction was created
     int total, active, transactions;
-    dht_client::get_stats(client, &total, &active, &transactions);
+    client.get_stats( &total, &active, &transactions);
     assert(transactions == 1, "Should have 1 active transaction");
 
     io::printn("✓ Send ping query");
@@ -148,18 +148,18 @@ fn void test_send_find_node() @test
 {
     common::NodeId our_id = create_test_node_id(0xB0);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     common::NodeId target_id = create_test_node_id(0xC0);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
     common::NodeId search_id = create_test_node_id(0xD0);
 
-    bool sent = dht_client::send_find_node(client, target_id, target_ip, 6881, search_id);
+    bool sent = client.send_find_node( target_id, target_ip, 6881, search_id);
     assert(sent, "Should send find_node query");
 
     // Verify transaction was created
     int total, active, transactions;
-    dht_client::get_stats(client, &total, &active, &transactions);
+    client.get_stats( &total, &active, &transactions);
     assert(transactions == 1, "Should have 1 active transaction");
 
     io::printn("✓ Send find_node query");
@@ -173,10 +173,10 @@ fn void test_bootstrap_no_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0xE0);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     // Try to bootstrap without adding nodes
-    bool bootstrapped = dht_client::bootstrap(client);
+    bool bootstrapped = client.bootstrap();
     assert(!bootstrapped, "Should fail to bootstrap without nodes");
 
     io::printn("✓ Bootstrap: no nodes");
@@ -186,14 +186,14 @@ fn void test_bootstrap_with_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0xF0);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     // Add bootstrap nodes
     common::Ipv4Addr ip = create_test_ip(192, 168, 1, 1);
-    dht_client::add_bootstrap_node(client, ip, 6881);
+    client.add_bootstrap_node( ip, 6881);
 
     // Bootstrap
-    bool bootstrapped = dht_client::bootstrap(client);
+    bool bootstrapped = client.bootstrap();
     assert(bootstrapped, "Should initiate bootstrap");
 
     // Verify state changed
@@ -206,10 +206,10 @@ fn void test_is_bootstrapped() @test
 {
     common::NodeId our_id = create_test_node_id(0x11);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     // Should not be bootstrapped initially
-    bool is_boot = dht_client::is_bootstrapped(client);
+    bool is_boot = client.is_bootstrapped();
     assert(!is_boot, "Should not be bootstrapped initially");
 
     io::printn("✓ Check if bootstrapped");
@@ -223,10 +223,10 @@ fn void test_get_stats() @test
 {
     common::NodeId our_id = create_test_node_id(0x22);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     int total, active, transactions;
-    dht_client::get_stats(client, &total, &active, &transactions);
+    client.get_stats( &total, &active, &transactions);
 
     assert(total == 0, "Should have 0 total nodes initially");
     assert(active == 0, "Should have 0 active buckets initially");
@@ -243,13 +243,13 @@ fn void test_tick() @test
 {
     common::NodeId our_id = create_test_node_id(0x33);
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
-    defer dht_client::free_dht_client(client);
+    defer client.free();
 
     // Set state to running
     client.state = dht_client::DhtState.RUNNING;
 
     // Call tick (should not crash)
-    dht_client::tick(client);
+    client.tick();
 
     io::printn("✓ DHT tick");
 }

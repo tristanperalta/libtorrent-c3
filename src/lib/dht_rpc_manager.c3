@@ -119,26 +119,24 @@ fn RpcManager* create_rpc_manager() @public
  * @param mgr RPC manager
  * @param free_userdata Function to free userdata (can be null)
  */
-fn void cancel_all_transactions(RpcManager* mgr, UserdataCleanup free_userdata) @public
+fn void RpcManager.cancel_all_transactions(&self, UserdataCleanup free_userdata) @public
 {
-    for (int i = mgr.transaction_count - 1; i >= 0; i--)
+    for (int i = self.transaction_count - 1; i >= 0; i--)
     {
-        if (free_userdata && mgr.transactions[i].userdata)
+        if (free_userdata && self.transactions[i].userdata)
         {
-            free_userdata(mgr.transactions[i].userdata);
+            free_userdata(self.transactions[i].userdata);
         }
     }
-    mgr.transaction_count = 0;
+    self.transaction_count = 0;
 }
 
 /**
  * Free an RPC manager
- *
- * @param mgr RPC manager to free
  */
-fn void free_rpc_manager(RpcManager* mgr) @public
+fn void RpcManager.free(&self) @public
 {
-    if (mgr) free(mgr);
+    free(self);
 }
 
 // ============================================================================
@@ -148,16 +146,15 @@ fn void free_rpc_manager(RpcManager* mgr) @public
 /**
  * Generate a unique 2-byte transaction ID
  *
- * @param mgr RPC manager
  * @param tid_out Output buffer for transaction ID (must be 2 bytes)
  */
-fn void generate_tid(RpcManager* mgr, char* tid_out)
+fn void RpcManager.generate_tid(&self, char* tid_out)
 {
     // Use incrementing counter for transaction IDs
-    ushort tid = mgr.next_tid++;
+    ushort tid = self.next_tid++;
 
     // Wrap around at 65535
-    if (mgr.next_tid == 0) mgr.next_tid = 1;
+    if (self.next_tid == 0) self.next_tid = 1;
 
     // Convert to 2-byte big-endian format
     tid_out[0] = (char)((tid >> 8) & 0xFF);
@@ -167,19 +164,18 @@ fn void generate_tid(RpcManager* mgr, char* tid_out)
 /**
  * Find a transaction by transaction ID
  *
- * @param mgr RPC manager
  * @param tid Transaction ID (as String slice)
  * @return Index of transaction, or -1 if not found
  */
-fn int find_transaction(RpcManager* mgr, String tid)
+fn int RpcManager.find_transaction(&self, String tid)
 {
     // Only match if transaction ID is exactly 2 bytes
     if (tid.len != 2) return -1;
 
-    for (int i = 0; i < mgr.transaction_count; i++)
+    for (int i = 0; i < self.transaction_count; i++)
     {
-        if (mgr.transactions[i].transaction_id[0] == tid[0] &&
-            mgr.transactions[i].transaction_id[1] == tid[1])
+        if (self.transactions[i].transaction_id[0] == tid[0] &&
+            self.transactions[i].transaction_id[1] == tid[1])
         {
             return i;
         }
@@ -203,23 +199,23 @@ fn int find_transaction(RpcManager* mgr, String tid)
  * @param userdata User data passed to callback
  * @return Transaction ID (2 bytes), or fault if table is full
  */
-fn char[2]? create_transaction(RpcManager* mgr, krpc::QueryType query_type,
-                                common::NodeId target_id, common::Ipv4Addr target_ip,
-                                ushort target_port, TransactionCallback callback,
-                                void* userdata) @public
+fn char[2]? RpcManager.create_transaction(&self, krpc::QueryType query_type,
+                                          common::NodeId target_id, common::Ipv4Addr target_ip,
+                                          ushort target_port, TransactionCallback callback,
+                                          void* userdata) @public
 {
     // Check if transaction table is full
-    if (mgr.transaction_count >= MAX_TRANSACTIONS)
+    if (self.transaction_count >= MAX_TRANSACTIONS)
     {
         return RPC_TRANSACTION_TABLE_FULL?;
     }
 
     // Generate new transaction ID
     char[2] tid;
-    generate_tid(mgr, &tid[0]);
+    self.generate_tid(&tid[0]);
 
     // Create transaction entry
-    Transaction* txn = &mgr.transactions[mgr.transaction_count];
+    Transaction* txn = &self.transactions[self.transaction_count];
     txn.transaction_id[0] = tid[0];
     txn.transaction_id[1] = tid[1];
     txn.query_type = query_type;
@@ -232,7 +228,7 @@ fn char[2]? create_transaction(RpcManager* mgr, krpc::QueryType query_type,
     txn.state = TransactionState.PENDING;
     txn.retry_count = 0;
 
-    mgr.transaction_count++;
+    self.transaction_count++;
 
     return tid;
 }
@@ -245,13 +241,13 @@ fn char[2]? create_transaction(RpcManager* mgr, krpc::QueryType query_type,
  * @param response Response message
  * @return true if transaction was found and handled
  */
-fn bool handle_response(RpcManager* mgr, krpc::KrpcMessage* response) @public
+fn bool RpcManager.handle_response(&self, krpc::KrpcMessage* response) @public
 {
     // Find transaction by ID
-    int idx = find_transaction(mgr, response.transaction_id);
+    int idx = self.find_transaction(response.transaction_id);
     if (idx < 0) return false;
 
-    Transaction* txn = &mgr.transactions[idx];
+    Transaction* txn = &self.transactions[idx];
 
     // Mark as completed
     txn.state = TransactionState.COMPLETED;
@@ -263,11 +259,11 @@ fn bool handle_response(RpcManager* mgr, krpc::KrpcMessage* response) @public
     }
 
     // Remove transaction (swap with last)
-    if (idx < mgr.transaction_count - 1)
+    if (idx < self.transaction_count - 1)
     {
-        mgr.transactions[idx] = mgr.transactions[mgr.transaction_count - 1];
+        self.transactions[idx] = self.transactions[self.transaction_count - 1];
     }
-    mgr.transaction_count--;
+    self.transaction_count--;
 
     return true;
 }
@@ -279,15 +275,15 @@ fn bool handle_response(RpcManager* mgr, krpc::KrpcMessage* response) @public
  * @param mgr RPC manager
  * @return Number of transactions that timed out
  */
-fn int process_timeouts(RpcManager* mgr) @public
+fn int RpcManager.process_timeouts(&self) @public
 {
     long now = (long)time::now().to_seconds();
     int timeout_count = 0;
 
     // Check each transaction for timeout
-    for (int i = mgr.transaction_count - 1; i >= 0; i--)
+    for (int i = self.transaction_count - 1; i >= 0; i--)
     {
-        Transaction* txn = &mgr.transactions[i];
+        Transaction* txn = &self.transactions[i];
 
         // Skip completed/failed transactions
         if (txn.state != TransactionState.PENDING) continue;
@@ -308,11 +304,11 @@ fn int process_timeouts(RpcManager* mgr) @public
             timeout_count++;
 
             // Remove transaction (swap with last)
-            if (i < mgr.transaction_count - 1)
+            if (i < self.transaction_count - 1)
             {
-                mgr.transactions[i] = mgr.transactions[mgr.transaction_count - 1];
+                self.transactions[i] = self.transactions[self.transaction_count - 1];
             }
-            mgr.transaction_count--;
+            self.transaction_count--;
         }
     }
 
@@ -326,17 +322,17 @@ fn int process_timeouts(RpcManager* mgr) @public
  * @param tid Transaction ID (as String slice)
  * @return true if transaction was found and cancelled
  */
-fn bool cancel_transaction(RpcManager* mgr, String tid) @public
+fn bool RpcManager.cancel_transaction(&self, String tid) @public
 {
-    int idx = find_transaction(mgr, tid);
+    int idx = self.find_transaction(tid);
     if (idx < 0) return false;
 
     // Remove transaction (swap with last)
-    if (idx < mgr.transaction_count - 1)
+    if (idx < self.transaction_count - 1)
     {
-        mgr.transactions[idx] = mgr.transactions[mgr.transaction_count - 1];
+        self.transactions[idx] = self.transactions[self.transaction_count - 1];
     }
-    mgr.transaction_count--;
+    self.transaction_count--;
 
     return true;
 }
@@ -344,18 +340,17 @@ fn bool cancel_transaction(RpcManager* mgr, String tid) @public
 /**
  * Get statistics about the RPC manager
  *
- * @param mgr RPC manager
  * @param total_transactions Output: total active transactions
  * @param pending_transactions Output: pending transactions
  */
-fn void get_stats(RpcManager* mgr, int* total_transactions, int* pending_transactions) @public
+fn void RpcManager.get_stats(&self, int* total_transactions, int* pending_transactions) @public
 {
-    *total_transactions = mgr.transaction_count;
+    *total_transactions = self.transaction_count;
 
     int pending = 0;
-    for (int i = 0; i < mgr.transaction_count; i++)
+    for (int i = 0; i < self.transaction_count; i++)
     {
-        if (mgr.transactions[i].state == TransactionState.PENDING)
+        if (self.transactions[i].state == TransactionState.PENDING)
         {
             pending++;
         }

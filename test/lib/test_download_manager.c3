@@ -21,7 +21,7 @@ fn void test_create_manager() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 5, 262144, 262144, hashes[..], 2, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_pieces == 5, "Should track 5 pieces");
     assert(manager.max_concurrent_pieces == 2, "Should allow 2 concurrent");
@@ -37,7 +37,7 @@ fn void test_create_with_shorter_last_piece() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 131072, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.last_piece_length == 131072, "Last piece should be 128KB");
 }
@@ -54,7 +54,7 @@ fn void test_update_peer_bitfield() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 262144, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] bitfield = {true, false, true};
     manager.update_peer_bitfield(bitfield[..])!!;
@@ -72,7 +72,7 @@ fn void test_update_bitfield_wrong_size() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 262144, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[5] wrong_size = {true, false, true, false, true};
     fault? result = manager.update_peer_bitfield(wrong_size[..]);
@@ -93,7 +93,7 @@ fn void test_peer_has_piece() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 262144, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     manager.peer_has_piece(1)!!;
     assert(manager.picker.get_availability(1) == 1, "Piece 1 should be available");
@@ -111,7 +111,7 @@ fn void test_start_piece_download() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 262144, hashes[..], 2, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     // Peer has all pieces
     bool[3] peer_pieces = {true, true, true};
@@ -137,7 +137,7 @@ fn void test_start_multiple_pieces() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 262144, hashes[..], 2, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -163,7 +163,7 @@ fn void test_start_exceeds_max_concurrent() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 262144, hashes[..], 1, 16384);  // Max 1 concurrent
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -189,7 +189,7 @@ fn void test_start_no_pieces_available() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 262144, 262144, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     // Peer has no pieces
     bool[3] peer_pieces = {false, false, false};
@@ -216,7 +216,7 @@ fn void test_get_next_block_request() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 32768, 32768, hashes[..], 1, 16384);  // Small pieces for testing
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -239,7 +239,7 @@ fn void test_get_multiple_block_requests() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 49152, 49152, hashes[..], 1, 16384);  // 3 blocks per piece
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -262,7 +262,7 @@ fn void test_no_blocks_available() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);  // 1 block pieces
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -294,7 +294,7 @@ fn void test_receive_block() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -322,7 +322,7 @@ fn void test_receive_block_not_downloading() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     char[16384] data;
     fault? result = manager.receive_block(99, 0, data[..]);
@@ -373,7 +373,7 @@ fn void test_complete_piece_success() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -430,7 +430,7 @@ fn void test_complete_piece_hash_fail() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -473,7 +473,7 @@ fn void test_complete_piece_not_downloading() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     TestCompletionContext ctx;
     ctx.completed = false;
@@ -503,7 +503,7 @@ fn void test_fail_piece() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 2, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -538,7 +538,7 @@ fn void test_fail_piece_not_downloading() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     fault? result = manager.fail_piece(99);
     if (catch excuse = result)
@@ -561,7 +561,7 @@ fn void test_get_progress() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 2, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     usz total, complete, downloading;
     manager.get_progress(&total, &complete, &downloading);
@@ -598,7 +598,7 @@ fn void test_is_complete() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 3, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     assert(!manager.is_complete(), "Should not be complete initially");
 
@@ -651,7 +651,7 @@ fn void test_get_piece_progress() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 49152, 49152, hashes[..], 1, 16384);  // 3 blocks per piece
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -685,7 +685,7 @@ fn void test_is_piece_downloading() @test
     char[60] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -718,7 +718,7 @@ fn void test_have_piece() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[3] peer_pieces = {true, true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -771,7 +771,7 @@ fn void test_last_piece_shorter() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 2, 16384, 8192, hashes[..], 2, 16384);  // Last piece is 8KB
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     bool[2] peer_pieces = {true, true};
     manager.update_peer_bitfield(peer_pieces[..])!!;
@@ -841,7 +841,7 @@ fn void test_start_piece_after_empty_verification() @test
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, (uint)num_pieces, 262144, 262144, hashes, 5, 16384);
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     // Verify initial state (all pieces should be FREE, availability=0)
     assert(manager.picker.pieces_complete == 0, "No pieces should be complete");
@@ -906,7 +906,7 @@ fn void test_fill_download_slots_incrementally() @test
     char[100] hashes;
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 5, 262144, 262144, hashes[..], 5, 16384);  // 5 concurrent slots
-    defer download_manager::free(&manager);
+    defer manager.free();
 
     // First peer connects with all pieces
     bool[5] peer1_pieces = {true, true, true, true, true};

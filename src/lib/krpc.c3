@@ -209,26 +209,24 @@ struct TransactionTracker {
 /**
  * Free KRPC query
  */
-fn void free_query(KrpcQuery* query) @public
+fn void KrpcQuery.free(&self) @public
 {
-    if (query == null) return;
-
-    if (query.base.transaction_id.len > 0) free(query.base.transaction_id);
-    if (query.base.version.len > 0) free(query.base.version);
+    if (self.base.transaction_id.len > 0) free(self.base.transaction_id);
+    if (self.base.version.len > 0) free(self.base.version);
 
     // Free query-specific args
-    if (query.args != null)
+    if (self.args != null)
     {
-        switch (query.query_type)
+        switch (self.query_type)
         {
             case QueryType.FIND_NODE:
-                FindNodeArgs* args = (FindNodeArgs*)query.args;
+                FindNodeArgs* args = (FindNodeArgs*)self.args;
                 free(args);
             case QueryType.GET_PEERS:
-                GetPeersArgs* args = (GetPeersArgs*)query.args;
+                GetPeersArgs* args = (GetPeersArgs*)self.args;
                 free(args);
             case QueryType.ANNOUNCE_PEER:
-                AnnouncePeerArgs* args = (AnnouncePeerArgs*)query.args;
+                AnnouncePeerArgs* args = (AnnouncePeerArgs*)self.args;
                 if (args.token.len > 0) free(args.token);
                 free(args);
             default:
@@ -236,30 +234,28 @@ fn void free_query(KrpcQuery* query) @public
         }
     }
 
-    free(query);
+    free(self);
 }
 
 /**
  * Free KRPC response
  */
-fn void free_response(KrpcResponse* response) @public
+fn void KrpcResponse.free(&self) @public
 {
-    if (response == null) return;
-
-    if (response.base.transaction_id.len > 0) free(response.base.transaction_id);
-    if (response.base.version.len > 0) free(response.base.version);
+    if (self.base.transaction_id.len > 0) free(self.base.transaction_id);
+    if (self.base.version.len > 0) free(self.base.version);
 
     // Free response-specific data
-    if (response.data != null)
+    if (self.data != null)
     {
-        switch (response.query_type)
+        switch (self.query_type)
         {
             case QueryType.FIND_NODE:
-                FindNodeResponse* data = (FindNodeResponse*)response.data;
+                FindNodeResponse* data = (FindNodeResponse*)self.data;
                 if (data.nodes.len > 0) free(data.nodes);
                 free(data);
             case QueryType.GET_PEERS:
-                GetPeersResponse* data = (GetPeersResponse*)response.data;
+                GetPeersResponse* data = (GetPeersResponse*)self.data;
                 if (data.token.len > 0) free(data.token);
                 if (data.values.len > 0) free(data.values);
                 if (data.nodes.len > 0) free(data.nodes);
@@ -269,21 +265,19 @@ fn void free_response(KrpcResponse* response) @public
         }
     }
 
-    free(response);
+    free(self);
 }
 
 /**
  * Free KRPC error
  */
-fn void free_error(KrpcError* error) @public
+fn void KrpcError.free(&self) @public
 {
-    if (error == null) return;
+    if (self.base.transaction_id.len > 0) free(self.base.transaction_id);
+    if (self.base.version.len > 0) free(self.base.version);
+    if (self.message.len > 0) free(self.message);
 
-    if (error.base.transaction_id.len > 0) free(error.base.transaction_id);
-    if (error.base.version.len > 0) free(error.base.version);
-    if (error.message.len > 0) free(error.message);
-
-    free(error);
+    free(self);
 }
 
 // ============================================================================
@@ -323,15 +317,15 @@ fn TransactionTracker create_transaction_tracker() @public
 /**
  * Generate a transaction ID (2-byte binary string)
  */
-fn String generate_transaction_id(TransactionTracker* tracker) @public
+fn String TransactionTracker.generate_transaction_id(&self) @public
 {
     // Generate 2-byte transaction ID from counter
     char[2] tid_bytes;
-    tid_bytes[0] = (char)((tracker.next_id >> 8) & 0xFF);
-    tid_bytes[1] = (char)(tracker.next_id & 0xFF);
+    tid_bytes[0] = (char)((self.next_id >> 8) & 0xFF);
+    tid_bytes[1] = (char)(self.next_id & 0xFF);
 
     // Increment counter (wraps at 65535)
-    tracker.next_id++;
+    self.next_id++;
 
     // Copy to heap
     char[] result = mem::new_array(char, 2);
@@ -344,7 +338,7 @@ fn String generate_transaction_id(TransactionTracker* tracker) @public
 /**
  * Track a new transaction
  */
-fn void track_transaction(TransactionTracker* tracker, Transaction t) @public
+fn void TransactionTracker.track_transaction(&self, Transaction t) @public
 {
     // Copy transaction ID to heap
     char[] tid_copy = mem::new_array(char, t.transaction_id.len);
@@ -357,16 +351,16 @@ fn void track_transaction(TransactionTracker* tracker, Transaction t) @public
     tracked.callback_data = t.callback_data;
 
     // Add to active list
-    tracker.active.push(tracked);
+    self.active.push(tracked);
 }
 
 /**
  * Find a transaction by ID
  * Returns the index of the transaction, or -1 if not found
  */
-fn usz find_transaction_index(TransactionTracker* tracker, String tid) @public
+fn usz TransactionTracker.find_transaction_index(&self, String tid) @public
 {
-    foreach (i, &t : tracker.active)
+    foreach (i, &t : self.active)
     {
         if (t.transaction_id.len != tid.len) continue;
 
@@ -391,21 +385,21 @@ fn usz find_transaction_index(TransactionTracker* tracker, String tid) @public
  * Find a transaction by ID (returns copy of transaction)
  * Returns KRPC_INVALID_TRANSACTION if not found
  */
-fn Transaction? find_transaction(TransactionTracker* tracker, String tid) @public
+fn Transaction? TransactionTracker.find_transaction(&self, String tid) @public
 {
-    usz idx = find_transaction_index(tracker, tid);
+    usz idx = self.find_transaction_index(tid);
     if (idx == usz.max) return KRPC_INVALID_TRANSACTION?;
 
     // Return copy of element
-    return tracker.active.get(idx);
+    return self.active.get(idx);
 }
 
 /**
  * Remove a transaction by ID
  */
-fn void remove_transaction(TransactionTracker* tracker, String tid) @public
+fn void TransactionTracker.remove_transaction(&self, String tid) @public
 {
-    foreach (i, &t : tracker.active)
+    foreach (i, &t : self.active)
     {
         if (t.transaction_id.len != tid.len) continue;
 
@@ -426,7 +420,7 @@ fn void remove_transaction(TransactionTracker* tracker, String tid) @public
             free(t.transaction_id);
 
             // Remove from list
-            tracker.active.remove_at(i);
+            self.active.remove_at(i);
             return;
         }
     }
@@ -437,13 +431,13 @@ fn void remove_transaction(TransactionTracker* tracker, String tid) @public
  * @param timeout Timeout in seconds
  * @return List of expired transactions (caller must free list but NOT transaction_ids)
  */
-fn TransactionList get_expired_transactions(TransactionTracker* tracker, long timeout_seconds) @public
+fn TransactionList TransactionTracker.get_expired_transactions(&self, long timeout_seconds) @public
 {
     long now_sec = (long)time::now().to_seconds();
     TransactionList expired;
     expired.init(mem);
 
-    foreach (i, &t : tracker.active)
+    foreach (i, &t : self.active)
     {
         long elapsed = now_sec - t.sent_at_sec;
         if (elapsed >= timeout_seconds)
@@ -465,16 +459,16 @@ fn TransactionList get_expired_transactions(TransactionTracker* tracker, long ti
 /**
  * Free transaction tracker
  */
-fn void free_transaction_tracker(TransactionTracker* tracker) @public
+fn void TransactionTracker.free(&self) @public
 {
     // Free all transaction IDs
-    foreach (&t : tracker.active)
+    foreach (&t : self.active)
     {
         if (t.transaction_id.len > 0) free(t.transaction_id);
     }
 
     // Free list
-    tracker.active.free();
+    self.active.free();
 }
 
 // ============================================================================
@@ -498,9 +492,9 @@ fn String encode_ping_query(String transaction_id, InfoHash node_id) @public
         "v", CLIENT_VERSION,
         "y", "q"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -522,9 +516,9 @@ fn String encode_find_node_query(String transaction_id, InfoHash node_id, InfoHa
         "v", CLIENT_VERSION,
         "y", "q"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -546,9 +540,9 @@ fn String encode_get_peers_query(String transaction_id, InfoHash node_id, InfoHa
         "v", CLIENT_VERSION,
         "y", "q"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -578,9 +572,9 @@ fn String encode_announce_peer_query(String transaction_id, InfoHash node_id,
         "v", CLIENT_VERSION,
         "y", "q"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -599,9 +593,9 @@ fn String encode_ping_response(String transaction_id, InfoHash node_id) @public
         "v", CLIENT_VERSION,
         "y", "r"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -622,9 +616,9 @@ fn String encode_find_node_response(String transaction_id, InfoHash node_id, cha
         "v", CLIENT_VERSION,
         "y", "r"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -651,7 +645,7 @@ fn String encode_get_peers_response_with_values(String transaction_id, InfoHash 
         {
             peer_bytes[j] = values[offset + j];
         }
-        bencode::list_append(values_list, bencode::make_string((String)peer_bytes[..]));
+        values_list.list_append(bencode::make_string((String)peer_bytes[..]));
     }
 
     BencodeValue* msg = bencode::@bdict_wrap(
@@ -664,9 +658,9 @@ fn String encode_get_peers_response_with_values(String transaction_id, InfoHash 
         "v", CLIENT_VERSION,
         "y", "r"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -690,9 +684,9 @@ fn String encode_get_peers_response_with_nodes(String transaction_id, InfoHash n
         "v", CLIENT_VERSION,
         "y", "r"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -711,9 +705,9 @@ fn String encode_announce_peer_response(String transaction_id, InfoHash node_id)
         "v", CLIENT_VERSION,
         "y", "r"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 /**
@@ -736,9 +730,9 @@ fn String encode_error(String transaction_id, int error_code, String message) @p
         "v", CLIENT_VERSION,
         "y", "e"
     );
-    defer bencode::free_bencode_value(msg);
+    defer msg.free();
 
-    return bencode::encode(msg);
+    return msg.encode();
 }
 
 // ============================================================================
@@ -754,7 +748,7 @@ fn MessageType? decode_message_type(BencodeValue* root) @public
 {
     if (root.type != bencode::BencodeType.DICT) return KRPC_INVALID_MESSAGE?;
 
-    BencodeValue* y_val = bencode::dict_get(root, "y");
+    BencodeValue* y_val = root.dict_get("y");
     if (y_val == null || y_val.type != bencode::BencodeType.STRING)
     {
         return KRPC_INVALID_MESSAGE?;
@@ -788,7 +782,7 @@ fn QueryType? parse_query_type(String q_value)
  */
 fn FindNodeArgs*? parse_find_node_args(BencodeValue* args_dict)
 {
-    BencodeValue* target_val = bencode::dict_get(args_dict, "target");
+    BencodeValue* target_val = args_dict.dict_get("target");
     if (target_val == null || target_val.type != bencode::BencodeType.STRING)
     {
         return KRPC_INVALID_MESSAGE?;
@@ -807,7 +801,7 @@ fn FindNodeArgs*? parse_find_node_args(BencodeValue* args_dict)
  */
 fn GetPeersArgs*? parse_get_peers_args(BencodeValue* args_dict)
 {
-    BencodeValue* info_hash_val = bencode::dict_get(args_dict, "info_hash");
+    BencodeValue* info_hash_val = args_dict.dict_get("info_hash");
     if (info_hash_val == null || info_hash_val.type != bencode::BencodeType.STRING)
     {
         return KRPC_INVALID_MESSAGE?;
@@ -826,9 +820,9 @@ fn GetPeersArgs*? parse_get_peers_args(BencodeValue* args_dict)
  */
 fn AnnouncePeerArgs*? parse_announce_peer_args(BencodeValue* args_dict)
 {
-    BencodeValue* info_hash_val = bencode::dict_get(args_dict, "info_hash");
-    BencodeValue* port_val = bencode::dict_get(args_dict, "port");
-    BencodeValue* token_val = bencode::dict_get(args_dict, "token");
+    BencodeValue* info_hash_val = args_dict.dict_get("info_hash");
+    BencodeValue* port_val = args_dict.dict_get("port");
+    BencodeValue* token_val = args_dict.dict_get("token");
 
     if (info_hash_val == null || info_hash_val.type != bencode::BencodeType.STRING ||
         port_val == null || port_val.type != bencode::BencodeType.INTEGER ||
@@ -849,7 +843,7 @@ fn AnnouncePeerArgs*? parse_announce_peer_args(BencodeValue* args_dict)
     args.token = (String)token_copy;
 
     // Check for optional implied_port
-    BencodeValue* implied_port_val = bencode::dict_get(args_dict, "implied_port");
+    BencodeValue* implied_port_val = args_dict.dict_get("implied_port");
     args.implied_port = (implied_port_val != null &&
                          implied_port_val.type == bencode::BencodeType.INTEGER &&
                          implied_port_val.integer != 0);
@@ -862,7 +856,7 @@ fn AnnouncePeerArgs*? parse_announce_peer_args(BencodeValue* args_dict)
  */
 fn FindNodeResponse*? parse_find_node_response(BencodeValue* r_dict)
 {
-    BencodeValue* nodes_val = bencode::dict_get(r_dict, "nodes");
+    BencodeValue* nodes_val = r_dict.dict_get("nodes");
     if (nodes_val == null || nodes_val.type != bencode::BencodeType.STRING)
     {
         return KRPC_INVALID_MESSAGE?;
@@ -886,7 +880,7 @@ fn FindNodeResponse*? parse_find_node_response(BencodeValue* r_dict)
  */
 fn GetPeersResponse*? parse_get_peers_response(BencodeValue* r_dict)
 {
-    BencodeValue* token_val = bencode::dict_get(r_dict, "token");
+    BencodeValue* token_val = r_dict.dict_get("token");
     if (token_val == null || token_val.type != bencode::BencodeType.STRING)
     {
         return KRPC_INVALID_MESSAGE?;
@@ -900,7 +894,7 @@ fn GetPeersResponse*? parse_get_peers_response(BencodeValue* r_dict)
     response.token = (String)token_copy;
 
     // Check for values (peer list)
-    BencodeValue* values_val = bencode::dict_get(r_dict, "values");
+    BencodeValue* values_val = r_dict.dict_get("values");
     if (values_val != null && values_val.type == bencode::BencodeType.LIST)
     {
         // Concatenate all peer info strings
@@ -935,7 +929,7 @@ fn GetPeersResponse*? parse_get_peers_response(BencodeValue* r_dict)
     }
 
     // Check for nodes (node list)
-    BencodeValue* nodes_val = bencode::dict_get(r_dict, "nodes");
+    BencodeValue* nodes_val = r_dict.dict_get("nodes");
     if (nodes_val != null && nodes_val.type == bencode::BencodeType.STRING)
     {
         // Validate nodes length
@@ -966,15 +960,15 @@ fn GetPeersResponse*? parse_get_peers_response(BencodeValue* r_dict)
 fn KrpcQuery*? decode_query(String data) @public
 {
     BencodeValue* root = bencode::decode(data)!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     if (root.type != bencode::BencodeType.DICT) return KRPC_INVALID_MESSAGE?;
 
     // Extract required fields
-    BencodeValue* t_val = bencode::dict_get(root, "t");
-    BencodeValue* y_val = bencode::dict_get(root, "y");
-    BencodeValue* q_val = bencode::dict_get(root, "q");
-    BencodeValue* a_val = bencode::dict_get(root, "a");
+    BencodeValue* t_val = root.dict_get("t");
+    BencodeValue* y_val = root.dict_get("y");
+    BencodeValue* q_val = root.dict_get("q");
+    BencodeValue* a_val = root.dict_get("a");
 
     if (t_val == null || t_val.type != bencode::BencodeType.STRING ||
         y_val == null || y_val.type != bencode::BencodeType.STRING ||
@@ -988,7 +982,7 @@ fn KrpcQuery*? decode_query(String data) @public
     if ((String)y_val.string != "q") return KRPC_INVALID_MESSAGE?;
 
     // Extract node ID from arguments
-    BencodeValue* id_val = bencode::dict_get(a_val, "id");
+    BencodeValue* id_val = a_val.dict_get("id");
     if (id_val == null || id_val.type != bencode::BencodeType.STRING ||
         id_val.string.len != 20)
     {
@@ -1006,7 +1000,7 @@ fn KrpcQuery*? decode_query(String data) @public
     query.base.type = MessageType.QUERY;
 
     // Copy version if present
-    BencodeValue* v_val = bencode::dict_get(root, "v");
+    BencodeValue* v_val = root.dict_get("v");
     if (v_val != null && v_val.type == bencode::BencodeType.STRING)
     {
         char[] ver_copy = mem::new_array(char, v_val.string.len);
@@ -1022,7 +1016,7 @@ fn KrpcQuery*? decode_query(String data) @public
     if (catch err = qtype_opt)
     {
         // Cleanup allocated memory before returning error
-        free_query(query);
+        query.free();
         return err?;
     }
     QueryType qtype = qtype_opt;
@@ -1055,14 +1049,14 @@ fn KrpcQuery*? decode_query(String data) @public
 fn KrpcResponse*? decode_response(String data, QueryType expected_query_type) @public
 {
     BencodeValue* root = bencode::decode(data)!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     if (root.type != bencode::BencodeType.DICT) return KRPC_INVALID_MESSAGE?;
 
     // Extract required fields
-    BencodeValue* t_val = bencode::dict_get(root, "t");
-    BencodeValue* y_val = bencode::dict_get(root, "y");
-    BencodeValue* r_val = bencode::dict_get(root, "r");
+    BencodeValue* t_val = root.dict_get("t");
+    BencodeValue* y_val = root.dict_get("y");
+    BencodeValue* r_val = root.dict_get("r");
 
     if (t_val == null || t_val.type != bencode::BencodeType.STRING ||
         y_val == null || y_val.type != bencode::BencodeType.STRING ||
@@ -1075,7 +1069,7 @@ fn KrpcResponse*? decode_response(String data, QueryType expected_query_type) @p
     if ((String)y_val.string != "r") return KRPC_INVALID_MESSAGE?;
 
     // Extract node ID from response
-    BencodeValue* id_val = bencode::dict_get(r_val, "id");
+    BencodeValue* id_val = r_val.dict_get("id");
     if (id_val == null || id_val.type != bencode::BencodeType.STRING ||
         id_val.string.len != 20)
     {
@@ -1093,7 +1087,7 @@ fn KrpcResponse*? decode_response(String data, QueryType expected_query_type) @p
     response.base.type = MessageType.RESPONSE;
 
     // Copy version if present
-    BencodeValue* v_val = bencode::dict_get(root, "v");
+    BencodeValue* v_val = root.dict_get("v");
     if (v_val != null && v_val.type == bencode::BencodeType.STRING)
     {
         char[] ver_copy = mem::new_array(char, v_val.string.len);
@@ -1134,14 +1128,14 @@ fn KrpcResponse*? decode_response(String data, QueryType expected_query_type) @p
 fn KrpcError*? decode_error(String data) @public
 {
     BencodeValue* root = bencode::decode(data)!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     if (root.type != bencode::BencodeType.DICT) return KRPC_INVALID_MESSAGE?;
 
     // Extract required fields
-    BencodeValue* t_val = bencode::dict_get(root, "t");
-    BencodeValue* y_val = bencode::dict_get(root, "y");
-    BencodeValue* e_val = bencode::dict_get(root, "e");
+    BencodeValue* t_val = root.dict_get("t");
+    BencodeValue* y_val = root.dict_get("y");
+    BencodeValue* e_val = root.dict_get("e");
 
     if (t_val == null || t_val.type != bencode::BencodeType.STRING ||
         y_val == null || y_val.type != bencode::BencodeType.STRING ||
@@ -1176,7 +1170,7 @@ fn KrpcError*? decode_error(String data) @public
     error.base.type = MessageType.ERROR;
 
     // Copy version if present
-    BencodeValue* v_val = bencode::dict_get(root, "v");
+    BencodeValue* v_val = root.dict_get("v");
     if (v_val != null && v_val.type == bencode::BencodeType.STRING)
     {
         char[] ver_copy = mem::new_array(char, v_val.string.len);

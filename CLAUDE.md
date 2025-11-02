@@ -273,6 +273,73 @@ fn void test_something() @test
 }
 ```
 
+### Method-Based Syntax (Preferred Style)
+
+**This codebase uses method-based syntax for struct operations.** C3 supports defining functions as methods on structs using the `&self` parameter.
+
+**Declaring Methods:**
+```c3
+// Method declaration - use &self as first parameter
+fn void MyStruct.my_method(&self, int arg)
+{
+    // Access fields with self.field
+    self.field = arg;
+}
+
+// Free method - common pattern for cleanup
+fn void MyStruct.free(&self)
+{
+    // Clean up resources
+    if (self.data.len > 0) free(self.data);
+    free(self);
+}
+```
+
+**Calling Methods:**
+```c3
+MyStruct* instance = create_instance();
+
+// Method-based syntax (preferred)
+instance.my_method(42);
+instance.free();
+
+// Module-based syntax (avoid for struct methods)
+// my_module::my_method(instance, 42);  // Don't do this
+```
+
+**Why Method-Based Syntax:**
+- **More readable**: `torrent.get_num_pieces()` is clearer than `metainfo::get_num_pieces(torrent)`
+- **Better IDE support**: Methods show up in autocomplete for the struct type
+- **Cleaner call sites**: Reduces visual clutter, especially with multiple chained operations
+- **Safer**: Method syntax guarantees non-null `&self`, no null checks needed
+
+**Migration Pattern:**
+```c3
+// Old module-based function:
+fn int get_count(MyStruct* obj) @public
+{
+    if (obj == null) return 0;  // Null check needed
+    return obj.count;
+}
+
+// New method-based:
+fn int MyStruct.get_count(&self) @public
+{
+    // No null check needed - &self is always valid
+    return self.count;
+}
+
+// Call site improvement:
+// Before: int count = my_module::get_count(&obj);
+// After:  int count = obj.get_count();
+```
+
+**Guidelines:**
+- Use methods for operations that logically belong to a struct
+- Keep factory functions (constructors) as module functions: `create_foo()`, `parse()`, etc.
+- Use methods for: accessors, mutators, operations, and cleanup (`free`)
+- Internal helper functions that don't operate on a primary struct can remain module functions
+
 ### Error Handling with Faults (C3 0.7+)
 
 **IMPORTANT:** This project uses C3 0.7.6. The fault syntax changed significantly from 0.6.x to 0.7.x.

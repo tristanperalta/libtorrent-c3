@@ -201,7 +201,7 @@ fn common::Peer[]? parse_compact_peers(char[] peer_data)
 fn TrackerResponse? parse_tracker_response(String response_data)
 {
     BencodeValue* root = bencode::decode(response_data)!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     if (root.type != bencode::BencodeType.DICT) {
         return TRACKER_INVALID_RESPONSE?;
@@ -210,7 +210,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     TrackerResponse response = {};
 
     // Check for failure first
-    if (BencodeValue* failure = bencode::dict_get(root, "failure reason"))
+    if (BencodeValue* failure = root.dict_get("failure reason"))
     {
         if (failure.type == bencode::BencodeType.STRING)
         {
@@ -220,7 +220,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     }
 
     // Extract tracker response fields
-    if (BencodeValue* interval = bencode::dict_get(root, "interval"))
+    if (BencodeValue* interval = root.dict_get("interval"))
     {
         if (interval.type == bencode::BencodeType.INTEGER)
         {
@@ -228,7 +228,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* min_interval = bencode::dict_get(root, "min interval"))
+    if (BencodeValue* min_interval = root.dict_get("min interval"))
     {
         if (min_interval.type == bencode::BencodeType.INTEGER)
         {
@@ -236,7 +236,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* complete = bencode::dict_get(root, "complete"))
+    if (BencodeValue* complete = root.dict_get("complete"))
     {
         if (complete.type == bencode::BencodeType.INTEGER)
         {
@@ -244,7 +244,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* incomplete = bencode::dict_get(root, "incomplete"))
+    if (BencodeValue* incomplete = root.dict_get("incomplete"))
     {
         if (incomplete.type == bencode::BencodeType.INTEGER)
         {
@@ -252,7 +252,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* warning = bencode::dict_get(root, "warning message"))
+    if (BencodeValue* warning = root.dict_get("warning message"))
     {
         if (warning.type == bencode::BencodeType.STRING)
         {
@@ -261,7 +261,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     }
 
     // Extract peers (compact format)
-    if (BencodeValue* peers = bencode::dict_get(root, "peers")) {
+    if (BencodeValue* peers = root.dict_get("peers")) {
         if (peers.type == bencode::BencodeType.STRING) {
             // Compact format (binary string)
             response.peers = parse_compact_peers(peers.string)!;

@@ -110,7 +110,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 {
     // Decode the bencode data
     BencodeValue* root = bencode::decode(data)!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Root must be a dictionary
     if (root.type != bencode::BencodeType.DICT)
@@ -122,7 +122,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     TorrentFile* torrent = mem::new(TorrentFile);
 
     // Extract 'announce' (optional - may be missing in some torrents)
-    BencodeValue* announce_val = bencode::dict_get(root, "announce");
+    BencodeValue* announce_val = root.dict_get("announce");
     if (announce_val && announce_val.type == bencode::BencodeType.STRING)
     {
         // Trim whitespace from announce URL
@@ -130,7 +130,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     }
 
     // Extract 'announce-list' (optional - BEP 12 multi-tracker)
-    BencodeValue* announce_list_val = bencode::dict_get(root, "announce-list");
+    BencodeValue* announce_list_val = root.dict_get("announce-list");
     if (announce_list_val && announce_list_val.type == bencode::BencodeType.LIST)
     {
         usz num_tiers = announce_list_val.list.size;
@@ -166,7 +166,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     }
 
     // Extract 'nodes' (optional - BEP 5 DHT bootstrap nodes)
-    BencodeValue* nodes_val = bencode::dict_get(root, "nodes");
+    BencodeValue* nodes_val = root.dict_get("nodes");
     if (nodes_val && nodes_val.type == bencode::BencodeType.LIST)
     {
         usz num_nodes = nodes_val.list.size;
@@ -196,7 +196,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
     // Extract 'collections' (optional - BEP 38)
     // Can be in root dictionary or info dictionary (merge both)
-    BencodeValue* collections_val = bencode::dict_get(root, "collections");
+    BencodeValue* collections_val = root.dict_get("collections");
     if (collections_val && collections_val.type == bencode::BencodeType.LIST)
     {
         usz count = collections_val.list.size;
@@ -216,7 +216,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
     // Extract 'similar' (optional - BEP 38)
     // List of info-hashes (20-byte binary strings)
-    BencodeValue* similar_val = bencode::dict_get(root, "similar");
+    BencodeValue* similar_val = root.dict_get("similar");
     if (similar_val && similar_val.type == bencode::BencodeType.LIST)
     {
         usz count = similar_val.list.size;
@@ -242,21 +242,21 @@ fn TorrentFile*? parse(String data) @public => @pool()
     }
 
     // Extract 'created by' (optional)
-    BencodeValue* created_by_val = bencode::dict_get(root, "created by");
+    BencodeValue* created_by_val = root.dict_get("created by");
     if (created_by_val && created_by_val.type == bencode::BencodeType.STRING)
     {
         torrent.created_by = copy_string(created_by_val.string);
     }
 
     // Extract 'creation date' (optional)
-    BencodeValue* creation_date_val = bencode::dict_get(root, "creation date");
+    BencodeValue* creation_date_val = root.dict_get("creation date");
     if (creation_date_val && creation_date_val.type == bencode::BencodeType.INTEGER)
     {
         torrent.creation_date = creation_date_val.integer;
     }
 
     // Extract 'encoding' (optional)
-    BencodeValue* encoding_val = bencode::dict_get(root, "encoding");
+    BencodeValue* encoding_val = root.dict_get("encoding");
     if (encoding_val && encoding_val.type == bencode::BencodeType.STRING)
     {
         torrent.encoding = copy_string(encoding_val.string);
@@ -265,7 +265,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     // Extract 'url-list' (optional - BEP 19)
     // Can be either a single string or a list of strings
     // Deduplicates URLs to avoid redundant requests
-    BencodeValue* url_list_val = bencode::dict_get(root, "url-list");
+    BencodeValue* url_list_val = root.dict_get("url-list");
     if (url_list_val)
     {
         if (url_list_val.type == bencode::BencodeType.LIST)
@@ -330,7 +330,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
 
     // Extract 'httpseeds' (optional - BEP 17)
     // Deduplicates URLs and checks against url_list to avoid cross-list duplicates
-    BencodeValue* httpseeds_val = bencode::dict_get(root, "httpseeds");
+    BencodeValue* httpseeds_val = root.dict_get("httpseeds");
     if (httpseeds_val && httpseeds_val.type == bencode::BencodeType.LIST)
     {
         // Use HashSet for deduplication
@@ -379,22 +379,22 @@ fn TorrentFile*? parse(String data) @public => @pool()
     }
 
     // Extract 'info' dictionary (required)
-    BencodeValue* info_val = bencode::dict_get(root, "info");
+    BencodeValue* info_val = root.dict_get("info");
     if (!info_val || info_val.type != bencode::BencodeType.DICT)
     {
-        free_torrent_file(torrent);
+        torrent.free();
         return TORRENT_MISSING_FIELD?;
     }
 
     // Parse info dictionary
     if (catch err = parse_info(&torrent.info, info_val))
     {
-        free_torrent_file(torrent);
+        torrent.free();
         return err?;
     }
 
     // Calculate info_hash (SHA1 of bencoded info dict)
-    String info_encoded = bencode::encode(info_val);
+    String info_encoded = info_val.encode();
     defer free(info_encoded);  // bencode::encode() returns heap memory
     torrent.info_hash = sha1::hash(info_encoded);
 
@@ -455,8 +455,8 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     }
 
     // Check for single-file vs multi-file mode
-    BencodeValue* length_val = bencode::dict_get(info_val, "length");
-    BencodeValue* files_val = bencode::dict_get(info_val, "files");
+    BencodeValue* length_val = info_val.dict_get("length");
+    BencodeValue* files_val = info_val.dict_get("files");
 
     if (length_val && length_val.type == bencode::BencodeType.INTEGER)
     {
@@ -653,7 +653,7 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         }
 
         // BEP 47: Parse optional 'attr' field (file attributes)
-        BencodeValue* attr_val = bencode::dict_get(file_dict, "attr");
+        BencodeValue* attr_val = file_dict.dict_get("attr");
         if (attr_val && attr_val.type == bencode::BencodeType.STRING)
         {
             // Copy attr string to heap
@@ -669,7 +669,7 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
             }
             if (has_symlink)
             {
-                BencodeValue* symlink_val = bencode::dict_get(file_dict, "symlink path");
+                BencodeValue* symlink_val = file_dict.dict_get("symlink path");
                 if (!symlink_val || symlink_val.type != bencode::BencodeType.LIST)
                 {
                     return TORRENT_INVALID_SYMLINK?;  // Symlinks require 'symlink path' field
@@ -704,7 +704,7 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         }
 
         // BEP 47: Parse optional 'sha1' field (file hash for deduplication)
-        BencodeValue* sha1_val = bencode::dict_get(file_dict, "sha1");
+        BencodeValue* sha1_val = file_dict.dict_get("sha1");
         if (sha1_val && sha1_val.type == bencode::BencodeType.STRING && sha1_val.string.len == 20)
         {
             // Copy 20-byte SHA1 hash
@@ -824,16 +824,14 @@ fn char[] copy_bytes(char[] source)
 /**
  * Free a TorrentFile and all its contents.
  */
-fn void free_torrent_file(TorrentFile* torrent) @public
+fn void TorrentFile.free(&self) @public
 {
-    if (!torrent) return;
-
-    if (torrent.announce.len > 0) free(torrent.announce);
+    if (self.announce.len > 0) free(self.announce);
 
     // Free announce-list (multi-tracker)
-    if (torrent.announce_list.len > 0)
+    if (self.announce_list.len > 0)
     {
-        foreach (tier : torrent.announce_list)
+        foreach (tier : self.announce_list)
         {
             if (tier.len > 0)
             {
@@ -845,64 +843,64 @@ fn void free_torrent_file(TorrentFile* torrent) @public
                 free(tier);
             }
         }
-        free(torrent.announce_list);
+        free(self.announce_list);
     }
 
     // Free DHT nodes
-    if (torrent.nodes.len > 0)
+    if (self.nodes.len > 0)
     {
-        foreach (node : torrent.nodes)
+        foreach (node : self.nodes)
         {
             if (node.host.len > 0) free(node.host);
         }
-        free(torrent.nodes);
+        free(self.nodes);
     }
 
     // Free collections (BEP 38)
-    if (torrent.collections.len > 0)
+    if (self.collections.len > 0)
     {
-        foreach (collection : torrent.collections)
+        foreach (collection : self.collections)
         {
             if (collection.len > 0) free(collection);
         }
-        free(torrent.collections);
+        free(self.collections);
     }
 
     // Free similar info-hashes (BEP 38)
-    if (torrent.similar.len > 0)
+    if (self.similar.len > 0)
     {
-        free(torrent.similar);
+        free(self.similar);
     }
 
-    if (torrent.created_by.len > 0) free(torrent.created_by);
-    if (torrent.encoding.len > 0) free(torrent.encoding);
+    if (self.created_by.len > 0) free(self.created_by);
+    if (self.encoding.len > 0) free(self.encoding);
 
     // Free web seeds
-    if (torrent.url_list.len > 0)
+    if (self.url_list.len > 0)
     {
-        foreach (url : torrent.url_list)
+        foreach (url : self.url_list)
         {
             if (url.len > 0) free(url);
         }
-        free(torrent.url_list);
+        free(self.url_list);
     }
 
-    if (torrent.httpseeds.len > 0)
+    if (self.httpseeds.len > 0)
     {
-        foreach (seed : torrent.httpseeds)
+        foreach (seed : self.httpseeds)
         {
             if (seed.len > 0) free(seed);
         }
-        free(torrent.httpseeds);
+        free(self.httpseeds);
     }
 
-    if (torrent.info.name.len > 0) free(torrent.info.name);
-    if (torrent.info.pieces.len > 0) free(torrent.info.pieces);
+    if (self.info.name.len > 0) free(self.info.name);
+    if (self.info.pieces.len > 0) free(self.info.pieces);
 
     // Free multi-file data
-    if (torrent.info.is_multi_file && torrent.info.files.len > 0)
+    if (self.info.is_multi_file && self.info.files.len > 0)
     {
-        foreach (file : torrent.info.files)
+        foreach (file : self.info.files)
         {
             if (file.path.len > 0)
             {
@@ -927,35 +925,34 @@ fn void free_torrent_file(TorrentFile* torrent) @public
                 free(file.symlink_path);
             }
         }
-        free(torrent.info.files);
+        free(self.info.files);
     }
 
-    free(torrent);
+    free(self);
 }
 
 /**
  * Get the number of pieces in a torrent.
  */
-fn usz get_num_pieces(TorrentFile* torrent) @public
+fn usz TorrentFile.get_num_pieces(&self) @public
 {
-    return torrent.info.pieces.len / common::SHA1_HASH_SIZE;
+    return self.info.pieces.len / common::SHA1_HASH_SIZE;
 }
 
 /**
  * Get a specific piece hash by index.
  *
- * @param torrent The torrent file
  * @param index Piece index (0-based)
  * @return SHA1_HASH_SIZE-byte SHA1 hash or fault if index out of bounds
  */
-fn char[]? get_piece_hash(TorrentFile* torrent, usz index) @public
+fn char[]? TorrentFile.get_piece_hash(&self, usz index) @public
 {
-    usz num_pieces = get_num_pieces(torrent);
+    usz num_pieces = self.get_num_pieces();
     if (index >= num_pieces) return TORRENT_INDEX_OUT_OF_BOUNDS?;
 
     usz offset = index * common::SHA1_HASH_SIZE;
     char[common::SHA1_HASH_SIZE] hash;
-    foreach (i, byte : torrent.info.pieces[offset:common::SHA1_HASH_SIZE])
+    foreach (i, byte : self.info.pieces[offset:common::SHA1_HASH_SIZE])
     {
         hash[i] = byte;
     }
@@ -967,12 +964,11 @@ fn char[]? get_piece_hash(TorrentFile* torrent, usz index) @public
  *
  * Uses ceiling division: (length + piece_length - 1) / piece_length
  *
- * @param info Torrent info dictionary
  * @return Number of pieces
  */
-fn uint calculate_num_pieces(TorrentInfo* info) @public
+fn uint TorrentInfo.calculate_num_pieces(&self) @public
 {
-    return (uint)((info.length + info.piece_length - 1) / info.piece_length);
+    return (uint)((self.length + self.piece_length - 1) / self.piece_length);
 }
 
 /**
@@ -981,16 +977,15 @@ fn uint calculate_num_pieces(TorrentInfo* info) @public
  * The last piece may be shorter than piece_length if the file
  * size is not evenly divisible by piece_length.
  *
- * @param info Torrent info dictionary
  * @return Length of the last piece in bytes
  */
-fn uint calculate_last_piece_length(TorrentInfo* info) @public
+fn uint TorrentInfo.calculate_last_piece_length(&self) @public
 {
-    uint last_piece_length = (uint)(info.length % info.piece_length);
+    uint last_piece_length = (uint)(self.length % self.piece_length);
     if (last_piece_length == 0)
     {
         // If evenly divisible, last piece is full size
-        last_piece_length = (uint)info.piece_length;
+        last_piece_length = (uint)self.piece_length;
     }
     return last_piece_length;
 }

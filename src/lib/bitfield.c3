@@ -53,14 +53,14 @@ fn Bitfield create(usz num_pieces) @public
  Free a bitfield's memory.
 
 *>
-fn void free(Bitfield* bf) @public
+fn void Bitfield.free(&self) @public
 {
-    if (bf.data.len > 0)
+    if (self.data.len > 0)
     {
-        std::core::mem::free(bf.data);
-        bf.data = {};
+        std::core::mem::free(self.data);
+        self.data = {};
     }
-    bf.num_pieces = 0;
+    self.num_pieces = 0;
 }
 
 <*

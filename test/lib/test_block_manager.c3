@@ -12,7 +12,7 @@ fn void test_create_manager() @test
 {
     // 256KB piece = 16 blocks
     block_manager::BlockManager manager = block_manager::create(0, 262144);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.piece_index == 0, "Should track piece 0");
     assert(manager.piece_length == 262144, "Should have correct length");
@@ -24,7 +24,7 @@ fn void test_block_sizes() @test
 {
     // Test that blocks are 16KB each
     block_manager::BlockManager manager = block_manager::create(0, 262144);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     for (usz i = 0; i < manager.num_blocks; i++)
     {
@@ -38,7 +38,7 @@ fn void test_last_block_shorter() @test
     // 256KB + 8KB = 17 blocks, last one is 8KB
     uint piece_length = 262144 + 8192;
     block_manager::BlockManager manager = block_manager::create(0, piece_length);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_blocks == 17, "Should have 17 blocks");
 
@@ -56,7 +56,7 @@ fn void test_single_block_piece() @test
 {
     // Piece smaller than one block
     block_manager::BlockManager manager = block_manager::create(5, 8192);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_blocks == 1, "Should have 1 block");
     assert(manager.blocks[0].length == 8192, "Block should be 8KB");
@@ -70,7 +70,7 @@ fn void test_single_block_piece() @test
 fn void test_get_next_block() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 32768); // 2 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     block_manager::BlockRequest? req_opt = manager.get_next_block();
     req_opt!!;
@@ -84,7 +84,7 @@ fn void test_get_next_block() @test
 fn void test_get_next_block_sequential() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 49152); // 3 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     // Get first block
     block_manager::BlockRequest? req1_opt = manager.get_next_block();
@@ -112,7 +112,7 @@ fn void test_get_next_block_sequential() @test
 fn void test_get_next_block_none_available() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     // Mark the only block as requested
     manager.mark_requested(0)!!;
@@ -134,7 +134,7 @@ fn void test_get_next_block_none_available() @test
 fn void test_mark_requested() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 32768); // 2 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     manager.mark_requested(0)!!;
     assert(manager.blocks[0].state == block_manager::BlockState.REQUESTED, "Block should be requested");
@@ -144,7 +144,7 @@ fn void test_mark_requested() @test
 fn void test_mark_requested_invalid_offset() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     fault? result = manager.mark_requested(99999);
     if (catch excuse = result)
@@ -162,7 +162,7 @@ fn void test_mark_requested_invalid_offset() @test
 fn void test_mark_received() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     // Create block data
     char[16384] data;
@@ -178,7 +178,7 @@ fn void test_mark_received() @test
 fn void test_mark_received_wrong_size() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     // Wrong size data
     char[100] data;
@@ -195,7 +195,7 @@ fn void test_mark_received_wrong_size() @test
 fn void test_mark_received_duplicate() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     char[16384] data;
     manager.mark_received(0, data[..])!!;
@@ -213,7 +213,7 @@ fn void test_mark_received_duplicate() @test
 fn void test_mark_received_multiple_blocks() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 49152); // 3 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)i;
@@ -235,7 +235,7 @@ fn void test_mark_received_multiple_blocks() @test
 fn void test_is_complete() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 32768); // 2 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(!manager.is_complete(), "Should not be complete initially");
 
@@ -250,7 +250,7 @@ fn void test_is_complete() @test
 fn void test_assemble_piece() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 32768); // 2 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     // Create distinct data for each block
     char[16384] data1;
@@ -287,7 +287,7 @@ fn void test_assemble_piece() @test
 fn void test_assemble_piece_not_complete() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 32768); // 2 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     char[16384] data;
     manager.mark_received(0, data[..])!!;
@@ -306,7 +306,7 @@ fn void test_assemble_last_block_shorter() @test
 {
     // 2.5 blocks (40KB)
     block_manager::BlockManager manager = block_manager::create(0, 40960);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_blocks == 3, "Should have 3 blocks");
 
@@ -341,7 +341,7 @@ fn void test_assemble_last_block_shorter() @test
 fn void test_get_progress() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 49152); // 3 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     usz total, received;
     manager.get_progress(&total, &received);
@@ -358,7 +358,7 @@ fn void test_get_progress() @test
 fn void test_is_received() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 32768); // 2 blocks
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(!manager.is_received(0), "Block should not be received initially");
 
@@ -376,7 +376,7 @@ fn void test_is_received() @test
 fn void test_reset_block() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     manager.mark_requested(0)!!;
     assert(manager.blocks[0].state == block_manager::BlockState.REQUESTED, "Should be requested");
@@ -390,7 +390,7 @@ fn void test_reset_block() @test
 fn void test_reset_received_block() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     char[16384] data;
     manager.mark_received(0, data[..])!!;
@@ -410,7 +410,7 @@ fn void test_reset_received_block() @test
 fn void test_time_since_request() @test
 {
     block_manager::BlockManager manager = block_manager::create(0, 16384); // 1 block
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.time_since_request(0) == 0, "Should be 0 initially");
 
@@ -429,7 +429,7 @@ fn void test_empty_piece() @test
 {
     // Edge case: 0-byte piece (shouldn't happen in practice)
     block_manager::BlockManager manager = block_manager::create(0, 0);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_blocks == 0, "Should have 0 blocks");
     assert(manager.is_complete(), "0-byte piece is complete");
@@ -439,7 +439,7 @@ fn void test_exact_block_boundary() @test
 {
     // Exactly 1 block
     block_manager::BlockManager manager = block_manager::create(0, common::STANDARD_BLOCK_SIZE);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_blocks == 1, "Should have exactly 1 block");
     assert(manager.blocks[0].length == common::STANDARD_BLOCK_SIZE, "Block should be full size");
@@ -449,7 +449,7 @@ fn void test_large_piece() @test
 {
     // 16MB piece = 1024 blocks
     block_manager::BlockManager manager = block_manager::create(0, 16777216);
-    defer block_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_blocks == 1024, "Should have 1024 blocks");
 }

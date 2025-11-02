@@ -221,12 +221,12 @@ fn void on_complete_download(DownloadContext* ctx) @public
     // Free DHT resources
     if (ctx.dht_search)
     {
-        dht_get_peers::free_search(ctx.dht_search);
+        ctx.dht_search.free();
         ctx.dht_search = null;
     }
     if (ctx.dht_client)
     {
-        dht_client::free_dht_client(ctx.dht_client);
+        ctx.dht_client.free();
         ctx.dht_client = null;
     }
 
@@ -396,7 +396,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 // Store the bitfield in the peer's struct (critical for piece selection later!)
                 if (peer_info.pieces.data.len > 0)
                 {
-                    bitfield::free(&peer_info.pieces);
+                    peer_info.pieces.free();
                 }
                 peer_info.pieces = bitfield::from_bytes(msg.payload, num_pieces);
 
@@ -510,7 +510,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 // Store the bitfield in the peer's struct (all pieces = seed)
                 if (peer_info.pieces.data.len > 0)
                 {
-                    bitfield::free(&peer_info.pieces);
+                    peer_info.pieces.free();
                 }
                 peer_info.pieces = bitfield::create(num_pieces);
                 peer_info.pieces.set_all();
@@ -1268,7 +1268,7 @@ fn void on_dht_timer_tick(async::timer::Timer* timer, void* user_data) @public
     // Free previous search if exists
     if (ctx.dht_search)
     {
-        dht_get_peers::free_search(ctx.dht_search);
+        ctx.dht_search.free();
         ctx.dht_search = null;
     }
 
@@ -1286,7 +1286,7 @@ fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
 
     if (ctx.dht_client)
     {
-        dht_client::tick(ctx.dht_client);
+        ctx.dht_client.tick();
     }
 }
 
@@ -1305,8 +1305,7 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
 
     // Get 8 closest nodes from routing table for this info_hash
     dht_routing_table::NodeEntry[] nodes =
-        dht_routing_table::find_closest_nodes(
-            ctx.dht_client.routing_table,
+        ctx.dht_client.routing_table.find_closest_nodes(
             ctx.torrent.info_hash,
             8
         );
@@ -1323,8 +1322,7 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
     // Send get_peers query to each node
     for (int i = 0; i < (int)nodes.len; i++)
     {
-        dht_client::send_get_peers(
-            ctx.dht_client,
+        ctx.dht_client.send_get_peers(
             nodes[i].id,
             nodes[i].ip,
             nodes[i].port,
@@ -1391,7 +1389,7 @@ fn void on_dht_peers_found(download_session::DownloadContext* ctx) @public
     if (!ctx.dht_search) return;
 
     // Get discovered peers from DHT
-    common::Peer[] dht_peers = dht_get_peers::get_peers(ctx.dht_search);
+    common::Peer[] dht_peers = ctx.dht_search.get_peers();
     defer free(dht_peers);
 
     if (dht_peers.len == 0)
@@ -1435,10 +1433,10 @@ fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @publi
     io::printfn("[DHT] Starting DHT on port %d", dht_port);
 
     // Add default bootstrap nodes
-    dht_client::add_default_bootstrap_nodes(ctx.dht_client);
+    ctx.dht_client.add_default_bootstrap_nodes();
 
     // Start bootstrap process
-    dht_client::bootstrap(ctx.dht_client);
+    ctx.dht_client.bootstrap();
 
     ctx.dht_enabled = true;
 

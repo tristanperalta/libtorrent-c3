@@ -117,7 +117,7 @@ fn void test_create_storage_manager() @test
     }
 
     storage_manager::StorageManager manager = manager_opt;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.num_pieces == 3, "Should have 3 pieces");
     assert(manager.piece_length == 32768, "Piece length should be 32KB");
@@ -140,7 +140,7 @@ fn void test_initialize_storage() @test
 
     storage_manager::StorageManager manager =
         storage_manager::create(&loop, &info, "/tmp/test_storage_init", true)!!;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     TestContext ctx;
     ctx.success = false;
@@ -232,7 +232,7 @@ fn void test_write_piece() @test
 
     storage_manager::StorageManager manager =
         storage_manager::create(&loop, &info, "/tmp/test_storage_write", true)!!;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     TestContext ctx;
     ctx.success = false;
@@ -283,7 +283,7 @@ fn void test_write_read_piece() @test
 
     storage_manager::StorageManager manager =
         storage_manager::create(&loop, &info, "/tmp/test_storage_rw", true)!!;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     TestContext ctx;
     ctx.success = false;
@@ -369,7 +369,7 @@ fn void test_verify_piece() @test
 
     storage_manager::StorageManager manager =
         storage_manager::create(&loop, &info, "/tmp/test_storage_verify", true)!!;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     TestContext ctx;
     ctx.success = false;
@@ -443,7 +443,7 @@ fn void test_multi_file_storage() @test
 
     storage_manager::StorageManager manager =
         storage_manager::create(&loop, &info, "/tmp/test_storage_multi", true)!!;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     assert(manager.files.len == 3, "Should have 3 files");
     assert(manager.num_pieces == 3, "Should have 3 pieces");
@@ -486,7 +486,7 @@ fn void test_piece_spanning_files() @test
 
     storage_manager::StorageManager manager =
         storage_manager::create(&loop, &info, "/tmp/test_storage_span", true)!!;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     TestContext ctx;
     ctx.success = false;
@@ -575,7 +575,7 @@ fn void test_last_piece_shorter() @test
 
     storage_manager::StorageManager manager =
         storage_manager::create(&loop, &info, "/tmp/test_storage_last", true)!!;
-    defer storage_manager::free(&manager);
+    defer manager.free();
 
     // Last piece (piece 2) should be 98304 - 65536 = 32768 bytes
     // (Actually same size in this test, but tests the logic)

@@ -90,19 +90,15 @@ fn GetPeersSearch* create_search(common::InfoHash info_hash) @public
 
 /**
  * Free a get_peers search
- *
- * @param search Search to free
  */
-fn void free_search(GetPeersSearch* search) @public
+fn void GetPeersSearch.free(&self) @public
 {
-    if (!search) return;
-
-    if (search.traversal)
+    if (self.traversal)
     {
-        dht_traversal::free_traversal(search.traversal);
+        self.traversal.free();
     }
 
-    free(search);
+    free(self);
 }
 
 // ============================================================================
@@ -112,36 +108,35 @@ fn void free_search(GetPeersSearch* search) @public
 /**
  * Add a peer to the search results
  *
- * @param search Search state
  * @param ip Peer IP address
  * @param port Peer port
  * @return true if peer was added
  */
-fn bool add_peer(GetPeersSearch* search, common::Ipv4Addr ip, ushort port) @public
+fn bool GetPeersSearch.add_peer(&self, common::Ipv4Addr ip, ushort port) @public
 {
     // Check if we already have this peer
-    for (int i = 0; i < search.peer_count; i++)
+    for (int i = 0; i < self.peer_count; i++)
     {
-        if (search.peers[i].ip[0] == ip[0] &&
-            search.peers[i].ip[1] == ip[1] &&
-            search.peers[i].ip[2] == ip[2] &&
-            search.peers[i].ip[3] == ip[3] &&
-            search.peers[i].port == port)
+        if (self.peers[i].ip[0] == ip[0] &&
+            self.peers[i].ip[1] == ip[1] &&
+            self.peers[i].ip[2] == ip[2] &&
+            self.peers[i].ip[3] == ip[3] &&
+            self.peers[i].port == port)
         {
             return false;  // Duplicate
         }
     }
 
     // Check if we have space
-    if (search.peer_count >= MAX_PEERS_PER_TORRENT) return false;
+    if (self.peer_count >= MAX_PEERS_PER_TORRENT) return false;
 
     // Add peer
-    common::Peer* peer = &search.peers[search.peer_count];
+    common::Peer* peer = &self.peers[self.peer_count];
     for (int i = 0; i < 4; i++) peer.ip[i] = ip[i];
     peer.port = port;
 
-    search.peer_count++;
-    search.found_peers = true;
+    self.peer_count++;
+    self.found_peers = true;
 
     return true;
 }
@@ -149,11 +144,10 @@ fn bool add_peer(GetPeersSearch* search, common::Ipv4Addr ip, ushort port) @publ
 /**
  * Add multiple peers from compact format
  *
- * @param search Search state
  * @param compact_peers Compact peer data (6 bytes per peer)
  * @return Number of peers added
  */
-fn int add_peers_compact(GetPeersSearch* search, char[] compact_peers) @public
+fn int GetPeersSearch.add_peers_compact(&self, char[] compact_peers) @public
 {
     int added = 0;
 
@@ -168,7 +162,7 @@ fn int add_peers_compact(GetPeersSearch* search, char[] compact_peers) @public
 
         ushort port = ((ushort)compact_peers[i + 4] << 8) | (ushort)compact_peers[i + 5];
 
-        if (add_peer(search, ip, port))
+        if (self.add_peer(ip, port))
         {
             added++;
         }
@@ -180,15 +174,14 @@ fn int add_peers_compact(GetPeersSearch* search, char[] compact_peers) @public
 /**
  * Get all discovered peers
  *
- * @param search Search state
  * @return Array of peers (caller must free)
  */
-fn common::Peer[] get_peers(GetPeersSearch* search) @public
+fn common::Peer[] GetPeersSearch.get_peers(&self) @public
 {
-    common::Peer[] result = mem::new_array(common::Peer, search.peer_count);
-    for (int i = 0; i < search.peer_count; i++)
+    common::Peer[] result = mem::new_array(common::Peer, self.peer_count);
+    for (int i = 0; i < self.peer_count; i++)
     {
-        result[i] = search.peers[i];
+        result[i] = self.peers[i];
     }
     return result;
 }
@@ -200,21 +193,20 @@ fn common::Peer[] get_peers(GetPeersSearch* search) @public
 /**
  * Add an announce token
  *
- * @param search Search state
  * @param node_id Node ID that provided the token
  * @param node_ip Node IP
  * @param node_port Node port
  * @param token Token data
  * @return true if token was added
  */
-fn bool add_token(GetPeersSearch* search, common::NodeId node_id,
-                  common::Ipv4Addr node_ip, ushort node_port, char[] token) @public
+fn bool GetPeersSearch.add_token(&self, common::NodeId node_id,
+                                 common::Ipv4Addr node_ip, ushort node_port, char[] token) @public
 {
     // Check if we have space
-    if (search.token_count >= 8) return false;
+    if (self.token_count >= 8) return false;
 
     // Add token
-    AnnounceToken* t = &search.tokens[search.token_count];
+    AnnounceToken* t = &self.tokens[self.token_count];
 
     for (int i = 0; i < 20; i++) t.node_id[i] = node_id[i];
     for (int i = 0; i < 4; i++) t.node_ip[i] = node_ip[i];
@@ -231,7 +223,7 @@ fn bool add_token(GetPeersSearch* search, common::NodeId node_id,
 
     t.received_time = 0;  // Should be set to current time in full implementation
 
-    search.token_count++;
+    self.token_count++;
     return true;
 }
 
@@ -239,7 +231,6 @@ fn bool add_token(GetPeersSearch* search, common::NodeId node_id,
  * Get the best announce token
  * Returns the token from the closest node
  *
- * @param search Search state
  * @param token_out Output buffer for token (must be at least 32 bytes)
  * @param token_len_out Output: token length
  * @param node_id_out Output: node ID that provided the token
@@ -247,14 +238,14 @@ fn bool add_token(GetPeersSearch* search, common::NodeId node_id,
  * @param node_port_out Output: node port
  * @return true if a token is available
  */
-fn bool get_announce_token(GetPeersSearch* search, char* token_out, char* token_len_out,
-                           common::NodeId* node_id_out, common::Ipv4Addr* node_ip_out,
-                           ushort* node_port_out) @public
+fn bool GetPeersSearch.get_announce_token(&self, char* token_out, char* token_len_out,
+                                          common::NodeId* node_id_out, common::Ipv4Addr* node_ip_out,
+                                          ushort* node_port_out) @public
 {
-    if (search.token_count == 0) return false;
+    if (self.token_count == 0) return false;
 
     // Return the first token (in full implementation, should return from closest node)
-    AnnounceToken* t = &search.tokens[0];
+    AnnounceToken* t = &self.tokens[0];
 
     for (int i = 0; i < t.token_len; i++)
     {
@@ -276,19 +267,18 @@ fn bool get_announce_token(GetPeersSearch* search, char* token_out, char* token_
 /**
  * Get search statistics
  *
- * @param search Search state
  * @param peer_count Output: number of peers found
  * @param token_count Output: number of tokens collected
  * @param nodes_queried Output: number of nodes queried
  */
-fn void get_stats(GetPeersSearch* search, int* peer_count, int* token_count,
-                  int* nodes_queried) @public
+fn void GetPeersSearch.get_stats(&self, int* peer_count, int* token_count,
+                                 int* nodes_queried) @public
 {
-    *peer_count = search.peer_count;
-    *token_count = search.token_count;
+    *peer_count = self.peer_count;
+    *token_count = self.token_count;
 
     int total, queries, responses;
-    dht_traversal::get_stats(search.traversal, &total, &queries, &responses);
+    self.traversal.get_stats(&total, &queries, &responses);
     *nodes_queried = queries;
 }
 
@@ -307,10 +297,9 @@ fn bool found_peers(GetPeersSearch* search) @public
  * Check if search is complete
  * Delegates to underlying traversal
  *
- * @param search Search state
  * @return true if search should stop
  */
-fn bool is_done(GetPeersSearch* search) @public
+fn bool GetPeersSearch.is_done(&self) @public
 {
-    return dht_traversal::is_done(search.traversal);
+    return dht_traversal::is_done(self.traversal);
 }

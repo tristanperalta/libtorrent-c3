@@ -106,18 +106,18 @@ fn PieceAssembler create(uint piece_index, uint piece_length, char[20] expected_
 <*
  Free a piece assembler.
 *>
-fn void free(PieceAssembler* assembler) @public
+fn void PieceAssembler.free(&self) @public
 {
-    if (assembler.data.len > 0)
+    if (self.data.len > 0)
     {
-        std::core::mem::free(assembler.data);
-        assembler.data = {};
+        std::core::mem::free(self.data);
+        self.data = {};
     }
 
-    if (assembler.received.len > 0)
+    if (self.received.len > 0)
     {
-        std::core::mem::free(assembler.received);
-        assembler.received = {};
+        std::core::mem::free(self.received);
+        self.received = {};
     }
 }
 

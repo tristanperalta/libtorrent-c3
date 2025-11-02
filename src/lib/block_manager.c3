@@ -134,29 +134,27 @@ fn BlockManager create(uint piece_index, uint piece_length) @public
 
 <*
  Free a block manager.
-
- @param manager : "Block manager to free"
 *>
-fn void free(BlockManager* manager) @public
+fn void BlockManager.free(&self) @public
 {
     // Free block data
-    for (usz i = 0; i < manager.num_blocks; i++)
+    for (usz i = 0; i < self.num_blocks; i++)
     {
-        if (manager.blocks[i].data.len > 0)
+        if (self.blocks[i].data.len > 0)
         {
-            std::core::mem::free(manager.blocks[i].data);
-            manager.blocks[i].data = {};
+            std::core::mem::free(self.blocks[i].data);
+            self.blocks[i].data = {};
         }
     }
 
     // Free blocks array
-    if (manager.blocks.len > 0)
+    if (self.blocks.len > 0)
     {
-        std::core::mem::free(manager.blocks);
-        manager.blocks = {};
+        std::core::mem::free(self.blocks);
+        self.blocks = {};
     }
 
-    manager.num_blocks = 0;
+    self.num_blocks = 0;
 }
 
 <*

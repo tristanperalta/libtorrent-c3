@@ -145,31 +145,31 @@ fn DownloadManager create(event_loop::EventLoop* loop, uint num_pieces, uint pie
 <*
  Free a download manager and all associated resources.
 *>
-fn void free(DownloadManager* manager) @public
+fn void DownloadManager.free(&self) @public
 {
     // Free piece picker
-    piece_picker::free(&manager.picker);
+    self.picker.free();
 
     // Free active downloads
-    for (usz i = 0; i < manager.max_concurrent_pieces; i++)
+    for (usz i = 0; i < self.max_concurrent_pieces; i++)
     {
-        if (manager.active_downloads[i].active)
+        if (self.active_downloads[i].active)
         {
-            block_manager::free(&manager.active_downloads[i].blocks);
-            piece_assembler::free(&manager.active_downloads[i].assembler);
+            self.active_downloads[i].blocks.free();
+            self.active_downloads[i].assembler.free();
         }
     }
 
-    if (manager.active_downloads.len > 0)
+    if (self.active_downloads.len > 0)
     {
-        std::core::mem::free(manager.active_downloads);
-        manager.active_downloads = {};
+        std::core::mem::free(self.active_downloads);
+        self.active_downloads = {};
     }
 
-    if (manager.piece_hashes.len > 0)
+    if (self.piece_hashes.len > 0)
     {
-        std::core::mem::free(manager.piece_hashes);
-        manager.piece_hashes = {};
+        std::core::mem::free(self.piece_hashes);
+        self.piece_hashes = {};
     }
 }
 
@@ -464,8 +464,8 @@ fn void DownloadManager.complete_piece(&self, uint piece_index,
             ctx.piece_data_copy = piece_data_copy;
 
             // Free slot resources IMMEDIATELY (don't wait for verification)
-            block_manager::free(&self.active_downloads[i].blocks);
-            piece_assembler::free(&self.active_downloads[i].assembler);
+            self.active_downloads[i].blocks.free();
+            self.active_downloads[i].assembler.free();
             self.active_downloads[i].active = false;
 
             // Start async verification with copied data
@@ -500,8 +500,8 @@ fn fault? DownloadManager.fail_piece(&self, uint piece_index) @public
             self.active_downloads[i].piece_index == piece_index)
         {
             // Free download resources
-            block_manager::free(&self.active_downloads[i].blocks);
-            piece_assembler::free(&self.active_downloads[i].assembler);
+            self.active_downloads[i].blocks.free();
+            self.active_downloads[i].assembler.free();
             self.active_downloads[i].active = false;
 
             // Return piece to FREE state in picker

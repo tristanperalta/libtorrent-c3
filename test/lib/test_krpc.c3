@@ -25,7 +25,7 @@ alias MessageType = krpc::MessageType;
 fn void test_create_transaction_tracker() @test
 {
     krpc::TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer krpc::free_transaction_tracker(&tracker);
+    defer tracker.free();
 
     assert(tracker.next_id == 1, "Initial transaction ID should be 1");
     assert(tracker.active.len() == 0, "Active list should be empty initially");
@@ -34,17 +34,17 @@ fn void test_create_transaction_tracker() @test
 fn void test_generate_transaction_id() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer krpc::free_transaction_tracker(&tracker);
+    defer tracker.free();
 
     // Generate first transaction ID
-    String tid1 = krpc::generate_transaction_id(&tracker);
+    String tid1 = tracker.generate_transaction_id();
     defer free(tid1);
 
     assert(tid1.len == 2, "Transaction ID should be 2 bytes");
     assert(tracker.next_id == 2, "Counter should increment to 2");
 
     // Generate second transaction ID
-    String tid2 = krpc::generate_transaction_id(&tracker);
+    String tid2 = tracker.generate_transaction_id();
     defer free(tid2);
 
     assert(tid2.len == 2, "Transaction ID should be 2 bytes");
@@ -60,17 +60,17 @@ fn void test_generate_transaction_id() @test
 fn void test_transaction_id_wraps() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     // Set counter near max
     tracker.next_id = 65535;
 
-    String tid1 = krpc::generate_transaction_id(&tracker);
+    String tid1 = tracker.generate_transaction_id();
     defer free(tid1);
 
     assert(tracker.next_id == 0, "Counter should wrap to 0 after 65535");
 
-    String tid2 = krpc::generate_transaction_id(&tracker);
+    String tid2 = tracker.generate_transaction_id();
     defer free(tid2);
 
     assert(tracker.next_id == 1, "Counter should be 1 after wrapping");
@@ -85,10 +85,10 @@ fn void test_transaction_id_wraps() @test
 fn void test_track_transaction() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     // Create a transaction
-    String tid = krpc::generate_transaction_id(&tracker);
+    String tid = tracker.generate_transaction_id();
     defer free(tid);
 
     Transaction t;
@@ -98,7 +98,7 @@ fn void test_track_transaction() @test
     t.callback_data = null;
 
     // Track it
-    krpc::track_transaction(&tracker, t);
+    tracker.track_transaction( t);
 
     assert(tracker.active.len() == 1, "Should have 1 active transaction");
 
@@ -108,14 +108,14 @@ fn void test_track_transaction() @test
 fn void test_track_multiple_transactions() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     long now_sec = (long)time::now().to_seconds();
 
     // Track 3 transactions
     for (int i = 0; i < 3; i++)
     {
-        String tid = krpc::generate_transaction_id(&tracker);
+        String tid = tracker.generate_transaction_id();
 
         Transaction t;
         t.transaction_id = tid;
@@ -123,7 +123,7 @@ fn void test_track_multiple_transactions() @test
         t.sent_at_sec = now_sec;
         t.callback_data = null;
 
-        krpc::track_transaction(&tracker, t);
+        tracker.track_transaction( t);
         free(tid);  // track_transaction makes a copy
     }
 
@@ -139,9 +139,9 @@ fn void test_track_multiple_transactions() @test
 fn void test_find_transaction_index() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
-    String tid = krpc::generate_transaction_id(&tracker);
+    String tid = tracker.generate_transaction_id();
     defer free(tid);
 
     Transaction t;
@@ -150,10 +150,10 @@ fn void test_find_transaction_index() @test
     t.sent_at_sec = (long)time::now().to_seconds();
     t.callback_data = null;
 
-    krpc::track_transaction(&tracker, t);
+    tracker.track_transaction( t);
 
     // Find the transaction
-    usz idx = krpc::find_transaction_index(&tracker, tid);
+    usz idx = tracker.find_transaction_index(tid);
     assert(idx == 0, "Should find transaction at index 0");
 
     io::printn("✓ Finding transaction by ID works");
@@ -162,11 +162,11 @@ fn void test_find_transaction_index() @test
 fn void test_find_transaction_not_found() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     // Try to find non-existent transaction
     char[2] fake_tid = {0xFF, 0xFF};
-    usz idx = krpc::find_transaction_index(&tracker, (String)fake_tid[..]);
+    usz idx = tracker.find_transaction_index((String)fake_tid[..]);
 
     assert(idx == usz.max, "Should return usz.max for non-existent transaction");
 
@@ -176,9 +176,9 @@ fn void test_find_transaction_not_found() @test
 fn void test_find_transaction() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
-    String tid = krpc::generate_transaction_id(&tracker);
+    String tid = tracker.generate_transaction_id();
     defer free(tid);
 
     Transaction t;
@@ -187,10 +187,10 @@ fn void test_find_transaction() @test
     t.sent_at_sec = (long)time::now().to_seconds();
     t.callback_data = null;
 
-    krpc::track_transaction(&tracker, t);
+    tracker.track_transaction( t);
 
     // Find the transaction
-    Transaction? found = krpc::find_transaction(&tracker, tid);
+    Transaction? found = tracker.find_transaction( tid);
     if (catch err = found)
     {
         assert(false, "Should find the transaction");
@@ -205,10 +205,10 @@ fn void test_find_transaction() @test
 fn void test_find_transaction_returns_fault_when_not_found() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     char[2] fake_tid = {0xFF, 0xFF};
-    Transaction? result = krpc::find_transaction(&tracker, (String)fake_tid[..]);
+    Transaction? result = tracker.find_transaction( (String)fake_tid[..]);
 
     if (catch err = result)
     {
@@ -227,9 +227,9 @@ fn void test_find_transaction_returns_fault_when_not_found() @test
 fn void test_remove_transaction() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
-    String tid = krpc::generate_transaction_id(&tracker);
+    String tid = tracker.generate_transaction_id();
     defer free(tid);
 
     Transaction t;
@@ -238,12 +238,12 @@ fn void test_remove_transaction() @test
     t.sent_at_sec = (long)time::now().to_seconds();
     t.callback_data = null;
 
-    krpc::track_transaction(&tracker, t);  // track_transaction makes a copy
+    tracker.track_transaction( t);  // track_transaction makes a copy
 
     assert(tracker.active.len() == 1, "Should have 1 transaction");
 
     // Remove it (use tid before it's freed)
-    krpc::remove_transaction(&tracker, tid);
+    tracker.remove_transaction( tid);
 
     assert(tracker.active.len() == 0, "Should have 0 transactions after removal");
 
@@ -253,14 +253,14 @@ fn void test_remove_transaction() @test
 fn void test_remove_transaction_from_multiple() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     long now_sec = (long)time::now().to_seconds();
 
     // Track 3 transactions
-    String tid1 = krpc::generate_transaction_id(&tracker);
-    String tid2 = krpc::generate_transaction_id(&tracker);
-    String tid3 = krpc::generate_transaction_id(&tracker);
+    String tid1 = tracker.generate_transaction_id();
+    String tid2 = tracker.generate_transaction_id();
+    String tid3 = tracker.generate_transaction_id();
 
     defer free(tid1);
     defer free(tid2);
@@ -284,21 +284,21 @@ fn void test_remove_transaction_from_multiple() @test
     t3.sent_at_sec = now_sec;
     t3.callback_data = null;
 
-    krpc::track_transaction(&tracker, t1);
-    krpc::track_transaction(&tracker, t2);
-    krpc::track_transaction(&tracker, t3);
+    tracker.track_transaction( t1);
+    tracker.track_transaction( t2);
+    tracker.track_transaction( t3);
 
     assert(tracker.active.len() == 3, "Should have 3 transactions");
 
     // Remove middle one (use tid2 before it's freed)
-    krpc::remove_transaction(&tracker, tid2);
+    tracker.remove_transaction( tid2);
 
     assert(tracker.active.len() == 2, "Should have 2 transactions after removal");
 
     // Check that the right ones remain
-    usz idx1 = krpc::find_transaction_index(&tracker, tid1);
-    usz idx3 = krpc::find_transaction_index(&tracker, tid3);
-    usz idx2 = krpc::find_transaction_index(&tracker, tid2);
+    usz idx1 = tracker.find_transaction_index(tid1);
+    usz idx3 = tracker.find_transaction_index(tid3);
+    usz idx2 = tracker.find_transaction_index(tid2);
 
     assert(idx1 != usz.max, "Transaction 1 should still exist");
     assert(idx3 != usz.max, "Transaction 3 should still exist");
@@ -310,11 +310,11 @@ fn void test_remove_transaction_from_multiple() @test
 fn void test_remove_nonexistent_transaction() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     // Try to remove non-existent transaction (should not crash)
     char[2] fake_tid = {0xFF, 0xFF};
-    krpc::remove_transaction(&tracker, (String)fake_tid[..]);
+    tracker.remove_transaction( (String)fake_tid[..]);
 
     assert(tracker.active.len() == 0, "Should still have 0 transactions");
 
@@ -328,9 +328,9 @@ fn void test_remove_nonexistent_transaction() @test
 fn void test_get_expired_transactions_none() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
-    String tid = krpc::generate_transaction_id(&tracker);
+    String tid = tracker.generate_transaction_id();
     defer free(tid);
 
     Transaction t;
@@ -339,10 +339,10 @@ fn void test_get_expired_transactions_none() @test
     t.sent_at_sec = (long)time::now().to_seconds();
     t.callback_data = null;
 
-    krpc::track_transaction(&tracker, t);
+    tracker.track_transaction( t);
 
     // Check for expired transactions (timeout = 10 seconds)
-    TransactionList expired = krpc::get_expired_transactions(&tracker, 10);
+    TransactionList expired = tracker.get_expired_transactions( 10);
     defer expired.free();
 
     assert(expired.len() == 0, "Should have no expired transactions");
@@ -353,9 +353,9 @@ fn void test_get_expired_transactions_none() @test
 fn void test_get_expired_transactions_one() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
-    String tid = krpc::generate_transaction_id(&tracker);
+    String tid = tracker.generate_transaction_id();
     defer free(tid);
 
     long now_sec = (long)time::now().to_seconds();
@@ -366,10 +366,10 @@ fn void test_get_expired_transactions_one() @test
     t.sent_at_sec = now_sec - 15;  // 15 seconds ago
     t.callback_data = null;
 
-    krpc::track_transaction(&tracker, t);
+    tracker.track_transaction( t);
 
     // Check for expired transactions (timeout = 10 seconds)
-    TransactionList expired = krpc::get_expired_transactions(&tracker, 10);
+    TransactionList expired = tracker.get_expired_transactions( 10);
     defer expired.free();
 
     assert(expired.len() == 1, "Should have 1 expired transaction");
@@ -383,14 +383,14 @@ fn void test_get_expired_transactions_one() @test
 fn void test_get_expired_transactions_mixed() @test
 {
     TransactionTracker tracker = krpc::create_transaction_tracker();
-    defer (void)krpc::free_transaction_tracker(&tracker);
+    defer (void)tracker.free();
 
     long now_sec = (long)time::now().to_seconds();
 
     // Add 3 transactions: 1 expired, 2 fresh
-    String tid1 = krpc::generate_transaction_id(&tracker);
-    String tid2 = krpc::generate_transaction_id(&tracker);
-    String tid3 = krpc::generate_transaction_id(&tracker);
+    String tid1 = tracker.generate_transaction_id();
+    String tid2 = tracker.generate_transaction_id();
+    String tid3 = tracker.generate_transaction_id();
 
     Transaction t1;
     t1.transaction_id = tid1;
@@ -410,16 +410,16 @@ fn void test_get_expired_transactions_mixed() @test
     t3.sent_at_sec = now_sec - 2;   // Fresh
     t3.callback_data = null;
 
-    krpc::track_transaction(&tracker, t1);
-    krpc::track_transaction(&tracker, t2);
-    krpc::track_transaction(&tracker, t3);
+    tracker.track_transaction( t1);
+    tracker.track_transaction( t2);
+    tracker.track_transaction( t3);
 
     free(tid1);
     free(tid2);
     free(tid3);
 
     // Check for expired transactions (timeout = 10 seconds)
-    TransactionList expired = krpc::get_expired_transactions(&tracker, 10);
+    TransactionList expired = tracker.get_expired_transactions( 10);
     defer expired.free();
 
     assert(expired.len() == 1, "Should have 1 expired transaction");
@@ -444,7 +444,7 @@ fn void test_free_transaction_tracker() @test
     // Add multiple transactions
     for (int i = 0; i < 5; i++)
     {
-        String tid = krpc::generate_transaction_id(&tracker);
+        String tid = tracker.generate_transaction_id();
 
         Transaction t;
         t.transaction_id = tid;
@@ -452,14 +452,14 @@ fn void test_free_transaction_tracker() @test
         t.sent_at_sec = now_sec;
         t.callback_data = null;
 
-        krpc::track_transaction(&tracker, t);
+        tracker.track_transaction( t);
         free(tid);
     }
 
     assert(tracker.active.len() == 5, "Should have 5 transactions");
 
     // Free tracker (should not crash or leak memory)
-    krpc::free_transaction_tracker(&tracker);
+    tracker.free();
 
     io::printn("✓ Transaction tracker cleanup works without leaks");
 }
@@ -547,24 +547,24 @@ fn void test_encode_ping_query() @test
 
     // Decode to verify structure
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     assert(root.type == bencode::BencodeType.DICT, "Root should be dictionary");
 
     // Check message type
-    BencodeValue* y_val = bencode::dict_get(root, "y");
+    BencodeValue* y_val = root.dict_get("y");
     assert(y_val != null && y_val.type == bencode::BencodeType.STRING, "Should have 'y' string");
     assert((String)y_val.string == "q", "Message type should be 'q'");
 
     // Check query method
-    BencodeValue* q_val = bencode::dict_get(root, "q");
+    BencodeValue* q_val = root.dict_get("q");
     assert(q_val != null && (String)q_val.string == "ping", "Query method should be 'ping'");
 
     // Check arguments
-    BencodeValue* a_val = bencode::dict_get(root, "a");
+    BencodeValue* a_val = root.dict_get("a");
     assert(a_val != null && a_val.type == bencode::BencodeType.DICT, "Should have arguments dict");
 
-    BencodeValue* id_val = bencode::dict_get(a_val, "id");
+    BencodeValue* id_val = a_val.dict_get("id");
     assert(id_val != null && id_val.string.len == 20, "Node ID should be 20 bytes");
 
     io::printn("✓ Ping query encodes correctly");
@@ -580,15 +580,15 @@ fn void test_encode_find_node_query() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check query method
-    BencodeValue* q_val = bencode::dict_get(root, "q");
+    BencodeValue* q_val = root.dict_get("q");
     assert((String)q_val.string == "find_node", "Query method should be 'find_node'");
 
     // Check arguments
-    BencodeValue* a_val = bencode::dict_get(root, "a");
-    BencodeValue* target_val = bencode::dict_get(a_val, "target");
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* target_val = a_val.dict_get("target");
     assert(target_val != null && target_val.string.len == 20, "Target should be 20 bytes");
 
     io::printn("✓ Find node query encodes correctly");
@@ -604,15 +604,15 @@ fn void test_encode_get_peers_query() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check query method
-    BencodeValue* q_val = bencode::dict_get(root, "q");
+    BencodeValue* q_val = root.dict_get("q");
     assert((String)q_val.string == "get_peers", "Query method should be 'get_peers'");
 
     // Check info_hash
-    BencodeValue* a_val = bencode::dict_get(root, "a");
-    BencodeValue* info_hash_val = bencode::dict_get(a_val, "info_hash");
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* info_hash_val = a_val.dict_get("info_hash");
     assert(info_hash_val != null && info_hash_val.string.len == 20, "Info hash should be 20 bytes");
 
     io::printn("✓ Get peers query encodes correctly");
@@ -630,22 +630,22 @@ fn void test_encode_announce_peer_query() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check query method
-    BencodeValue* q_val = bencode::dict_get(root, "q");
+    BencodeValue* q_val = root.dict_get("q");
     assert((String)q_val.string == "announce_peer", "Query method should be 'announce_peer'");
 
     // Check arguments
-    BencodeValue* a_val = bencode::dict_get(root, "a");
+    BencodeValue* a_val = root.dict_get("a");
 
-    BencodeValue* port_val = bencode::dict_get(a_val, "port");
+    BencodeValue* port_val = a_val.dict_get("port");
     assert(port_val != null && port_val.integer == 6881, "Port should be 6881");
 
-    BencodeValue* token_val = bencode::dict_get(a_val, "token");
+    BencodeValue* token_val = a_val.dict_get("token");
     assert(token_val != null, "Token should be present");
 
-    BencodeValue* implied_port_val = bencode::dict_get(a_val, "implied_port");
+    BencodeValue* implied_port_val = a_val.dict_get("implied_port");
     assert(implied_port_val != null && implied_port_val.integer == 1, "Implied port should be 1");
 
     io::printn("✓ Announce peer query encodes correctly");
@@ -663,10 +663,10 @@ fn void test_encode_announce_peer_query_no_implied_port() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    BencodeValue* a_val = bencode::dict_get(root, "a");
-    BencodeValue* implied_port_val = bencode::dict_get(a_val, "implied_port");
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* implied_port_val = a_val.dict_get("implied_port");
     assert(implied_port_val != null && implied_port_val.integer == 0, "Implied port should be 0");
 
     io::printn("✓ Announce peer query with explicit port encodes correctly");
@@ -681,17 +681,17 @@ fn void test_encode_ping_response() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check message type
-    BencodeValue* y_val = bencode::dict_get(root, "y");
+    BencodeValue* y_val = root.dict_get("y");
     assert((String)y_val.string == "r", "Message type should be 'r' (response)");
 
     // Check response dict
-    BencodeValue* r_val = bencode::dict_get(root, "r");
+    BencodeValue* r_val = root.dict_get("r");
     assert(r_val != null && r_val.type == bencode::BencodeType.DICT, "Should have response dict");
 
-    BencodeValue* id_val = bencode::dict_get(r_val, "id");
+    BencodeValue* id_val = r_val.dict_get("id");
     assert(id_val != null && id_val.string.len == 20, "Node ID should be 20 bytes");
 
     io::printn("✓ Ping response encodes correctly");
@@ -716,11 +716,11 @@ fn void test_encode_find_node_response() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check response contains nodes
-    BencodeValue* r_val = bencode::dict_get(root, "r");
-    BencodeValue* nodes_val = bencode::dict_get(r_val, "nodes");
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* nodes_val = r_val.dict_get("nodes");
     assert(nodes_val != null && nodes_val.string.len == 26, "Nodes should be 26 bytes");
 
     io::printn("✓ Find node response encodes correctly");
@@ -739,10 +739,10 @@ fn void test_encode_find_node_response_multiple_nodes() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    BencodeValue* r_val = bencode::dict_get(root, "r");
-    BencodeValue* nodes_val = bencode::dict_get(r_val, "nodes");
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* nodes_val = r_val.dict_get("nodes");
     assert(nodes_val.string.len == 78, "Should have 78 bytes (3 nodes)");
 
     io::printn("✓ Find node response with multiple nodes encodes correctly");
@@ -776,16 +776,16 @@ fn void test_encode_get_peers_response_with_values() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check response contains values list
-    BencodeValue* r_val = bencode::dict_get(root, "r");
-    BencodeValue* values_val = bencode::dict_get(r_val, "values");
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* values_val = r_val.dict_get("values");
     assert(values_val != null && values_val.type == bencode::BencodeType.LIST, "Should have values list");
     assert(values_val.list.size == 2, "Should have 2 peer entries");
 
     // Check token
-    BencodeValue* token_val = bencode::dict_get(r_val, "token");
+    BencodeValue* token_val = r_val.dict_get("token");
     assert(token_val != null, "Token should be present");
 
     io::printn("✓ Get peers response with values encodes correctly");
@@ -806,15 +806,15 @@ fn void test_encode_get_peers_response_with_nodes() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check response contains nodes
-    BencodeValue* r_val = bencode::dict_get(root, "r");
-    BencodeValue* nodes_val = bencode::dict_get(r_val, "nodes");
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* nodes_val = r_val.dict_get("nodes");
     assert(nodes_val != null && nodes_val.string.len == 26, "Should have nodes (26 bytes)");
 
     // Check token
-    BencodeValue* token_val = bencode::dict_get(r_val, "token");
+    BencodeValue* token_val = r_val.dict_get("token");
     assert(token_val != null, "Token should be present");
 
     io::printn("✓ Get peers response with nodes encodes correctly");
@@ -829,15 +829,15 @@ fn void test_encode_announce_peer_response() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check message type
-    BencodeValue* y_val = bencode::dict_get(root, "y");
+    BencodeValue* y_val = root.dict_get("y");
     assert((String)y_val.string == "r", "Message type should be 'r'");
 
     // Check response has node ID
-    BencodeValue* r_val = bencode::dict_get(root, "r");
-    BencodeValue* id_val = bencode::dict_get(r_val, "id");
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* id_val = r_val.dict_get("id");
     assert(id_val != null && id_val.string.len == 20, "Should have node ID");
 
     io::printn("✓ Announce peer response encodes correctly");
@@ -852,14 +852,14 @@ fn void test_encode_error() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check message type
-    BencodeValue* y_val = bencode::dict_get(root, "y");
+    BencodeValue* y_val = root.dict_get("y");
     assert((String)y_val.string == "e", "Message type should be 'e' (error)");
 
     // Check error list
-    BencodeValue* e_val = bencode::dict_get(root, "e");
+    BencodeValue* e_val = root.dict_get("e");
     assert(e_val != null && e_val.type == bencode::BencodeType.LIST, "Should have error list");
     assert(e_val.list.size == 2, "Error list should have 2 elements");
 
@@ -894,16 +894,16 @@ fn void test_encode_error_various_codes() @test
 
     // Verify they all decode
     BencodeValue* r201 = bencode::decode(enc201)!!;
-    defer bencode::free_bencode_value(r201);
+    defer r201.free();
 
     BencodeValue* r202 = bencode::decode(enc202)!!;
-    defer bencode::free_bencode_value(r202);
+    defer r202.free();
 
     BencodeValue* r203 = bencode::decode(enc203)!!;
-    defer bencode::free_bencode_value(r203);
+    defer r203.free();
 
     BencodeValue* r204 = bencode::decode(enc204)!!;
-    defer bencode::free_bencode_value(r204);
+    defer r204.free();
 
     io::printn("✓ All error codes encode correctly");
 }
@@ -917,10 +917,10 @@ fn void test_encode_includes_version() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check version field
-    BencodeValue* v_val = bencode::dict_get(root, "v");
+    BencodeValue* v_val = root.dict_get("v");
     assert(v_val != null && v_val.type == bencode::BencodeType.STRING, "Should have version");
     assert((String)v_val.string == "LC01", "Version should be 'LC01'");
 
@@ -936,10 +936,10 @@ fn void test_encode_transaction_id_preserved() @test
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Check transaction ID
-    BencodeValue* t_val = bencode::dict_get(root, "t");
+    BencodeValue* t_val = root.dict_get("t");
     assert(t_val != null && t_val.string.len == 2, "Transaction ID should be 2 bytes");
     assert(t_val.string[0] == (char)0xDE && t_val.string[1] == (char)0xAD,
            "Transaction ID should match input");
@@ -955,7 +955,7 @@ fn void test_decode_message_type_query() @test
 {
     String data = "d1:q4:ping1:t2:aa1:y1:qe";
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     MessageType msg_type = krpc::decode_message_type(root)!!;
     assert(msg_type == MessageType.QUERY, "Should decode as QUERY");
@@ -967,7 +967,7 @@ fn void test_decode_message_type_response() @test
 {
     String data = "d1:r1:a1:t2:aa1:y1:re";
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     MessageType msg_type = krpc::decode_message_type(root)!!;
     assert(msg_type == MessageType.RESPONSE, "Should decode as RESPONSE");
@@ -979,7 +979,7 @@ fn void test_decode_message_type_error() @test
 {
     String data = "d1:eli201e24:A Generic Error Occurrede1:t2:aa1:y1:ee";
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     MessageType msg_type = krpc::decode_message_type(root)!!;
     assert(msg_type == MessageType.ERROR, "Should decode as ERROR");
@@ -991,7 +991,7 @@ fn void test_decode_message_type_invalid() @test
 {
     String data = "d1:t2:aa1:y1:xe";  // Invalid type 'x'
     BencodeValue* root = bencode::decode(data)!!;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     if (catch err = krpc::decode_message_type(root))
     {
@@ -1018,7 +1018,7 @@ fn void test_decode_ping_query() @test
 
     // Decode
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     assert(query.base.type == MessageType.QUERY, "Type should be QUERY");
     assert(query.query_type == QueryType.PING, "Query type should be PING");
@@ -1045,7 +1045,7 @@ fn void test_decode_find_node_query() @test
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     assert(query.query_type == QueryType.FIND_NODE, "Query type should be FIND_NODE");
 
@@ -1069,7 +1069,7 @@ fn void test_decode_get_peers_query() @test
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     assert(query.query_type == QueryType.GET_PEERS, "Query type should be GET_PEERS");
 
@@ -1095,7 +1095,7 @@ fn void test_decode_announce_peer_query() @test
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     assert(query.query_type == QueryType.ANNOUNCE_PEER, "Query type should be ANNOUNCE_PEER");
 
@@ -1124,7 +1124,7 @@ fn void test_decode_announce_peer_query_no_implied_port() @test
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     krpc::AnnouncePeerArgs* args = (krpc::AnnouncePeerArgs*)query.args;
     assert(args.port == 8080, "Port should be 8080");
@@ -1146,7 +1146,7 @@ fn void test_decode_ping_response() @test
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.PING)!!;
-    defer krpc::free_response(response);
+    defer response.free();
 
     assert(response.base.type == MessageType.RESPONSE, "Type should be RESPONSE");
     assert(response.query_type == QueryType.PING, "Query type should be PING");
@@ -1180,7 +1180,7 @@ fn void test_decode_find_node_response() @test
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
-    defer krpc::free_response(response);
+    defer response.free();
 
     assert(response.query_type == QueryType.FIND_NODE, "Query type should be FIND_NODE");
 
@@ -1208,7 +1208,7 @@ fn void test_decode_find_node_response_multiple_nodes() @test
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
-    defer krpc::free_response(response);
+    defer response.free();
 
     krpc::FindNodeResponse* data = (krpc::FindNodeResponse*)response.data;
     assert(data.nodes.len == 78, "Should have 78 bytes (3 nodes)");
@@ -1242,7 +1242,7 @@ fn void test_decode_get_peers_response_with_values() @test
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.GET_PEERS)!!;
-    defer krpc::free_response(response);
+    defer response.free();
 
     assert(response.query_type == QueryType.GET_PEERS, "Query type should be GET_PEERS");
 
@@ -1269,7 +1269,7 @@ fn void test_decode_get_peers_response_with_nodes() @test
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.GET_PEERS)!!;
-    defer krpc::free_response(response);
+    defer response.free();
 
     krpc::GetPeersResponse* data = (krpc::GetPeersResponse*)response.data;
     assert(data.token == token, "Token should match");
@@ -1288,7 +1288,7 @@ fn void test_decode_announce_peer_response() @test
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.ANNOUNCE_PEER)!!;
-    defer krpc::free_response(response);
+    defer response.free();
 
     assert(response.query_type == QueryType.ANNOUNCE_PEER, "Query type should be ANNOUNCE_PEER");
 
@@ -1314,7 +1314,7 @@ fn void test_decode_error_generic() @test
     defer free(encoded);
 
     krpc::KrpcError* error = krpc::decode_error(encoded)!!;
-    defer krpc::free_error(error);
+    defer error.free();
 
     assert(error.base.type == MessageType.ERROR, "Type should be ERROR");
     assert(error.code == 201, "Error code should be 201");
@@ -1333,7 +1333,7 @@ fn void test_decode_error_server() @test
     defer free(encoded);
 
     krpc::KrpcError* error = krpc::decode_error(encoded)!!;
-    defer krpc::free_error(error);
+    defer error.free();
 
     assert(error.code == 202, "Error code should be 202");
 
@@ -1349,7 +1349,7 @@ fn void test_decode_error_protocol() @test
     defer free(encoded);
 
     krpc::KrpcError* error = krpc::decode_error(encoded)!!;
-    defer krpc::free_error(error);
+    defer error.free();
 
     assert(error.code == 203, "Error code should be 203");
 
@@ -1365,7 +1365,7 @@ fn void test_decode_error_method_unknown() @test
     defer free(encoded);
 
     krpc::KrpcError* error = krpc::decode_error(encoded)!!;
-    defer krpc::free_error(error);
+    defer error.free();
 
     assert(error.code == 204, "Error code should be 204");
 
@@ -1434,9 +1434,9 @@ fn void test_decode_query_unknown_method() @test
         "q", bencode::make_string("unknown_method"),
         "a", args
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    String encoded = bencode::encode(root);
+    String encoded = root.encode();
     defer free(encoded);
 
     if (catch err = krpc::decode_query(encoded))
@@ -1464,9 +1464,9 @@ fn void test_decode_query_invalid_node_id_length() @test
         "q", bencode::make_string("ping"),
         "a", args
     );
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
-    String encoded = bencode::encode(root);
+    String encoded = root.encode();
     defer free(encoded);
 
     if (catch err = krpc::decode_query(encoded))
@@ -1523,7 +1523,7 @@ fn void test_roundtrip_ping() @test
 
     // Decode query
     krpc::KrpcQuery* query = krpc::decode_query(encoded_query)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     // Verify
     assert(query.query_type == QueryType.PING, "Query type should match");
@@ -1539,7 +1539,7 @@ fn void test_roundtrip_ping() @test
 
     // Decode response
     krpc::KrpcResponse* response = krpc::decode_response(encoded_response, QueryType.PING)!!;
-    defer krpc::free_response(response);
+    defer response.free();
 
     // Verify
     for (usz i = 0; i < 20; i++)
@@ -1561,7 +1561,7 @@ fn void test_roundtrip_find_node() @test
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     // Verify target matches
     krpc::FindNodeArgs* args = (krpc::FindNodeArgs*)query.args;
@@ -1584,7 +1584,7 @@ fn void test_roundtrip_get_peers() @test
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     // Verify info_hash matches
     krpc::GetPeersArgs* args = (krpc::GetPeersArgs*)query.args;
@@ -1610,7 +1610,7 @@ fn void test_roundtrip_announce_peer() @test
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
-    defer krpc::free_query(query);
+    defer query.free();
 
     // Verify all fields match
     krpc::AnnouncePeerArgs* args = (krpc::AnnouncePeerArgs*)query.args;
@@ -1636,7 +1636,7 @@ fn void test_roundtrip_error() @test
     defer free(encoded);
 
     krpc::KrpcError* error = krpc::decode_error(encoded)!!;
-    defer krpc::free_error(error);
+    defer error.free();
 
     // Verify
     assert(error.code == code, "Error code should match");

@@ -78,17 +78,15 @@ fn PiecePicker create(usz num_pieces) @public
 
 <*
  Free a piece picker.
-
- @param picker : "Piece picker to free"
 *>
-fn void free(PiecePicker* picker) @public
+fn void PiecePicker.free(&self) @public
 {
-    if (picker.pieces.len > 0)
+    if (self.pieces.len > 0)
     {
-        std::core::mem::free(picker.pieces);
-        picker.pieces = {};
+        std::core::mem::free(self.pieces);
+        self.pieces = {};
     }
-    picker.num_pieces = 0;
+    self.num_pieces = 0;
 }
 
 <*

@@ -16,9 +16,9 @@ import libtorrent::bencode;
 fn void test_encode_integer_positive() @test
 {
     BencodeValue* val = bencode::make_integer(42);
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
-    String encoded = bencode::encode(val);
+    String encoded = val.encode();
     defer free(encoded);
     io::printfn("Encoded: '%s'", encoded);
     io::printfn("Length: %d", encoded.len);
@@ -28,9 +28,9 @@ fn void test_encode_integer_positive() @test
 fn void test_encode_integer_negative() @test
 {
     BencodeValue* val = bencode::make_integer(-3);
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
-    String encoded = bencode::encode(val);
+    String encoded = val.encode();
     defer free(encoded);
     assert(encoded == "i-3e", "Expected 'i-3e'");
 }
@@ -38,9 +38,9 @@ fn void test_encode_integer_negative() @test
 fn void test_encode_integer_zero() @test
 {
     BencodeValue* val = bencode::make_integer(0);
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
-    String encoded = bencode::encode(val);
+    String encoded = val.encode();
     defer free(encoded);
     assert(encoded == "i0e", "Expected 'i0e'");
 }
@@ -48,7 +48,7 @@ fn void test_encode_integer_zero() @test
 fn void test_decode_integer_positive() @test
 {
     BencodeValue* val = bencode::decode("i42e")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     io::printfn("DEBUG: val.type = %d, expected INTEGER = %d", val.type.ordinal, bencode::BencodeType.INTEGER.ordinal);
     assert(val.type == bencode::BencodeType.INTEGER, "Expected INTEGER type");
@@ -58,7 +58,7 @@ fn void test_decode_integer_positive() @test
 fn void test_decode_integer_negative() @test
 {
     BencodeValue* val = bencode::decode("i-3e")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.INTEGER, "Expected INTEGER type");
     assert(val.integer == -3, "Expected value -3");
@@ -67,7 +67,7 @@ fn void test_decode_integer_negative() @test
 fn void test_decode_integer_zero() @test
 {
     BencodeValue* val = bencode::decode("i0e")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.INTEGER, "Expected INTEGER type");
     assert(val.integer == 0, "Expected value 0");
@@ -92,9 +92,9 @@ fn void test_decode_integer_invalid_leading_zero() @test
 fn void test_encode_string_simple() @test
 {
     BencodeValue* val = bencode::make_string("spam");
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
-    String encoded = bencode::encode(val);
+    String encoded = val.encode();
     defer free(encoded);
     assert(encoded == "4:spam", "Expected '4:spam'");
 }
@@ -102,9 +102,9 @@ fn void test_encode_string_simple() @test
 fn void test_encode_string_empty() @test
 {
     BencodeValue* val = bencode::make_string("");
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
-    String encoded = bencode::encode(val);
+    String encoded = val.encode();
     defer free(encoded);
     assert(encoded == "0:", "Expected '0:'");
 }
@@ -112,7 +112,7 @@ fn void test_encode_string_empty() @test
 fn void test_decode_string_simple() @test
 {
     BencodeValue* val = bencode::decode("4:spam")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.STRING, "Expected STRING type");
     assert((String)val.string == "spam", "Expected 'spam'");
@@ -121,7 +121,7 @@ fn void test_decode_string_simple() @test
 fn void test_decode_string_empty() @test
 {
     BencodeValue* val = bencode::decode("0:")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.STRING, "Expected STRING type");
     assert((String)val.string == "", "Expected empty string");
@@ -130,7 +130,7 @@ fn void test_decode_string_empty() @test
 fn void test_decode_string_with_special_chars() @test
 {
     BencodeValue* val = bencode::decode("5:hi\x00\x01\x02")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.STRING, "Expected STRING type");
     assert(val.string.len == 5, "Expected length 5");
@@ -155,9 +155,9 @@ fn void test_decode_string_invalid_length() @test
 fn void test_encode_list_empty() @test
 {
     BencodeValue* val = bencode::make_list();
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
-    String encoded = bencode::encode(val);
+    String encoded = val.encode();
     defer free(encoded);
     assert(encoded == "le", "Expected 'le'");
 }
@@ -168,9 +168,9 @@ fn void test_encode_list_simple() @test
     BencodeValue* num = bencode::make_integer(42);
 
     BencodeValue* list = bencode::@blist(str, num);
-    defer bencode::free_bencode_value(list);
+    defer list.free();
 
-    String encoded = bencode::encode(list);
+    String encoded = list.encode();
     defer free(encoded);
     assert(encoded == "l4:spami42ee", "Expected 'l4:spami42ee'");
 }
@@ -183,7 +183,7 @@ fn void test_encode_list_nested() @test
 fn void test_decode_list_empty() @test
 {
     BencodeValue* val = bencode::decode("le")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.LIST, "Expected LIST type");
     assert(val.list.size == 0, "Expected empty list");
@@ -192,7 +192,7 @@ fn void test_decode_list_empty() @test
 fn void test_decode_list_simple() @test
 {
     BencodeValue* val = bencode::decode("l4:spami42ee")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.LIST, "Expected LIST type");
     assert(val.list.size == 2, "Expected 2 items");
@@ -210,7 +210,7 @@ fn void test_decode_list_mixed_types() @test
 {
     // Test: [1, [2], 3] = li1eli2eei3ee
     BencodeValue* val = bencode::decode("li1eli2eei3ee")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.LIST, "Expected LIST type");
     assert(val.list.size == 3, "Expected 3 items");
@@ -235,9 +235,9 @@ fn void test_decode_list_mixed_types() @test
 fn void test_encode_dict_empty() @test
 {
     BencodeValue* dict = bencode::make_dict();
-    defer bencode::free_bencode_value(dict);
+    defer dict.free();
 
-    String encoded = bencode::encode(dict);
+    String encoded = dict.encode();
     defer free(encoded);
     assert(encoded == "de", "Expected 'de'");
 }
@@ -252,9 +252,9 @@ fn void test_encode_dict_simple() @test
         "cow", cow_val,
         "spam", spam_val
     );
-    defer bencode::free_bencode_value(dict);
+    defer dict.free();
 
-    String encoded = bencode::encode(dict);
+    String encoded = dict.encode();
     defer free(encoded);
     assert(encoded == "d3:cow3:moo4:spam4:eggse", "Expected 'd3:cow3:moo4:spam4:eggse'");
 }
@@ -272,7 +272,7 @@ fn void test_encode_dict_nested() @test
 fn void test_decode_dict_empty() @test
 {
     BencodeValue* val = bencode::decode("de")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.DICT, "Expected DICT type");
     assert(val.dict.keys.size == 0, "Expected empty dict");
@@ -281,17 +281,17 @@ fn void test_decode_dict_empty() @test
 fn void test_decode_dict_simple() @test
 {
     BencodeValue* val = bencode::decode("d3:cow3:moo4:spam4:eggse")!!;
-    defer bencode::free_bencode_value(val);
+    defer val.free();
 
     assert(val.type == bencode::BencodeType.DICT, "Expected DICT type");
     assert(val.dict.keys.size == 2, "Expected 2 entries");
 
-    BencodeValue* cow_val = bencode::dict_get(val, "cow");
+    BencodeValue* cow_val = val.dict_get("cow");
     assert(cow_val != null, "Expected 'cow' key to exist");
     assert(cow_val.type == bencode::BencodeType.STRING, "Expected STRING value for 'cow'");
     assert((String)cow_val.string == "moo", "Expected 'moo'");
 
-    BencodeValue* spam_val = bencode::dict_get(val, "spam");
+    BencodeValue* spam_val = val.dict_get("spam");
     assert(spam_val != null, "Expected 'spam' key to exist");
     assert(spam_val.type == bencode::BencodeType.STRING, "Expected STRING value for 'spam'");
     assert((String)spam_val.string == "eggs", "Expected 'eggs'");
@@ -345,9 +345,9 @@ fn void test_roundtrip_encoding() @test
     foreach (test_case : test_cases)
     {
         BencodeValue* decoded = bencode::decode(test_case)!!;
-        defer bencode::free_bencode_value(decoded);
+        defer decoded.free();
 
-        String encoded = bencode::encode(decoded);
+        String encoded = decoded.encode();
         defer free(encoded);
 
         assert(encoded == test_case, "Roundtrip failed");
@@ -389,7 +389,7 @@ fn void test_decode_unexpected_end() @test
 fn void test_blist_wrap_strings() @test
 {
     BencodeValue* list = bencode::@blist_wrap("hello", "world", "test");
-    defer bencode::free_bencode_value(list);
+    defer list.free();
 
     assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
     assert(list.list.size == 3, "Expected 3 items");
@@ -404,7 +404,7 @@ fn void test_blist_wrap_strings() @test
 fn void test_blist_wrap_integers() @test
 {
     BencodeValue* list = bencode::@blist_wrap(1, 42, 100);
-    defer bencode::free_bencode_value(list);
+    defer list.free();
 
     assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
     assert(list.list.size == 3, "Expected 3 items");
@@ -419,7 +419,7 @@ fn void test_blist_wrap_integers() @test
 fn void test_blist_wrap_mixed() @test
 {
     BencodeValue* list = bencode::@blist_wrap("hello", 42, "world", 100);
-    defer bencode::free_bencode_value(list);
+    defer list.free();
 
     assert(list.type == bencode::BencodeType.LIST, "Expected LIST type");
     assert(list.list.size == 4, "Expected 4 items");
@@ -439,13 +439,13 @@ fn void test_bdict_wrap_basic() @test
         "name", "example",
         "size", 1024
     );
-    defer bencode::free_bencode_value(dict);
+    defer dict.free();
 
     assert(dict.type == bencode::BencodeType.DICT, "Expected DICT type");
     assert(dict.dict.keys.size == 2, "Expected 2 keys");
 
-    BencodeValue* name = bencode::dict_get(dict, "name");
-    BencodeValue* size = bencode::dict_get(dict, "size");
+    BencodeValue* name = dict.dict_get("name");
+    BencodeValue* size = dict.dict_get("size");
 
     assert(name != null, "Expected 'name' key to exist");
     assert(size != null, "Expected 'size' key to exist");
@@ -463,15 +463,15 @@ fn void test_bdict_wrap_complex() @test
         "description", "auto-wrapping test",
         "value", 999
     );
-    defer bencode::free_bencode_value(dict);
+    defer dict.free();
 
     assert(dict.type == bencode::BencodeType.DICT, "Expected DICT type");
     assert(dict.dict.keys.size == 4, "Expected 4 keys");
 
-    BencodeValue* name = bencode::dict_get(dict, "name");
-    BencodeValue* count = bencode::dict_get(dict, "count");
-    BencodeValue* desc = bencode::dict_get(dict, "description");
-    BencodeValue* value = bencode::dict_get(dict, "value");
+    BencodeValue* name = dict.dict_get("name");
+    BencodeValue* count = dict.dict_get("count");
+    BencodeValue* desc = dict.dict_get("description");
+    BencodeValue* value = dict.dict_get("value");
 
     assert((String)name.string == "test");
     assert(count.integer == 5);
@@ -484,7 +484,7 @@ fn void test_blist_wrap_with_prewrapped() @test
     BencodeValue* wrapped = bencode::make_string("pre-wrapped");
 
     BencodeValue* list = bencode::@blist_wrap("hello", wrapped, 42);
-    defer bencode::free_bencode_value(list);
+    defer list.free();
 
     assert(list.list.size == 3, "Expected 3 items");
     assert((String)list.list.get(0).string == "hello");
@@ -500,10 +500,10 @@ fn void test_bdict_wrap_with_prewrapped() @test
         "auto", "wrapped",
         "manual", wrapped_val
     );
-    defer bencode::free_bencode_value(dict);
+    defer dict.free();
 
-    BencodeValue* auto_val = bencode::dict_get(dict, "auto");
-    BencodeValue* manual_val = bencode::dict_get(dict, "manual");
+    BencodeValue* auto_val = dict.dict_get("auto");
+    BencodeValue* manual_val = dict.dict_get("manual");
 
     assert((String)auto_val.string == "wrapped");
     assert(manual_val.integer == 999);

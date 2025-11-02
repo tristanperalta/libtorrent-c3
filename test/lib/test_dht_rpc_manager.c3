@@ -61,11 +61,11 @@ fn krpc::KrpcMessage create_dummy_response(char[2] tid)
 fn void test_create_rpc_manager() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     // Verify initial state
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 0, "New manager should have no transactions");
     assert(pending == 0, "New manager should have no pending transactions");
 
@@ -79,7 +79,7 @@ fn void test_create_rpc_manager() @test
 fn void test_create_single_transaction() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x10);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
@@ -88,8 +88,7 @@ fn void test_create_single_transaction() @test
     g_callback_invoked = false;
 
     // Create transaction
-    char[2]? tid_opt = dht_rpc_manager::create_transaction(
-        mgr,
+    char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
         target_ip,
@@ -103,7 +102,7 @@ fn void test_create_single_transaction() @test
 
     // Verify transaction was created
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 1, "Should have 1 transaction");
     assert(pending == 1, "Should have 1 pending transaction");
 
@@ -113,7 +112,7 @@ fn void test_create_single_transaction() @test
 fn void test_create_multiple_transactions() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     // Create 5 transactions
     for (int i = 0; i < 5; i++)
@@ -121,8 +120,7 @@ fn void test_create_multiple_transactions() @test
         common::NodeId target_id = create_test_node_id((char)(0x10 + i * 10));
         common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, (char)(100 + i));
 
-        char[2]? tid_opt = dht_rpc_manager::create_transaction(
-            mgr,
+        char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.FIND_NODE,
             target_id,
             target_ip,
@@ -136,7 +134,7 @@ fn void test_create_multiple_transactions() @test
 
     // Verify all transactions were created
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 5, "Should have 5 transactions");
     assert(pending == 5, "Should have 5 pending transactions");
 
@@ -146,7 +144,7 @@ fn void test_create_multiple_transactions() @test
 fn void test_unique_transaction_ids() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x20);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
@@ -156,8 +154,7 @@ fn void test_unique_transaction_ids() @test
     int count = 0;
     for (int i = 0; i < 10; i++)
     {
-        char[2]? tid_opt = dht_rpc_manager::create_transaction(
-            mgr,
+        char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.PING,
             target_id,
             target_ip,
@@ -172,7 +169,7 @@ fn void test_unique_transaction_ids() @test
 
     // Verify all transactions were created
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 10, "Should have 10 transactions");
     assert(count == 10, "Should have created 10 transactions");
 
@@ -186,7 +183,7 @@ fn void test_unique_transaction_ids() @test
 fn void test_handle_response() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x30);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
@@ -196,8 +193,7 @@ fn void test_handle_response() @test
     g_callback_response = null;
 
     // Create transaction
-    char[2]? tid_opt = dht_rpc_manager::create_transaction(
-        mgr,
+    char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
         target_ip,
@@ -215,7 +211,7 @@ fn void test_handle_response() @test
     response.transaction_id = (String)tid[..];
 
     // Handle response
-    bool handled = dht_rpc_manager::handle_response(mgr, &response);
+    bool handled = mgr.handle_response( &response);
     assert(handled, "Should handle response");
 
     // Verify callback was invoked
@@ -224,7 +220,7 @@ fn void test_handle_response() @test
 
     // Verify transaction was removed
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 0, "Transaction should be removed after response");
 
     io::printn("✓ Handle response");
@@ -233,7 +229,7 @@ fn void test_handle_response() @test
 fn void test_handle_response_unknown_tid() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     // Reset callback flag
     g_callback_invoked = false;
@@ -243,7 +239,7 @@ fn void test_handle_response_unknown_tid() @test
     krpc::KrpcMessage response = create_dummy_response(unknown_tid);
 
     // Try to handle response
-    bool handled = dht_rpc_manager::handle_response(mgr, &response);
+    bool handled = mgr.handle_response( &response);
     assert(!handled, "Should not handle unknown transaction");
     assert(!g_callback_invoked, "Callback should not be invoked");
 
@@ -257,14 +253,13 @@ fn void test_handle_response_unknown_tid() @test
 fn void test_process_timeouts_no_timeout() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x40);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
     // Create transaction
-    char[2]? tid_opt = dht_rpc_manager::create_transaction(
-        mgr,
+    char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
         target_ip,
@@ -276,12 +271,12 @@ fn void test_process_timeouts_no_timeout() @test
     if (catch excuse = tid_opt) { assert(false, "Should create transaction"); return; }
 
     // Process timeouts immediately (should not timeout)
-    int timeout_count = dht_rpc_manager::process_timeouts(mgr);
+    int timeout_count = mgr.process_timeouts();
     assert(timeout_count == 0, "Should not timeout immediately");
 
     // Verify transaction still exists
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 1, "Transaction should still exist");
 
     io::printn("✓ Process timeouts: no timeout");
@@ -294,14 +289,13 @@ fn void test_process_timeouts_no_timeout() @test
 fn void test_cancel_transaction() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x50);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
     // Create transaction
-    char[2]? tid_opt = dht_rpc_manager::create_transaction(
-        mgr,
+    char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
         target_ip,
@@ -314,12 +308,12 @@ fn void test_cancel_transaction() @test
     char[2] tid = tid_opt;
 
     // Cancel transaction
-    bool cancelled = dht_rpc_manager::cancel_transaction(mgr, (String)tid[..]);
+    bool cancelled = mgr.cancel_transaction( (String)tid[..]);
     assert(cancelled, "Should cancel transaction");
 
     // Verify transaction was removed
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 0, "Transaction should be removed after cancel");
 
     io::printn("✓ Cancel transaction");
@@ -328,11 +322,11 @@ fn void test_cancel_transaction() @test
 fn void test_cancel_unknown_transaction() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     // Try to cancel unknown transaction
     char[2] unknown_tid = { 0xFF, 0xFF };
-    bool cancelled = dht_rpc_manager::cancel_transaction(mgr, (String)unknown_tid[..]);
+    bool cancelled = mgr.cancel_transaction( (String)unknown_tid[..]);
     assert(!cancelled, "Should not cancel unknown transaction");
 
     io::printn("✓ Cancel unknown transaction");
@@ -345,22 +339,21 @@ fn void test_cancel_unknown_transaction() @test
 fn void test_get_stats() @test
 {
     dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
-    defer dht_rpc_manager::free_rpc_manager(mgr);
+    defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x60);
     common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
     // Initially empty
     int total, pending;
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 0, "Should start with 0 total");
     assert(pending == 0, "Should start with 0 pending");
 
     // Add 3 transactions
     for (int i = 0; i < 3; i++)
     {
-        char[2]? tid_opt = dht_rpc_manager::create_transaction(
-            mgr,
+        char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.PING,
             target_id,
             target_ip,
@@ -372,7 +365,7 @@ fn void test_get_stats() @test
     }
 
     // Check stats
-    dht_rpc_manager::get_stats(mgr, &total, &pending);
+    mgr.get_stats( &total, &pending);
     assert(total == 3, "Should have 3 total");
     assert(pending == 3, "Should have 3 pending");
 

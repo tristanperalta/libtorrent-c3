@@ -175,50 +175,50 @@ fn void on_file_sync_complete(int status, void* user_data) @private
  Free storage manager resources.
  Note: Files are synced periodically during download, so no fsync needed here.
 *>
-fn void free(StorageManager* manager) @public
+fn void StorageManager.free(&self) @public
 {
     // Free file handle structs directly without async close
     // Note: We can't use async close() here because the event loop may be
     // destroyed before close callbacks run, causing CloseContext leaks.
     // The file descriptors will be closed by the OS when the process exits.
     // For long-running applications, use a proper async shutdown sequence.
-    for (usz i = 0; i < manager.files.len; i++)
+    for (usz i = 0; i < self.files.len; i++)
     {
-        if (manager.files[i].file != null)
+        if (self.files[i].file != null)
         {
-            std::core::mem::free(manager.files[i].file);
-            manager.files[i].file = null;
+            std::core::mem::free(self.files[i].file);
+            self.files[i].file = null;
         }
     }
 
     // Free file paths
-    for (usz i = 0; i < manager.files.len; i++)
+    for (usz i = 0; i < self.files.len; i++)
     {
-        if (manager.files[i].path.len > 0)
+        if (self.files[i].path.len > 0)
         {
-            std::core::mem::free(manager.files[i].path);
+            std::core::mem::free(self.files[i].path);
         }
     }
 
     // Free file list
-    if (manager.files.len > 0)
+    if (self.files.len > 0)
     {
-        std::core::mem::free(manager.files);
-        manager.files = {};
+        std::core::mem::free(self.files);
+        self.files = {};
     }
 
     // Free base path
-    if (manager.base_path.len > 0)
+    if (self.base_path.len > 0)
     {
-        std::core::mem::free(manager.base_path);
-        manager.base_path = "";
+        std::core::mem::free(self.base_path);
+        self.base_path = "";
     }
 
     // Free piece hashes
-    if (manager.piece_hashes.len > 0)
+    if (self.piece_hashes.len > 0)
     {
-        std::core::mem::free(manager.piece_hashes);
-        manager.piece_hashes = {};
+        std::core::mem::free(self.piece_hashes);
+        self.piece_hashes = {};
     }
 }
 

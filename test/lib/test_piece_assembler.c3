@@ -31,7 +31,7 @@ fn void test_create_assembler() @test
     for (usz i = 0; i < 20; i++) expected_hash[i] = (char)i;
 
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 32768, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     assert(assembler.piece_index == 0, "Should be piece 0");
     assert(assembler.piece_length == 32768, "Should be 32KB");
@@ -47,7 +47,7 @@ fn void test_add_single_block() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 16384, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)(i & 0xFF);
@@ -62,7 +62,7 @@ fn void test_add_multiple_blocks() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 32768, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[16384] data1;
     char[16384] data2;
@@ -85,7 +85,7 @@ fn void test_add_block_out_of_order() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 49152, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)i;
@@ -106,7 +106,7 @@ fn void test_add_duplicate_block() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 16384, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[16384] data;
     for (usz i = 0; i < data.len; i++) data[i] = (char)i;
@@ -123,7 +123,7 @@ fn void test_add_block_invalid_offset() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 16384, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[16384] data;
     fault? result = assembler.add_block(99999, data[..]);
@@ -140,7 +140,7 @@ fn void test_add_block_exceeds_length() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 16384, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[20000] data;  // Too large
     fault? result = assembler.add_block(0, data[..]);
@@ -171,7 +171,7 @@ fn void test_verify_correct_hash() @test
 
     // Create assembler
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 16384, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     // Add data
     assembler.add_block(0, data[..])!!;
@@ -209,7 +209,7 @@ fn void test_verify_incorrect_hash() @test
 
     // Create assembler
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 16384, wrong_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     // Add data
     assembler.add_block(0, data[..])!!;
@@ -238,7 +238,7 @@ fn void test_verify_not_complete() @test
 
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 32768, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[16384] data;
     assembler.add_block(0, data[..])!!;  // Only 1 of 2 blocks
@@ -274,7 +274,7 @@ fn void test_verify_multiple_blocks() @test
 
     // Create assembler
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 32768, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     // Split into two blocks
     char[16384] block1;
@@ -314,7 +314,7 @@ fn void test_get_data() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 32768, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     char[16384] data1;
     char[16384] data2;
@@ -351,7 +351,7 @@ fn void test_get_progress() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 49152, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     usz total, received;
     assembler.get_progress(&total, &received);
@@ -374,7 +374,7 @@ fn void test_is_complete() @test
 {
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 32768, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     assert(!assembler.is_complete(), "Should not be complete initially");
 
@@ -401,7 +401,7 @@ fn void test_single_block_piece() @test
     char[20] expected_hash = sha1::hash(data[..]);
 
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 8192, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     assert(assembler.total_blocks == 1, "Should need 1 block");
 
@@ -437,7 +437,7 @@ fn void test_last_block_shorter() @test
     char[20] expected_hash = sha1::hash(full_data[..]);
 
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 40960, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     assert(assembler.total_blocks == 3, "Should need 3 blocks");
 
@@ -478,7 +478,7 @@ fn void test_large_piece() @test
     // 1MB piece = 64 blocks
     char[20] expected_hash;
     piece_assembler::PieceAssembler assembler = piece_assembler::create(0, 1048576, expected_hash, 16384);
-    defer piece_assembler::free(&assembler);
+    defer assembler.free();
 
     assert(assembler.total_blocks == 64, "Should need 64 blocks");
     assert(assembler.piece_length == 1048576, "Should be 1MB");

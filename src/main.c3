@@ -183,7 +183,7 @@ fn void on_info_load_complete(String data, int status, void* user_data)
         ctx.exit_code = 1;
         return;
     }
-    defer libtorrent::metainfo::free_torrent_file(torrent);
+    defer torrent.free();
 
     // Display metadata
     display_torrent_info(torrent);
@@ -537,7 +537,7 @@ fn int cmd_announce(event_loop::EventLoop* loop, String torrent_path)
     {
         if (ctx.torrent)
         {
-            libtorrent::metainfo::free_torrent_file(ctx.torrent);
+            ctx.torrent.free();
         }
         return ctx.exit_code;
     }
@@ -551,7 +551,7 @@ fn int cmd_announce(event_loop::EventLoop* loop, String torrent_path)
     // Free torrent (must be done before returning)
     if (ctx.torrent)
     {
-        libtorrent::metainfo::free_torrent_file(ctx.torrent);
+        ctx.torrent.free();
     }
 
     if (!ctx.completed || ctx.tracker_status != 0 || !ctx.response)
@@ -955,7 +955,7 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
     // Cleanup
     if (ctx.torrent)
     {
-        libtorrent::metainfo::free_torrent_file(ctx.torrent);
+        ctx.torrent.free();
     }
 
     if (ctx.tracker_response)
@@ -981,7 +981,7 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
         {
             if (ctx.peer_infos[i].conn)
             {
-                peer_connection::close(ctx.peer_infos[i].conn);
+                ctx.peer_infos[i].conn.close();
             }
         }
 
@@ -1006,7 +1006,7 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
     // Free peer pool
     if (ctx.peer_pool)
     {
-        peer_pool::free(ctx.peer_pool);
+        ctx.peer_pool.free();
     }
 
     return ctx.exit_code;
@@ -1032,8 +1032,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     }
 
     // Calculate pieces
-    uint num_pieces = libtorrent::metainfo::calculate_num_pieces(&torrent.info);
-    uint last_piece_length = libtorrent::metainfo::calculate_last_piece_length(&torrent.info);
+    uint num_pieces = torrent.info.calculate_num_pieces();
+    uint last_piece_length = torrent.info.calculate_last_piece_length();
 
     // Initialize GUI
     raylib_gui::UIState* ui = raylib_gui::init(
@@ -1047,7 +1047,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     if (!ui)
     {
         io::eprintfn("Failed to initialize GUI");
-        libtorrent::metainfo::free_torrent_file(torrent);
+        torrent.free();
         return 1;
     }
 
@@ -1110,7 +1110,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     {
         raylib_gui::add_log(ui, "Error creating storage manager");
         raylib_gui::free(ui);
-        libtorrent::metainfo::free_torrent_file(torrent);
+        torrent.free();
         log_outputs::cleanup_log_sink(log_sink);
         return 1;
     }
@@ -1245,38 +1245,38 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     io::printfn("Freeing peer pool...");
     if (ctx.peer_pool)
     {
-        peer_pool::free(ctx.peer_pool);
+        ctx.peer_pool.free();
     }
 
     // Free DHT resources
     io::printfn("Freeing DHT resources...");
     if (ctx.dht_search)
     {
-        dht_get_peers::free_search(ctx.dht_search);
+        ctx.dht_search.free();
     }
     if (ctx.dht_client)
     {
-        dht_client::free_dht_client(ctx.dht_client);
+        ctx.dht_client.free();
     }
 
     io::printfn("Freeing download manager...");
     if (ctx.dm)
     {
-        download_manager::free(ctx.dm);
+        ctx.dm.free();
         free(ctx.dm);
     }
 
     io::printfn("Freeing storage manager...");
     if (ctx.sm)
     {
-        storage_manager::free(ctx.sm);
+        ctx.sm.free();
         free(ctx.sm);
     }
 
     io::printfn("Freeing torrent...");
     if (ctx.torrent)
     {
-        libtorrent::metainfo::free_torrent_file(ctx.torrent);
+        ctx.torrent.free();
     }
 
     // Note: tracker_response is managed by the tracker module and already freed
@@ -1388,19 +1388,19 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // (Handles are already closed by on_complete_download or error handlers)
     if (ctx.dm)
     {
-        download_manager::free(ctx.dm);
+        ctx.dm.free();
         free(ctx.dm);
     }
 
     if (ctx.sm)
     {
-        storage_manager::free(ctx.sm);
+        ctx.sm.free();
         free(ctx.sm);
     }
 
     if (ctx.torrent)
     {
-        libtorrent::metainfo::free_torrent_file(ctx.torrent);
+        ctx.torrent.free();
     }
 
     if (ctx.tracker_response)
@@ -1414,7 +1414,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Free peer pool
     if (ctx.peer_pool)
     {
-        peer_pool::free(ctx.peer_pool);
+        ctx.peer_pool.free();
     }
 
     // Stop and close log flush timer

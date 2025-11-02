@@ -129,7 +129,7 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
         if (catch err = socket_opt)
         {
             io::eprintfn("[DHT] Failed to create UDP socket");
-            free_dht_client(client);
+            client.free();
             return null;
         }
 
@@ -157,35 +157,31 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
 
 /**
  * Free a DHT client
- *
- * @param client DHT client to free
  */
-fn void free_dht_client(DhtClient* client) @public
+fn void DhtClient.free(&self) @public
 {
-    if (!client) return;
-
     // Close UDP socket
-    if (client.socket)
+    if (self.socket)
     {
-        client.socket.close();
+        self.socket.close();
     }
 
     // Cancel all pending transactions (contexts freed by arena)
-    if (client.rpc_manager)
+    if (self.rpc_manager)
     {
-        dht_rpc_manager::cancel_all_transactions(client.rpc_manager, null);
-        dht_rpc_manager::free_rpc_manager(client.rpc_manager);
+        self.rpc_manager.cancel_all_transactions(null);
+        self.rpc_manager.free();
     }
 
-    if (client.routing_table)
+    if (self.routing_table)
     {
-        dht_routing_table::free_routing_table(client.routing_table);
+        self.routing_table.free();
     }
 
     // Free arena (frees all RPC contexts at once)
-    client.arena.free();
+    self.arena.free();
 
-    free(client);
+    free(self);
 }
 
 // ============================================================================
@@ -195,22 +191,21 @@ fn void free_dht_client(DhtClient* client) @public
 /**
  * Add a bootstrap node
  *
- * @param client DHT client
  * @param ip Bootstrap node IP address
  * @param port Bootstrap node port
  * @return true if node was added
  */
-fn bool add_bootstrap_node(DhtClient* client, common::Ipv4Addr ip, ushort port) @public
+fn bool DhtClient.add_bootstrap_node(&self, common::Ipv4Addr ip, ushort port) @public
 {
-    if (client.bootstrap_node_count >= MAX_BOOTSTRAP_NODES)
+    if (self.bootstrap_node_count >= MAX_BOOTSTRAP_NODES)
     {
         return false;
     }
 
-    BootstrapNode* node = &client.bootstrap_nodes[client.bootstrap_node_count];
+    BootstrapNode* node = &self.bootstrap_nodes[self.bootstrap_node_count];
     for (int i = 0; i < 4; i++) node.ip[i] = ip[i];
     node.port = port;
-    client.bootstrap_node_count++;
+    self.bootstrap_node_count++;
 
     return true;
 }
@@ -218,21 +213,19 @@ fn bool add_bootstrap_node(DhtClient* client, common::Ipv4Addr ip, ushort port) 
 /**
  * Add well-known bootstrap nodes
  * Uses public DHT bootstrap nodes from BitTorrent clients
- *
- * @param client DHT client
  */
-fn void add_default_bootstrap_nodes(DhtClient* client) @public
+fn void DhtClient.add_default_bootstrap_nodes(&self) @public
 {
     // router.bittorrent.com (87.98.162.88:6881)
-    add_bootstrap_node(client, { 87, 98, 162, 88 }, 6881);
+    self.add_bootstrap_node({ 87, 98, 162, 88 }, 6881);
 
     // dht.transmissionbt.com (87.98.162.88:6881 - same IP as above)
     // router.utorrent.com (82.221.103.244:6881)
-    add_bootstrap_node(client, { 82, 221, 103, 244 }, 6881);
+    self.add_bootstrap_node({ 82, 221, 103, 244 }, 6881);
 
     // dht.libtorrent.org (87.98.162.88:6881 - same IP)
     // router.silotis.us (130.239.18.159:6881)
-    add_bootstrap_node(client, { 130, 239, 18, 159 }, 6881);
+    self.add_bootstrap_node({ 130, 239, 18, 159 }, 6881);
 }
 
 // ============================================================================
@@ -300,7 +293,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
     bencode::BencodeValue* root = client.current_response_root;
 
     // Extract the response dictionary ("r" key)
-    bencode::BencodeValue* r_dict = bencode::dict_get(root, "r");
+    bencode::BencodeValue* r_dict = root.dict_get("r");
     if (r_dict == null || r_dict.type != bencode::BencodeType.DICT)
     {
         io::eprintfn("[DHT] Invalid response format");
@@ -308,7 +301,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
     }
 
     // Extract responding node's ID
-    bencode::BencodeValue* id_val = bencode::dict_get(r_dict, "id");
+    bencode::BencodeValue* id_val = r_dict.dict_get("id");
     if (id_val != null && id_val.type == bencode::BencodeType.STRING)
     {
         if (id_val.string.len >= 20)
@@ -328,7 +321,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
 
         case krpc::QueryType.FIND_NODE:
             // Parse nodes from response
-            bencode::BencodeValue* nodes_val = bencode::dict_get(r_dict, "nodes");
+            bencode::BencodeValue* nodes_val = r_dict.dict_get("nodes");
             if (nodes_val != null && nodes_val.type == bencode::BencodeType.STRING)
             {
                 char[] nodes_data = nodes_val.string;
@@ -361,8 +354,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                                    (ushort)nodes_data[offset + 25];
 
                     // Add node to routing table (with estimated RTT of 100ms)
-                    bool added = dht_routing_table::add_node(client.routing_table,
-                                                              node_id, ip, port, 100);
+                    bool added = client.routing_table.add_node(node_id, ip, port, 100);
 
                     if (added && i < 3)
                     {
@@ -377,8 +369,8 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
             dht_get_peers::GetPeersSearch* search = (dht_get_peers::GetPeersSearch*)ctx.search_context;
 
             // Get_peers can return either peers (values) or nodes
-            bencode::BencodeValue* values_val = bencode::dict_get(r_dict, "values");
-            bencode::BencodeValue* nodes_val = bencode::dict_get(r_dict, "nodes");
+            bencode::BencodeValue* values_val = r_dict.dict_get("values");
+            bencode::BencodeValue* nodes_val = r_dict.dict_get("nodes");
 
             if (values_val != null && values_val.type == bencode::BencodeType.LIST)
             {
@@ -404,7 +396,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                                        (ushort)peer_val.string[5];
 
                         // Add peer to search if we have search context
-                        if (search && dht_get_peers::add_peer(search, ip, port))
+                        if (search && search.add_peer(ip, port))
                         {
                             added++;
                             if (added <= 3)  // Log first 3
@@ -446,12 +438,12 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                     ushort port = ((ushort)nodes_data[offset + 24] << 8) |
                                    (ushort)nodes_data[offset + 25];
 
-                    dht_routing_table::add_node(client.routing_table, node_id, ip, port, 100);
+                    client.routing_table.add_node(node_id, ip, port, 100);
                 }
             }
 
             // Extract token for future announce_peer
-            bencode::BencodeValue* token_val = bencode::dict_get(r_dict, "token");
+            bencode::BencodeValue* token_val = r_dict.dict_get("token");
             if (token_val != null && token_val.type == bencode::BencodeType.STRING)
             {
                 io::printfn("[DHT] Received announce token (%d bytes)", token_val.string.len);
@@ -467,30 +459,28 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
 /**
  * Send a ping query to a node
  *
- * @param client DHT client
  * @param target_id Target node ID
  * @param target_ip Target IP address
  * @param target_port Target port
  * @return true if query was sent
  */
-fn bool send_ping(DhtClient* client, common::NodeId target_id,
-                  common::Ipv4Addr target_ip, ushort target_port) @public => @pool()
+fn bool DhtClient.send_ping(&self, common::NodeId target_id,
+                            common::Ipv4Addr target_ip, ushort target_port) @public => @pool()
 {
     // Create callback context from arena
-    RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
+    RpcCallbackContext* ctx = allocator::new(&self.arena, RpcCallbackContext);
     if (!ctx)
     {
         io::eprintfn("[DHT] Failed to allocate RPC context");
         return false;
     }
 
-    ctx.client = client;
+    ctx.client = self;
     ctx.query_type = krpc::QueryType.PING;
     ctx.search_context = null;
 
     // Create transaction
-    char[2]? tid_opt = dht_rpc_manager::create_transaction(
-        client.rpc_manager,
+    char[2]? tid_opt = self.rpc_manager.create_transaction(
         krpc::QueryType.PING,
         target_id,
         target_ip,
@@ -506,20 +496,20 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
     }
 
     // Skip network I/O if no socket (test mode)
-    if (!client.socket) return true;
+    if (!self.socket) return true;
 
     char[2] tid = tid_opt;
 
     // Encode the KRPC ping query
     String tid_str = (String)((char*)&tid)[:2];
-    String message = krpc::encode_ping_query(tid_str, client.our_id);
+    String message = krpc::encode_ping_query(tid_str, self.our_id);
     defer free(message);
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
 
     io::printfn("[DHT] Sending ping to %s:%d", target_ip_str, target_port);
-    client.socket.send(target_ip_str, (int)target_port,
+    self.socket.send(target_ip_str, (int)target_port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -528,32 +518,30 @@ fn bool send_ping(DhtClient* client, common::NodeId target_id,
 /**
  * Send a find_node query to a node
  *
- * @param client DHT client
  * @param target_id Target node ID to query
  * @param target_ip Target IP address
  * @param target_port Target port
  * @param search_id Node ID to search for
  * @return true if query was sent
  */
-fn bool send_find_node(DhtClient* client, common::NodeId target_id,
-                       common::Ipv4Addr target_ip, ushort target_port,
-                       common::NodeId search_id) @public => @pool()
+fn bool DhtClient.send_find_node(&self, common::NodeId target_id,
+                                 common::Ipv4Addr target_ip, ushort target_port,
+                                 common::NodeId search_id) @public => @pool()
 {
     // Create callback context from arena
-    RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
+    RpcCallbackContext* ctx = allocator::new(&self.arena, RpcCallbackContext);
     if (!ctx)
     {
         io::eprintfn("[DHT] Failed to allocate RPC context");
         return false;
     }
 
-    ctx.client = client;
+    ctx.client = self;
     ctx.query_type = krpc::QueryType.FIND_NODE;
     ctx.search_context = null;
 
     // Create transaction
-    char[2]? tid_opt = dht_rpc_manager::create_transaction(
-        client.rpc_manager,
+    char[2]? tid_opt = self.rpc_manager.create_transaction(
         krpc::QueryType.FIND_NODE,
         target_id,
         target_ip,
@@ -569,20 +557,20 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
     }
 
     // Skip network I/O if no socket (test mode)
-    if (!client.socket) return true;
+    if (!self.socket) return true;
 
     char[2] tid = tid_opt;
 
     // Encode the KRPC find_node query
     String tid_str = (String)((char*)&tid)[:2];
-    String message = krpc::encode_find_node_query(tid_str, client.our_id, search_id);
+    String message = krpc::encode_find_node_query(tid_str, self.our_id, search_id);
     defer free(message);
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
 
     io::printfn("[DHT] Sending find_node to %s:%d", target_ip_str, target_port);
-    client.socket.send(target_ip_str, (int)target_port,
+    self.socket.send(target_ip_str, (int)target_port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -591,7 +579,6 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
 /**
  * Send a get_peers query to a node
  *
- * @param client DHT client
  * @param target_id Target node ID to query
  * @param target_ip Target IP address
  * @param target_port Target port
@@ -599,25 +586,24 @@ fn bool send_find_node(DhtClient* client, common::NodeId target_id,
  * @param search_context Pointer to GetPeersSearch (for tracking responses)
  * @return true if query was sent
  */
-fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
-                       common::Ipv4Addr target_ip, ushort target_port,
-                       common::InfoHash info_hash, void* search_context) @public => @pool()
+fn bool DhtClient.send_get_peers(&self, common::NodeId target_id,
+                                 common::Ipv4Addr target_ip, ushort target_port,
+                                 common::InfoHash info_hash, void* search_context) @public => @pool()
 {
     // Create callback context from arena
-    RpcCallbackContext* ctx = allocator::new(&client.arena, RpcCallbackContext);
+    RpcCallbackContext* ctx = allocator::new(&self.arena, RpcCallbackContext);
     if (!ctx)
     {
         io::eprintfn("[DHT] Failed to allocate RPC context");
         return false;
     }
 
-    ctx.client = client;
+    ctx.client = self;
     ctx.query_type = krpc::QueryType.GET_PEERS;
     ctx.search_context = search_context;
 
     // Create transaction
-    char[2]? tid_opt = dht_rpc_manager::create_transaction(
-        client.rpc_manager,
+    char[2]? tid_opt = self.rpc_manager.create_transaction(
         krpc::QueryType.GET_PEERS,
         target_id,
         target_ip,
@@ -633,20 +619,20 @@ fn bool send_get_peers(DhtClient* client, common::NodeId target_id,
     }
 
     // Skip network I/O if no socket (test mode)
-    if (!client.socket) return true;
+    if (!self.socket) return true;
 
     char[2] tid = tid_opt;
 
     // Encode the KRPC get_peers query
     String tid_str = (String)((char*)&tid)[:2];
-    String message = krpc::encode_get_peers_query(tid_str, client.our_id, info_hash);
+    String message = krpc::encode_get_peers_query(tid_str, self.our_id, info_hash);
     defer free(message);
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
 
     io::printfn("[DHT] Sending get_peers to %s:%d", target_ip_str, target_port);
-    client.socket.send(target_ip_str, (int)target_port,
+    self.socket.send(target_ip_str, (int)target_port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -676,10 +662,10 @@ fn void on_udp_recv(udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, voi
     }
 
     bencode::BencodeValue* root = root_opt;
-    defer bencode::free_bencode_value(root);
+    defer root.free();
 
     // Extract transaction ID
-    bencode::BencodeValue* t_val = bencode::dict_get(root, "t");
+    bencode::BencodeValue* t_val = root.dict_get("t");
     if (t_val == null || t_val.type != bencode::BencodeType.STRING)
     {
         io::eprintfn("[DHT] Message missing transaction ID");
@@ -713,7 +699,7 @@ fn void on_udp_recv(udp::UdpSocket* socket, char[] data, uv::Sockaddr* addr, voi
             resp_msg.version = "";
 
             // Handle the response (this will call the transaction callback)
-            dht_rpc_manager::handle_response(client.rpc_manager, &resp_msg);
+            client.rpc_manager.handle_response(&resp_msg);
 
             // Clear temporary storage
             client.current_response_root = null;
@@ -746,33 +732,32 @@ fn char[] on_udp_alloc(udp::UdpSocket* socket, usz suggested_size, void* user_da
  * Bootstrap the DHT client
  * Connects to bootstrap nodes and populates routing table
  *
- * @param client DHT client
  * @return true if bootstrap was initiated successfully
  */
-fn bool bootstrap(DhtClient* client) @public
+fn bool DhtClient.bootstrap(&self) @public
 {
-    if (client.bootstrap_node_count == 0)
+    if (self.bootstrap_node_count == 0)
     {
         return false;
     }
 
-    client.state = DhtState.BOOTSTRAPPING;
+    self.state = DhtState.BOOTSTRAPPING;
 
     // Send find_node queries to all bootstrap nodes
     // Query for our own ID to get nodes close to us
-    for (int i = 0; i < client.bootstrap_node_count; i++)
+    for (int i = 0; i < self.bootstrap_node_count; i++)
     {
-        BootstrapNode* node = &client.bootstrap_nodes[i];
+        BootstrapNode* node = &self.bootstrap_nodes[i];
 
         // Create a dummy node ID for bootstrap node (we don't know it yet)
         common::NodeId dummy_id;
         for (int j = 0; j < 20; j++) dummy_id[j] = 0;
 
         // Send find_node query for our own ID
-        send_find_node(client, dummy_id, node.ip, node.port, client.our_id);
+        self.send_find_node(dummy_id, node.ip, node.port, self.our_id);
     }
 
-    client.state = DhtState.RUNNING;
+    self.state = DhtState.RUNNING;
     return true;
 }
 
@@ -780,15 +765,14 @@ fn bool bootstrap(DhtClient* client) @public
  * Check if DHT client is bootstrapped
  * A client is considered bootstrapped if it has at least a few nodes in routing table
  *
- * @param client DHT client
  * @return true if bootstrapped
  */
-fn bool is_bootstrapped(DhtClient* client) @public
+fn bool DhtClient.is_bootstrapped(&self) @public
 {
-    if (client.state != DhtState.RUNNING) return false;
+    if (self.state != DhtState.RUNNING) return false;
 
     int total_nodes, active_buckets;
-    dht_routing_table::get_stats(client.routing_table, &total_nodes, &active_buckets);
+    self.routing_table.get_stats(&total_nodes, &active_buckets);
 
     // Consider bootstrapped if we have at least 10 nodes
     return total_nodes >= 10;
@@ -801,25 +785,23 @@ fn bool is_bootstrapped(DhtClient* client) @public
 /**
  * Perform periodic DHT maintenance
  * Should be called regularly (e.g., every second)
- *
- * @param client DHT client
  */
-fn void tick(DhtClient* client) @public
+fn void DhtClient.tick(&self) @public
 {
-    if (client.state != DhtState.RUNNING) return;
+    if (self.state != DhtState.RUNNING) return;
 
     // Process RPC timeouts
-    dht_rpc_manager::process_timeouts(client.rpc_manager);
+    self.rpc_manager.process_timeouts();
 
     // Check if bucket refresh is needed
     long now = (long)time::now().to_seconds();
-    long elapsed = now - client.last_refresh_time;
+    long elapsed = now - self.last_refresh_time;
 
     if (elapsed >= BUCKET_REFRESH_INTERVAL_SEC)
     {
         // Refresh routing table by querying random IDs in each bucket
         // (Full implementation would do this)
-        client.last_refresh_time = now;
+        self.last_refresh_time = now;
     }
 }
 
@@ -830,27 +812,25 @@ fn void tick(DhtClient* client) @public
 /**
  * Get DHT statistics
  *
- * @param client DHT client
  * @param total_nodes Output: total nodes in routing table
  * @param active_buckets Output: active buckets in routing table
  * @param active_transactions Output: active RPC transactions
  */
-fn void get_stats(DhtClient* client, int* total_nodes, int* active_buckets,
-                  int* active_transactions) @public
+fn void DhtClient.get_stats(&self, int* total_nodes, int* active_buckets,
+                            int* active_transactions) @public
 {
-    dht_routing_table::get_stats(client.routing_table, total_nodes, active_buckets);
+    self.routing_table.get_stats(total_nodes, active_buckets);
 
     int pending;
-    dht_rpc_manager::get_stats(client.rpc_manager, active_transactions, &pending);
+    self.rpc_manager.get_stats(active_transactions, &pending);
 }
 
 /**
  * Get DHT client state
  *
- * @param client DHT client
  * @return Current DHT state
  */
-fn DhtState get_state(DhtClient* client) @public
+fn DhtState DhtClient.get_state(&self) @public
 {
-    return client.state;
+    return self.state;
 }
