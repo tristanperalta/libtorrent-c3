@@ -465,7 +465,13 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
             if (catch err = piece_msg) return;
 
             // Add block to download manager
-            ctx.dm.receive_block(piece_msg.index, piece_msg.begin, piece_msg.block)!!;
+            // Note: Piece may no longer be active if it completed while blocks were queued
+            if (catch excuse = ctx.dm.receive_block(piece_msg.index, piece_msg.begin, piece_msg.block))
+            {
+                // Piece not downloading anymore (completed or failed) - ignore late block
+                // This is normal when piece completes while blocks are queued in event loop
+                return;
+            }
 
             // Track download statistics
             ctx.peer_pool.update_peer_stats(ip, port, (ulong)piece_msg.block.len, 0)!!;
