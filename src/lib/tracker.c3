@@ -372,8 +372,52 @@ fn void HttpTracker.free(HttpTracker* self) @dynamic
 alias AnnounceCallback = fn void(TrackerResponse* response, int status, void* user_data);
 
 <*
+ Announce to specific tracker URL (non-blocking).
+ Routes to HTTP or UDP tracker implementation based on URL scheme.
+ This is the BEP 12 multi-tracker version that allows specifying a tracker URL.
+
+ @param loop : "Event loop"
+ @param torrent : "The torrent file"
+ @param tracker_url : "The tracker URL to announce to (overrides torrent.announce)"
+ @param our_port : "Our listening port"
+ @param event : "Event type (started/stopped/completed or empty string)"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
+*>
+fn void announce_to_url(event_loop::EventLoop* loop,
+                        metainfo::TorrentFile* torrent,
+                        String tracker_url,
+                        ushort our_port,
+                        String event,
+                        AnnounceCallback callback,
+                        void* user_data) @public
+{
+    if (tracker_url.starts_with("udp://"))
+    {
+        // Use UDP tracker async with URL override
+        udp_tracker::async_announce(loop, torrent, our_port, event,
+                                     callback, user_data, 0, tracker_url);
+    }
+    else if (tracker_url.starts_with("http://") || tracker_url.starts_with("https://"))
+    {
+        // Use HTTP tracker async with URL override
+        http_tracker::async_announce(loop, torrent, our_port, event,
+                                      callback, user_data, tracker_url);
+    }
+    else
+    {
+        // Invalid URL
+        if (callback)
+        {
+            callback(null, -1, user_data);
+        }
+    }
+}
+
+<*
  Announce to tracker (non-blocking).
  Routes to HTTP or UDP tracker implementation based on URL.
+ Uses torrent.announce as the tracker URL.
 
  @param loop : "Event loop"
  @param torrent : "The torrent file"
@@ -389,27 +433,7 @@ fn void announce(event_loop::EventLoop* loop,
                  AnnounceCallback callback,
                  void* user_data) @public
 {
-    String url = torrent.announce;
-
-    if (url.starts_with("udp://"))
-    {
-        // Use UDP tracker async
-        udp_tracker::async_announce(loop, torrent, our_port, event,
-                                     callback, user_data);
-    }
-    else if (url.starts_with("http://") || url.starts_with("https://"))
-    {
-        // Use HTTP tracker async (thread pool)
-        http_tracker::async_announce(loop, torrent, our_port, event,
-                                      callback, user_data);
-    }
-    else
-    {
-        // Invalid URL
-        if (callback)
-        {
-            callback(null, -1, user_data);
-        }
-    }
+    // Use torrent.announce as the tracker URL
+    announce_to_url(loop, torrent, torrent.announce, our_port, event, callback, user_data);
 }
 

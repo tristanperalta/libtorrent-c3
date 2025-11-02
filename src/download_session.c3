@@ -6,6 +6,7 @@ import uv;
 import libtorrent;
 import libtorrent::common;
 import libtorrent::tracker;
+import libtorrent::tracker_manager;
 import async::event_loop;
 import libtorrent::metainfo;
 import libtorrent::peer_connection;
@@ -70,6 +71,10 @@ struct DownloadContext
     int announce_retry_count;               // For exponential backoff
     int announce_backoff_ms;                // Current backoff delay
     bool initial_announce_done;             // Has first announce succeeded?
+
+    // Multi-tracker support (BEP 12)
+    tracker_manager::TrackerManager* tracker_mgr;  // Manages tier-based tracker selection
+    String current_tracker_url;                    // Currently active tracker URL (for logging)
 
     // Peer management
     peer_pool::PeerPool* peer_pool;
@@ -235,6 +240,20 @@ fn void on_complete_download(DownloadContext* ctx) @public
     {
         ctx.dht_client.free();
         ctx.dht_client = null;
+    }
+
+    // Free tracker manager resources
+    if (ctx.tracker_mgr)
+    {
+        ctx.tracker_mgr.free();
+        free(ctx.tracker_mgr);
+        ctx.tracker_mgr = null;
+    }
+    if (ctx.current_tracker_url.len > 0 && ctx.current_tracker_url != ctx.torrent.announce)
+    {
+        // Only free if it's not pointing to torrent.announce
+        // (current_tracker_url may be a reference to a tracker manager string)
+        ctx.current_tracker_url = "";
     }
 
     // Gracefully disconnect from all peers
@@ -990,14 +1009,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
 
     if (status != 0 || !response || response.failure_reason.len > 0)
     {
-        // Failed - schedule retry with exponential backoff
-        ctx.announce_retry_count++;
-
-        // Calculate backoff: 1s, 2s, 4s, 8s, 16s, 30s (cap at 30s)
-        int backoff_ms = 1000 * (1 << (ctx.announce_retry_count - 1));
-        if (backoff_ms > 30000) backoff_ms = 30000;
-        ctx.announce_backoff_ms = backoff_ms;
-
+        // Failed - try next tracker or use exponential backoff
         if (status != 0)
         {
             String error_desc = download_session::tracker_error_string(status);
@@ -1007,6 +1019,38 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         {
             io::eprintfn("  Tracker error: %s", response.failure_reason);
         }
+
+        // BEP 12: Try next tracker if available
+        if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
+        {
+            // Mark current tracker as failed and get next one
+            ctx.tracker_mgr.mark_failure();
+            String next_tracker = ctx.tracker_mgr.get_next_tracker();
+
+            if (next_tracker.len > 0)
+            {
+                // Try next tracker immediately (no backoff for different tracker)
+                io::printfn("  Trying next tracker in tier...");
+                ctx.current_tracker_url = next_tracker;
+                tracker::announce_to_url(ctx.loop, ctx.torrent, next_tracker, 6881,
+                                          ctx.initial_announce_done ? "" : "started",
+                                          &on_announce_complete_with_retry, ctx);
+                return;
+            }
+            else
+            {
+                // All trackers exhausted - use exponential backoff and try again
+                io::printfn("  All trackers failed - will retry from beginning");
+            }
+        }
+
+        // Exponential backoff for retry
+        ctx.announce_retry_count++;
+
+        // Calculate backoff: 1s, 2s, 4s, 8s, 16s, 30s (cap at 30s)
+        int backoff_ms = 1000 * (1 << (ctx.announce_retry_count - 1));
+        if (backoff_ms > 30000) backoff_ms = 30000;
+        ctx.announce_backoff_ms = backoff_ms;
 
         io::printfn("  Retrying in %d seconds...", backoff_ms / 1000);
 
@@ -1026,7 +1070,17 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
         return;
     }
 
-    // Success - reset retry counter
+    // Success - mark tracker as successful (BEP 12: move to front of tier)
+    if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
+    {
+        ctx.tracker_mgr.mark_success(ctx.current_tracker_url);
+        io::printfn("  Tracker announce successful: %s", ctx.current_tracker_url);
+    }
+    else
+    {
+        io::printfn("  Tracker announce successful");
+    }
+
     ctx.announce_retry_count = 0;
     ctx.initial_announce_done = true;
 
@@ -1124,6 +1178,7 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
 
 <*
  Periodic announce timer callback - fires every interval seconds.
+ Re-announces to the active (successful) tracker.
 *>
 fn void on_announce_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
@@ -1138,9 +1193,29 @@ fn void on_announce_timer_tick(async::timer::Timer* timer, void* user_data) @pub
 
     io::printfn("Periodic tracker re-announce...");
 
-    // Don't use retry logic for periodic announces - just try once
-    tracker::announce(ctx.loop, ctx.torrent, 6881, "",
-                      &on_download_tracker_complete, ctx);
+    // BEP 12: Use the active tracker (the one that succeeded)
+    if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
+    {
+        String active_tracker = ctx.tracker_mgr.get_active_tracker();
+        if (active_tracker.len > 0)
+        {
+            // Re-announce to successful tracker
+            tracker::announce_to_url(ctx.loop, ctx.torrent, active_tracker, 6881, "",
+                                      &on_download_tracker_complete, ctx);
+        }
+        else
+        {
+            // No active tracker yet - use tracker manager's next tracker
+            tracker::announce_to_url(ctx.loop, ctx.torrent, ctx.current_tracker_url, 6881, "",
+                                      &on_download_tracker_complete, ctx);
+        }
+    }
+    else
+    {
+        // Fallback: Use primary tracker
+        tracker::announce(ctx.loop, ctx.torrent, 6881, "",
+                          &on_download_tracker_complete, ctx);
+    }
 }
 
 <*
@@ -1230,15 +1305,42 @@ fn void on_block_timeout_timer_tick(async::timer::Timer* timer, void* user_data)
 
 <*
  Start tracker announce with retry support.
+ Uses multi-tracker manager (BEP 12) if available.
 *>
 fn void announce_with_retry(download_session::DownloadContext* ctx) @public
 {
     ctx.announce_retry_count = 0;
     ctx.announce_backoff_ms = 0;
 
-    tracker::announce(ctx.loop, ctx.torrent, 6881,
-                      ctx.initial_announce_done ? "" : "started",
-                      &on_announce_complete_with_retry, ctx);
+    // Determine which tracker URL to use
+    String tracker_url;
+    if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
+    {
+        // BEP 12: Use tracker manager for multi-tracker support
+        // Reset to beginning of tier for new announce cycle
+        ctx.tracker_mgr.reset();
+        tracker_url = ctx.tracker_mgr.get_next_tracker();
+
+        if (tracker_url.len == 0)
+        {
+            io::eprintfn("No valid trackers available");
+            return;
+        }
+
+        ctx.current_tracker_url = tracker_url;
+        tracker::announce_to_url(ctx.loop, ctx.torrent, tracker_url, 6881,
+                                  ctx.initial_announce_done ? "" : "started",
+                                  &on_announce_complete_with_retry, ctx);
+    }
+    else
+    {
+        // Fallback: Use primary announce URL
+        tracker_url = ctx.torrent.announce;
+        ctx.current_tracker_url = tracker_url;
+        tracker::announce(ctx.loop, ctx.torrent, 6881,
+                          ctx.initial_announce_done ? "" : "started",
+                          &on_announce_complete_with_retry, ctx);
+    }
 }
 
 <*
@@ -1262,7 +1364,14 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
     io::printfn("");
 
     // Now start tracker announce
-    io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
+    if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
+    {
+        io::printfn("Announcing to trackers (%d tiers available)...", ctx.tracker_mgr.get_tier_count());
+    }
+    else
+    {
+        io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
+    }
     announce_with_retry(ctx);
 
     // Start DHT peer discovery if enabled
@@ -1593,6 +1702,24 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         ctx
     );
     io::printfn("");
+
+    // Initialize multi-tracker manager (BEP 12)
+    if (torrent.announce_list.len > 0)
+    {
+        // Use announce-list for multi-tracker support
+        ctx.tracker_mgr = mem::new(tracker_manager::TrackerManager);
+        *ctx.tracker_mgr = tracker_manager::initialize(torrent.announce_list);
+        io::printfn("Multi-tracker support: %d tiers, %d total trackers",
+                    ctx.tracker_mgr.get_tier_count(),
+                    torrent.announce_list[0].len + (torrent.announce_list.len > 1 ? torrent.announce_list[1].len : 0));
+        ctx.current_tracker_url = "";
+    }
+    else
+    {
+        // Fallback to single tracker
+        ctx.tracker_mgr = null;
+        ctx.current_tracker_url = torrent.announce;
+    }
 
     // Initialize DHT for peer discovery
     init_dht(ctx, 6881);  // Use same port as BitTorrent protocol

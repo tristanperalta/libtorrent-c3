@@ -117,13 +117,15 @@ fn void on_http_response(http::HttpResponse* response, int status, void* user_da
  @param event : "Event string (started/stopped/completed or empty)"
  @param callback : "Completion callback"
  @param user_data : "User data passed to callback"
+ @param tracker_url_override : "Optional tracker URL override (uses torrent.announce if empty)"
 *>
 fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torrent,
                        ushort port, String event, AnnounceCallback callback,
-                       void* user_data) @public
+                       void* user_data, String tracker_url_override = "") @public
 {
-    // Parse tracker URL
-    String tracker_url = torrent.announce;
+    // Use override URL if provided, otherwise use torrent.announce
+    String tracker_url = tracker_url_override.len > 0 ? tracker_url_override : torrent.announce;
+
     if (!tracker_url.starts_with("http://") && !tracker_url.starts_with("https://"))
     {
         if (callback)

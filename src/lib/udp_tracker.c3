@@ -853,13 +853,16 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
  @param callback : "Completion callback"
  @param user_data : "User data passed to callback"
  @param initial_timeout_seconds : "Initial timeout in seconds (0 = use default, for testing use 1)"
+ @param tracker_url_override : "Optional tracker URL override (uses torrent.announce if empty)"
 *>
 fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torrent,
                        ushort port, String event, AnnounceCallback callback,
-                       void* user_data, int initial_timeout_seconds = 0) @public
+                       void* user_data, int initial_timeout_seconds = 0,
+                       String tracker_url_override = "") @public
 {
-    // Parse tracker URL
-    String tracker_url = torrent.announce;
+    // Use override URL if provided, otherwise use torrent.announce
+    String tracker_url = tracker_url_override.len > 0 ? tracker_url_override : torrent.announce;
+
     if (!tracker_url.starts_with("udp://"))
     {
         if (callback)
