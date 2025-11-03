@@ -20,6 +20,8 @@ import libtorrent::peer_pool;
 import libtorrent::logger;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
+import libtorrent::event_bus;
+import libtorrent::event_types;
 import torrent_client::log_outputs;
 import torrent_client::download_session;
 import raylib_gui;
@@ -1013,6 +1015,99 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
 }
 
 // ============================================================================
+// GUI Event Handlers - Subscribe to EventBus events
+// ============================================================================
+
+/**
+ * Event handler: Progress updated
+ * Updates GUI progress bar and peer stats display
+ */
+fn void on_progress_updated_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;  // No GUI to update
+
+    event_types::ProgressEvent* evt = (event_types::ProgressEvent*)event_data;
+
+    // Get current peer stats for display
+    usz connected_peers, total_peers, candidates, connecting;
+    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected_peers);
+
+    raylib_gui::update_progress(ctx.gui_state, evt.pieces_complete, evt.pieces_downloading,
+                                0, 0.0, 0.0);  // TODO: Calculate actual downloaded bytes and speeds
+    raylib_gui::update_peers(ctx.gui_state, (int)connected_peers, (int)total_peers);
+}
+
+/**
+ * Event handler: Tracker announce failed
+ * Updates GUI tracker status with error message
+ */
+fn void on_tracker_announce_failed_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::TrackerEvent* evt = (event_types::TrackerEvent*)event_data;
+    raylib_gui::update_tracker_status(ctx.gui_state, evt.error_message);
+}
+
+/**
+ * Event handler: Tracker returned no peers
+ * Updates GUI tracker status with "no peers" message
+ */
+fn void on_tracker_no_peers_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    raylib_gui::update_tracker_status(ctx.gui_state, "No peers available");
+}
+
+/**
+ * Event handler: Tracker announce success
+ * Updates GUI tracker status with success message
+ */
+fn void on_tracker_announce_success_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::TrackerEvent* evt = (event_types::TrackerEvent*)event_data;
+
+    // Build success message showing peer count
+    DString msg;
+    msg.appendf("Tracker OK (%d peers)", evt.peers_returned);
+    raylib_gui::update_tracker_status(ctx.gui_state, msg.str_view());
+}
+
+/**
+ * Event handler: Peer stats updated
+ * Updates GUI peer connection display
+ */
+fn void on_peer_stats_updated_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::PeerEvent* evt = (event_types::PeerEvent*)event_data;
+    raylib_gui::update_peers(ctx.gui_state, evt.peers_connected, evt.peers_total);
+}
+
+/**
+ * Event handler: Tracker status changed (multi-tracker)
+ * Updates GUI tracker list display
+ */
+fn void on_tracker_status_changed_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::TrackerEvent* evt = (event_types::TrackerEvent*)event_data;
+    raylib_gui::update_tracker_list(ctx.gui_state, evt.tracker_mgr,
+                                     evt.tracker_url, evt.status, evt.peers_returned);
+}
+
+// ============================================================================
 // Download Command - Full torrent download with piece management
 // ============================================================================
 
@@ -1092,6 +1187,17 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.webseed_bytes_downloaded = 0;
     ctx.last_speed_update_time = 0;
     ctx.current_download_speed = 0.0;
+
+    // Initialize event bus for pub/sub
+    ctx.event_bus = libtorrent::event_bus::create(loop);
+
+    // Subscribe GUI event handlers to EventBus
+    ctx.event_bus.subscribe(event_types::EVENT_PROGRESS_UPDATED, &on_progress_updated_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_ANNOUNCE_FAILED, &on_tracker_announce_failed_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_NO_PEERS, &on_tracker_no_peers_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_ANNOUNCE_SUCCESS, &on_tracker_announce_success_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_PEER_STATS_UPDATED, &on_peer_stats_updated_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_STATUS_CHANGED, &on_tracker_status_changed_event, &ctx);
 
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
@@ -1418,6 +1524,9 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.webseed_bytes_downloaded = 0;
     ctx.last_speed_update_time = 0;
     ctx.current_download_speed = 0.0;
+
+    // Initialize event bus for pub/sub
+    ctx.event_bus = libtorrent::event_bus::create(loop);
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
     async::timer::Timer* flush_timer = null;

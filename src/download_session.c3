@@ -22,6 +22,8 @@ import libtorrent::peer_pool;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::webseed;
+import libtorrent::event_bus;
+import libtorrent::event_types;
 import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
@@ -126,6 +128,9 @@ struct DownloadContext
 
     // GUI integration (null in CLI mode)
     raylib_gui::UIState* gui_state;
+
+    // Event bus for pub/sub (decouples GUI from download logic)
+    event_bus::EventBus* event_bus;
 }
 
 // ============================================================================
@@ -373,16 +378,12 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
     usz total, complete, downloading;
     ctx.dm.get_progress(&total, &complete, &downloading);
 
-    // Update GUI if present
-    if (ctx.gui_state)
-    {
-        usz connected_peers, total_peers, candidates, connecting;
-        ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected_peers);
-
-        raylib_gui::update_progress(ctx.gui_state, (uint)complete, (uint)downloading,
-                                    0, 0.0, 0.0);  // TODO: Calculate actual downloaded bytes and speeds
-        raylib_gui::update_peers(ctx.gui_state, (int)connected_peers, (int)total_peers);
-    }
+    // Publish progress event to EventBus (async dispatch)
+    event_types::ProgressEvent progress_evt = event_types::create_progress_event(
+        (uint)complete, (uint)downloading, (uint)total,
+        ctx.total_bytes_downloaded, ctx.current_download_speed, 0.0
+    );
+    ctx.event_bus.publish(event_types::EVENT_PROGRESS_UPDATED, &progress_evt, event_types::ProgressEvent.sizeof);
 
     if (complete % 100 == 0 || complete == total)
     {
@@ -825,13 +826,13 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
         String error_desc = download_session::tracker_error_string(status);
         io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, status);
 
-        // Update GUI if present
-        if (ctx.gui_state)
-        {
-            DString status_msg;
-            status_msg.appendf("Error: %s", error_desc);
-            raylib_gui::update_tracker_status(ctx.gui_state, status_msg.str_view());
-        }
+        // Publish tracker error event
+        DString error_msg;
+        error_msg.appendf("Error: %s", error_desc);
+        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+            "", "Failed", -1, error_msg.str_view(), null
+        );
+        ctx.event_bus.publish(event_types::EVENT_TRACKER_ANNOUNCE_FAILED, &tracker_evt, event_types::TrackerEvent.sizeof);
 
         ctx.exit_code = 1;
         ctx.download_complete = true;
@@ -842,13 +843,13 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     {
         io::eprintfn("Tracker error: %s", response.failure_reason);
 
-        // Update GUI if present
-        if (ctx.gui_state)
-        {
-            DString status_msg;
-            status_msg.appendf("Error: %s", response.failure_reason);
-            raylib_gui::update_tracker_status(ctx.gui_state, status_msg.str_view());
-        }
+        // Publish tracker failure event
+        DString error_msg;
+        error_msg.appendf("Error: %s", response.failure_reason);
+        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+            "", "Failed", -1, response.failure_reason, null
+        );
+        ctx.event_bus.publish(event_types::EVENT_TRACKER_ANNOUNCE_FAILED, &tracker_evt, event_types::TrackerEvent.sizeof);
 
         ctx.exit_code = 1;
         ctx.download_complete = true;
@@ -860,11 +861,11 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     {
         io::printfn("No peers returned by tracker - will retry later");
 
-        // Update GUI if present
-        if (ctx.gui_state)
-        {
-            raylib_gui::update_tracker_status(ctx.gui_state, "No peers available");
-        }
+        // Publish no peers event
+        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+            "", "No peers available", 0, "", null
+        );
+        ctx.event_bus.publish(event_types::EVENT_TRACKER_NO_PEERS, &tracker_evt, event_types::TrackerEvent.sizeof);
 
         // Don't stop download, just wait for next re-announce
         return;
@@ -872,13 +873,13 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
 
     io::printfn("Tracker returned %d peers", num_peers);
 
-    // Update GUI if present
-    if (ctx.gui_state)
-    {
-        DString status_msg;
-        status_msg.appendf("Announce OK (%d peers)", num_peers);
-        raylib_gui::update_tracker_status(ctx.gui_state, status_msg.str_view());
-    }
+    // Publish tracker success event
+    DString success_msg;
+    success_msg.appendf("Announce OK (%d peers)", num_peers);
+    event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+        "", "Working", num_peers, "", null
+    );
+    ctx.event_bus.publish(event_types::EVENT_TRACKER_ANNOUNCE_SUCCESS, &tracker_evt, event_types::TrackerEvent.sizeof);
 
     // Add all peers to peer pool
     ctx.peer_pool.add_peers_from_tracker(response.peers);
@@ -887,11 +888,11 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     usz total_peers, candidates, connecting, connected;
     ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
 
-    // Update GUI if present
-    if (ctx.gui_state)
-    {
-        raylib_gui::update_peers(ctx.gui_state, (int)connected, (int)total_peers);
-    }
+    // Publish peer stats updated event
+    event_types::PeerEvent peer_evt = event_types::create_peer_event(
+        (common::Ipv4Addr){0,0,0,0}, 0, (int)connected, (int)total_peers, false
+    );
+    ctx.event_bus.publish(event_types::EVENT_PEER_STATS_UPDATED, &peer_evt, event_types::PeerEvent.sizeof);
 
     io::printfn("  Peer pool now has %d total peers (%d candidates, %d connecting, %d connected)",
                 total_peers, candidates, connecting, connected);
@@ -1091,12 +1092,11 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
                 io::printfn("  Trying next tracker in tier...");
                 ctx.current_tracker_url = next_tracker;
 
-                // Update GUI with trying status
-                if (ctx.gui_state)
-                {
-                    raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
-                                                     ctx.current_tracker_url, "Trying...", -1);
-                }
+                // Publish tracker status changed event
+                event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+                    ctx.current_tracker_url, "Trying...", -1, "", ctx.tracker_mgr
+                );
+                ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
 
                 tracker::announce_to_url(ctx.loop, ctx.torrent, next_tracker, 6881,
                                           ctx.initial_announce_done ? "" : "started",
@@ -1108,12 +1108,11 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
                 // All trackers exhausted - use exponential backoff and try again
                 io::printfn("  All trackers failed - will retry from beginning");
 
-                // Update GUI with failed status
-                if (ctx.gui_state)
-                {
-                    raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
-                                                     ctx.current_tracker_url, "Failed", -1);
-                }
+                // Publish tracker status changed event
+                event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+                    ctx.current_tracker_url, "Failed", -1, "", ctx.tracker_mgr
+                );
+                ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
             }
         }
 
@@ -1157,13 +1156,12 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
     ctx.announce_retry_count = 0;
     ctx.initial_announce_done = true;
 
-    // Update GUI tracker list if GUI is enabled
-    if (ctx.gui_state)
-    {
-        int peer_count = response ? (int)response.peers.len : -1;
-        raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
-                                         ctx.current_tracker_url, "Working", peer_count);
-    }
+    // Publish tracker status changed event
+    int peer_count = response ? (int)response.peers.len : -1;
+    event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+        ctx.current_tracker_url, "Working", peer_count, "", ctx.tracker_mgr
+    );
+    ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
 
     // Start periodic announce timer if not already running
     if (!ctx.announce_timer && response.interval > 0)
@@ -1937,12 +1935,11 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
                     torrent.announce_list[0].len + (torrent.announce_list.len > 1 ? torrent.announce_list[1].len : 0));
         ctx.current_tracker_url = "";
 
-        // Populate GUI tracker list immediately
-        if (ctx.gui_state)
-        {
-            raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
-                                             ctx.current_tracker_url, "Idle", -1);
-        }
+        // Publish tracker status changed event (initialization)
+        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+            ctx.current_tracker_url, "Idle", -1, "", ctx.tracker_mgr
+        );
+        ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
     }
     else
     {
@@ -1956,13 +1953,12 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
             io::printfn("No trackers found - will use DHT and web seeds only");
         }
 
-        // Populate GUI with single tracker
-        if (ctx.gui_state)
-        {
-            raylib_gui::update_tracker_list(ctx.gui_state, null,
-                                             ctx.current_tracker_url.len > 0 ? ctx.current_tracker_url : "(none - DHT only)",
-                                             "Idle", -1);
-        }
+        // Publish tracker status changed event (initialization)
+        String display_url = ctx.current_tracker_url.len > 0 ? ctx.current_tracker_url : "(none - DHT only)";
+        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+            display_url, "Idle", -1, "", null
+        );
+        ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
     }
 
     // Initialize DHT for peer discovery
