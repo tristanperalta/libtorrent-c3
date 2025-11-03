@@ -5,6 +5,7 @@ import raygui::rg;
 import async::event_loop;
 import libtorrent::logger;
 import libtorrent::peer_pool;
+import libtorrent::tracker_manager;
 import std::io;
 
 // ============================================================================
@@ -19,7 +20,21 @@ enum Tab : int
     OVERVIEW,
     PEERS,
     FILES,
+    TRACKERS,
     LOGS
+}
+
+<*
+ Tracker display information.
+ Used for rendering tracker status in the Trackers tab.
+*>
+struct TrackerDisplayInfo
+{
+    String url;              // Tracker URL
+    uint tier;               // Tier number (0-based)
+    String status;           // Status: "Working", "Trying...", "Failed", "Idle"
+    int peers_returned;      // Number of peers returned (-1 if not announced yet)
+    bool is_active;          // Is this the currently active tracker?
 }
 
 <*
@@ -57,6 +72,10 @@ struct UIState
     int peers_total;
     peer_pool::PeerDisplayInfo[] peer_list;
     int peer_scroll_offset;
+
+    // Tracker state (BEP 12 multi-tracker)
+    TrackerDisplayInfo[] tracker_list;
+    int tracker_scroll_offset;
 
     // Log messages (ring buffer)
     String[] log_messages;
@@ -118,6 +137,11 @@ fn UIState* init(String torrent_name, long total_size, uint pieces_total,
     peer_pool::PeerDisplayInfo[] empty_peers;
     state.peer_list = empty_peers;
     state.peer_scroll_offset = 0;
+
+    // Initialize tracker state
+    TrackerDisplayInfo[] empty_trackers;
+    state.tracker_list = empty_trackers;
+    state.tracker_scroll_offset = 0;
 
     // Initialize log buffer (keep last 1000 messages)
     state.log_capacity = 1000;
@@ -199,7 +223,8 @@ fn void render_ui(UIState* state) @private
     rl::Rectangle tab_rect_overview = {(float)margin, (float)tab_y, (float)tab_width, (float)tab_bar_height};
     rl::Rectangle tab_rect_peers = {(float)(margin + tab_width), (float)tab_y, (float)tab_width, (float)tab_bar_height};
     rl::Rectangle tab_rect_files = {(float)(margin + tab_width * 2), (float)tab_y, (float)tab_width, (float)tab_bar_height};
-    rl::Rectangle tab_rect_logs = {(float)(margin + tab_width * 3), (float)tab_y, (float)tab_width, (float)tab_bar_height};
+    rl::Rectangle tab_rect_trackers = {(float)(margin + tab_width * 3), (float)tab_y, (float)tab_width, (float)tab_bar_height};
+    rl::Rectangle tab_rect_logs = {(float)(margin + tab_width * 4), (float)tab_y, (float)tab_width, (float)tab_bar_height};
 
     // Tab buttons
     if (rg::guiButton(tab_rect_overview, "Overview"))
@@ -213,6 +238,10 @@ fn void render_ui(UIState* state) @private
     if (rg::guiButton(tab_rect_files, "Files"))
     {
         state.active_tab = Tab.FILES;
+    }
+    if (rg::guiButton(tab_rect_trackers, "Trackers"))
+    {
+        state.active_tab = Tab.TRACKERS;
     }
     if (rg::guiButton(tab_rect_logs, "Logs"))
     {
@@ -232,6 +261,8 @@ fn void render_ui(UIState* state) @private
             render_peers_tab(state, content_y, content_height);
         case Tab.FILES:
             render_files_tab(state, content_y, content_height);
+        case Tab.TRACKERS:
+            render_trackers_tab(state, content_y, content_height);
         case Tab.LOGS:
             render_logs_tab(state, content_y, content_height);
     }
@@ -516,6 +547,146 @@ fn void render_files_tab(UIState* state, int content_y, int content_height) @pri
 }
 
 <*
+ Render the Trackers tab (BEP 12 multi-tracker support).
+*>
+fn void render_trackers_tab(UIState* state, int content_y, int content_height) @private
+{
+    int margin = 10;
+    int row_height = 25;
+    int header_height = 30;
+
+    // Table columns
+    int col1_x = margin;                    // Tier
+    int col1_width = 60;
+    int col2_x = col1_x + col1_width;       // Tracker URL
+    int col2_width = 500;
+    int col3_x = col2_x + col2_width;       // Status
+    int col3_width = 120;
+    int col4_x = col3_x + col3_width;       // Peers
+    int col4_width = 80;
+
+    int y = content_y;
+
+    // Draw header background
+    rl::drawRectangle(margin, y, state.window_width - margin * 2, header_height,
+                      (rl::Color){220, 220, 220, 255});
+
+    // Draw column headers
+    rl::drawText("Tier", col1_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Tracker URL", col2_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Status", col3_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Peers", col4_x + 5, y + 8, 18, rl::DARKGRAY);
+
+    y += header_height;
+
+    // Calculate how many rows we can display
+    int table_height = content_height - header_height - 40;  // Reserve 40px for status bar
+    int max_rows = table_height / row_height;
+
+    // Draw tracker rows
+    int row_count = 0;
+    foreach (i, tracker : state.tracker_list)
+    {
+        // Skip rows that are scrolled out of view
+        if (i < (usz)state.tracker_scroll_offset) continue;
+
+        // Stop if we've filled the visible area
+        if (row_count >= max_rows) break;
+
+        // Alternating row colors with highlight for active tracker
+        rl::Color row_color;
+        if (tracker.is_active)
+        {
+            row_color = (rl::Color){220, 255, 220, 255};  // Light green for active
+        }
+        else
+        {
+            row_color = (row_count % 2 == 0) ?
+                (rl::Color){255, 255, 255, 255} :  // White
+                (rl::Color){245, 245, 245, 255};   // Light gray
+        }
+
+        rl::drawRectangle(margin, y, state.window_width - margin * 2, row_height, row_color);
+
+        // Column 1: Tier
+        DString tier_str;
+        tier_str.appendf("%d", tracker.tier);
+        rl::drawText(tier_str.zstr_view(), col1_x + 15, y + 5, 16, rl::DARKGRAY);
+
+        // Column 2: Tracker URL (truncate if too long)
+        String display_url = tracker.url;
+        if (display_url.len > 60)
+        {
+            DString truncated;
+            truncated.append(display_url[:57]);
+            truncated.append("...");
+            rl::drawText(truncated.zstr_view(), col2_x + 5, y + 5, 16, rl::DARKGRAY);
+        }
+        else
+        {
+            rl::drawText((ZString)display_url.ptr, col2_x + 5, y + 5, 16, rl::DARKGRAY);
+        }
+
+        // Column 3: Status with color coding
+        rl::Color status_color;
+        if (tracker.status == "Working")
+        {
+            status_color = (rl::Color){34, 139, 34, 255};  // Green
+        }
+        else if (tracker.status == "Trying...")
+        {
+            status_color = (rl::Color){255, 140, 0, 255};  // Orange
+        }
+        else if (tracker.status == "Failed")
+        {
+            status_color = (rl::Color){220, 20, 60, 255};  // Red
+        }
+        else  // Idle
+        {
+            status_color = rl::DARKGRAY;
+        }
+        rl::drawText((ZString)tracker.status.ptr, col3_x + 5, y + 5, 16, status_color);
+
+        // Column 4: Peers returned
+        DString peers_str;
+        if (tracker.peers_returned >= 0)
+        {
+            peers_str.appendf("%d", tracker.peers_returned);
+        }
+        else
+        {
+            peers_str.append("-");
+        }
+        rl::drawText(peers_str.zstr_view(), col4_x + 15, y + 5, 16, rl::DARKGRAY);
+
+        y += row_height;
+        row_count++;
+    }
+
+    // Draw status bar at bottom of table
+    int status_y = content_y + content_height - 35;
+    rl::drawRectangle(margin, status_y, state.window_width - margin * 2, 30,
+                      (rl::Color){230, 230, 230, 255});
+
+    DString status_text;
+    if (state.tracker_list.len == 0)
+    {
+        status_text.append("No trackers configured");
+    }
+    else
+    {
+        int working_count = 0;
+        foreach (tracker : state.tracker_list)
+        {
+            if (tracker.status == "Working") working_count++;
+        }
+        status_text.appendf("Total trackers: %d  |  Working: %d",
+                           state.tracker_list.len, working_count);
+    }
+    rl::drawText(status_text.zstr_view(), margin + 10, status_y + 8, 16, rl::DARKGRAY);
+}
+
+<*
  Render the Logs tab.
 *>
 fn void render_logs_tab(UIState* state, int content_y, int content_height) @private
@@ -616,6 +787,113 @@ fn void update_peer_list(UIState* state, peer_pool::PeerDisplayInfo[] new_peer_l
 
     // Store new peer list
     state.peer_list = new_peer_list;
+}
+
+<*
+ Update tracker list from tracker manager (BEP 12).
+ Called after tracker announces to refresh the Trackers tab.
+
+ @param state : "UI state"
+ @param tracker_mgr : "Tracker manager (or null for single tracker mode)"
+ @param current_tracker_url : "Currently active tracker URL"
+ @param last_status : "Last announce status (for fallback to single tracker)"
+ @param last_peers : "Number of peers from last announce (-1 if failed)"
+*>
+fn void update_tracker_list(UIState* state,
+                             tracker_manager::TrackerManager* tracker_mgr,
+                             String current_tracker_url,
+                             String last_status,
+                             int last_peers) @public
+{
+    // Free old tracker list
+    if (state.tracker_list.len > 0)
+    {
+        foreach (tracker : state.tracker_list)
+        {
+            if (tracker.url.len > 0) mem::free(tracker.url.ptr);
+            if (tracker.status.len > 0) mem::free(tracker.status.ptr);
+        }
+        mem::free(state.tracker_list.ptr);
+    }
+
+    // Build new tracker list
+    if (tracker_mgr && tracker_mgr.has_trackers())
+    {
+        // Multi-tracker mode (BEP 12)
+        usz total_trackers = 0;
+
+        // Count total trackers across all tiers
+        for (uint tier = 0; tier < tracker_mgr.get_tier_count(); tier++)
+        {
+            total_trackers += tracker_mgr.get_tracker_count(tier);
+        }
+
+        if (total_trackers > 0)
+        {
+            TrackerDisplayInfo[] new_list = mem::new_array(TrackerDisplayInfo, total_trackers);
+            usz index = 0;
+
+            String active_tracker = tracker_mgr.get_active_tracker();
+
+            // Iterate through all tiers and trackers
+            for (uint tier = 0; tier < tracker_mgr.get_tier_count(); tier++)
+            {
+                uint tracker_count = tracker_mgr.get_tracker_count(tier);
+                for (uint i = 0; i < tracker_count; i++)
+                {
+                    String tracker_url = tracker_mgr.get_tracker_url(tier, i);
+
+                    TrackerDisplayInfo info;
+                    info.tier = tier;
+                    info.url = tracker_url.copy(mem);
+
+                    // Determine status
+                    if (tracker_url == active_tracker)
+                    {
+                        info.status = "Working".copy(mem);
+                        info.peers_returned = last_peers;
+                        info.is_active = true;
+                    }
+                    else if (tracker_url == current_tracker_url)
+                    {
+                        info.status = "Trying...".copy(mem);
+                        info.peers_returned = -1;
+                        info.is_active = false;
+                    }
+                    else
+                    {
+                        info.status = "Idle".copy(mem);
+                        info.peers_returned = -1;
+                        info.is_active = false;
+                    }
+
+                    new_list[index++] = info;
+                }
+            }
+
+            state.tracker_list = new_list;
+        }
+        else
+        {
+            TrackerDisplayInfo[] empty;
+            state.tracker_list = empty;
+        }
+    }
+    else
+    {
+        // Single tracker fallback mode
+        TrackerDisplayInfo[] new_list = mem::new_array(TrackerDisplayInfo, 1);
+
+        TrackerDisplayInfo info;
+        info.tier = 0;
+        info.url = current_tracker_url.copy(mem);
+        info.status = last_status.copy(mem);
+        info.peers_returned = last_peers;
+        info.is_active = true;
+
+        new_list[0] = info;
+        state.tracker_list = new_list;
+    }
 }
 
 <*

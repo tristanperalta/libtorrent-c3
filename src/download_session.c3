@@ -1032,6 +1032,14 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
                 // Try next tracker immediately (no backoff for different tracker)
                 io::printfn("  Trying next tracker in tier...");
                 ctx.current_tracker_url = next_tracker;
+
+                // Update GUI with trying status
+                if (ctx.gui_state)
+                {
+                    raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
+                                                     ctx.current_tracker_url, "Trying...", -1);
+                }
+
                 tracker::announce_to_url(ctx.loop, ctx.torrent, next_tracker, 6881,
                                           ctx.initial_announce_done ? "" : "started",
                                           &on_announce_complete_with_retry, ctx);
@@ -1041,6 +1049,13 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
             {
                 // All trackers exhausted - use exponential backoff and try again
                 io::printfn("  All trackers failed - will retry from beginning");
+
+                // Update GUI with failed status
+                if (ctx.gui_state)
+                {
+                    raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
+                                                     ctx.current_tracker_url, "Failed", -1);
+                }
             }
         }
 
@@ -1083,6 +1098,14 @@ fn void on_announce_complete_with_retry(tracker::TrackerResponse* response, int 
 
     ctx.announce_retry_count = 0;
     ctx.initial_announce_done = true;
+
+    // Update GUI tracker list if GUI is enabled
+    if (ctx.gui_state)
+    {
+        int peer_count = response ? (int)response.peers.len : -1;
+        raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
+                                         ctx.current_tracker_url, "Working", peer_count);
+    }
 
     // Start periodic announce timer if not already running
     if (!ctx.announce_timer && response.interval > 0)
@@ -1713,12 +1736,26 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
                     ctx.tracker_mgr.get_tier_count(),
                     torrent.announce_list[0].len + (torrent.announce_list.len > 1 ? torrent.announce_list[1].len : 0));
         ctx.current_tracker_url = "";
+
+        // Populate GUI tracker list immediately
+        if (ctx.gui_state)
+        {
+            raylib_gui::update_tracker_list(ctx.gui_state, ctx.tracker_mgr,
+                                             ctx.current_tracker_url, "Idle", -1);
+        }
     }
     else
     {
         // Fallback to single tracker
         ctx.tracker_mgr = null;
         ctx.current_tracker_url = torrent.announce;
+
+        // Populate GUI with single tracker
+        if (ctx.gui_state)
+        {
+            raylib_gui::update_tracker_list(ctx.gui_state, null,
+                                             ctx.current_tracker_url, "Idle", -1);
+        }
     }
 
     // Initialize DHT for peer discovery

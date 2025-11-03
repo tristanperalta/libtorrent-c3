@@ -279,6 +279,20 @@ fn uint TrackerManager.get_tracker_count(&self, uint tier) @public
 }
 
 <*
+ * Get tracker URL by tier and index.
+ *
+ * @param tier : "Tier index (0-based)"
+ * @param index : "Tracker index within tier (0-based)"
+ * @return "Tracker URL, or empty string if invalid tier/index"
+ *>
+fn String TrackerManager.get_tracker_url(&self, uint tier, uint index) @public
+{
+    if (tier >= self.tiers.len) return "";
+    if (index >= self.tiers[tier].len) return "";
+    return self.tiers[tier][index];
+}
+
+<*
  * Free tracker manager resources.
  *>
 fn void TrackerManager.free(&self) @public

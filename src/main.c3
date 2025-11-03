@@ -6,6 +6,7 @@ import uv;
 import libtorrent;
 import libtorrent::common;
 import libtorrent::tracker;
+import libtorrent::tracker_manager;
 import async::event_loop;
 import libtorrent::torrent_loader;
 import libtorrent::peer_connection;
@@ -1085,6 +1086,33 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.save_path = save_path;
     ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
     ctx.gui_state = ui;
+
+    // Initialize multi-tracker manager (BEP 12)
+    if (torrent.announce_list.len > 0)
+    {
+        // Use announce-list for multi-tracker support
+        ctx.tracker_mgr = mem::new(tracker_manager::TrackerManager);
+        *ctx.tracker_mgr = tracker_manager::initialize(torrent.announce_list);
+        ctx.current_tracker_url = "";
+
+        io::printfn("Multi-tracker support: %d tiers, %d total trackers",
+                    ctx.tracker_mgr.get_tier_count(),
+                    torrent.announce_list[0].len + (torrent.announce_list.len > 1 ? torrent.announce_list[1].len : 0));
+
+        // Populate GUI tracker list immediately
+        raylib_gui::update_tracker_list(ui, ctx.tracker_mgr,
+                                         ctx.current_tracker_url, "Idle", -1);
+    }
+    else
+    {
+        // Fallback to single tracker
+        ctx.tracker_mgr = null;
+        ctx.current_tracker_url = torrent.announce;
+
+        // Populate GUI with single tracker
+        raylib_gui::update_tracker_list(ui, null,
+                                         ctx.current_tracker_url, "Idle", -1);
+    }
 
     // Build storage path (for multi-file torrents, append torrent name)
     String storage_path = save_path;
