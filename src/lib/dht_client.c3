@@ -235,11 +235,11 @@ fn void DhtClient.add_default_bootstrap_nodes(&self) @public
 /**
  * Helper: Convert IP address to string (uses temp allocator)
  */
-fn String ip_to_string(common::Ipv4Addr ip) => @pool()
+fn String ip_to_string(common::Ipv4Addr ip)
 {
     DString buf;
     buf.appendf("%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
-    return buf.copy_str(tmem);
+    return buf.copy_str(mem);  // Use persistent memory for async operations
 }
 
 /**
@@ -359,6 +359,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                     if (added && i < 3)
                     {
                         String ip_str = ip_to_string(ip);
+                        defer free(ip_str);
                         io::printfn("[DHT]   Added node %s:%d", ip_str, port);
                     }
                 }
@@ -402,6 +403,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                             if (added <= 3)  // Log first 3
                             {
                                 String ip_str = ip_to_string(ip);
+                                defer free(ip_str);
                                 io::printfn("[DHT]   Peer: %s:%d", ip_str, port);
                             }
                         }
@@ -507,6 +509,7 @@ fn bool DhtClient.send_ping(&self, common::NodeId target_id,
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
+    defer free(target_ip_str);
 
     io::printfn("[DHT] Sending ping to %s:%d", target_ip_str, target_port);
     self.socket.send(target_ip_str, (int)target_port,
@@ -568,6 +571,7 @@ fn bool DhtClient.send_find_node(&self, common::NodeId target_id,
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
+    defer free(target_ip_str);
 
     io::printfn("[DHT] Sending find_node to %s:%d", target_ip_str, target_port);
     self.socket.send(target_ip_str, (int)target_port,
@@ -630,6 +634,7 @@ fn bool DhtClient.send_get_peers(&self, common::NodeId target_id,
 
     // Send via UDP
     String target_ip_str = ip_to_string(target_ip);
+    defer free(target_ip_str);
 
     io::printfn("[DHT] Sending get_peers to %s:%d", target_ip_str, target_port);
     self.socket.send(target_ip_str, (int)target_port,

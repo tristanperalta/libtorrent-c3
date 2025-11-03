@@ -13,12 +13,14 @@ import libtorrent::peer_connection;
 import libtorrent::peer_wire;
 import libtorrent::download_manager;
 import libtorrent::block_manager;
+import libtorrent::piece_assembler;
 import libtorrent::storage_manager;
 import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
+import libtorrent::webseed;
 import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
@@ -47,6 +49,16 @@ struct PieceWriteContext
 {
     DownloadContext* download_ctx;
     char[] piece_data;  // Must be freed after write completes
+}
+
+<*
+ Context for web seed piece verification.
+*>
+struct WebSeedVerifyContext
+{
+    DownloadContext* download_ctx;
+    uint piece_index;
+    char[] piece_data;  // Must be freed after verification
 }
 
 <*
@@ -86,6 +98,10 @@ struct DownloadContext
     async::timer::Timer* dht_check_timer;   // One-shot timer for checking DHT results
     async::timer::Timer* dht_tick_timer;    // RPC timeout processing timer
     bool dht_enabled;
+
+    // Web seeding (BEP 19)
+    webseed::WebSeedManager* webseed_mgr;   // HTTP/FTP web seed manager
+    async::timer::Timer* webseed_timer;     // Periodic web seed piece requests
 
     // Download state
     bool download_complete;
@@ -1327,6 +1343,142 @@ fn void on_block_timeout_timer_tick(async::timer::Timer* timer, void* user_data)
 }
 
 <*
+ Web seed timer callback - attempts to download pieces from HTTP/FTP web seeds.
+ Fires every 5 seconds to check for web seed opportunities.
+*>
+fn void on_webseed_timer_tick(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (ctx.dm.is_complete())
+    {
+        // Download complete - stop timer
+        timer.stop();
+        return;
+    }
+
+    // Only try web seeds if we have a manager
+    if (!ctx.webseed_mgr) return;
+
+    // Check if we have active web seed downloads or free slots
+    uint active = ctx.webseed_mgr.get_active_count();
+    uint enabled = ctx.webseed_mgr.get_enabled_count();
+
+    if (enabled == 0)
+    {
+        // All URLs disabled - stop trying
+        io::printfn("[WebSeed] All URLs disabled, stopping web seed timer");
+        timer.stop();
+        return;
+    }
+
+    // Try to start new web seed downloads if we have slots
+    if (active < 5)  // Max 5 concurrent web seed downloads
+    {
+        // Pick a piece using gap-based selection (BEP 19)
+        uint? piece_opt = ctx.dm.picker.pick_piece_for_webseed();
+        if (catch piece_opt)
+        {
+            // No pieces available for web seeds
+            return;
+        }
+
+        uint piece_index = piece_opt;
+
+        // Mark piece as downloading
+        ctx.dm.picker.mark_downloading(piece_index)!!;
+
+        // Start web seed download
+        if (catch err = ctx.webseed_mgr.start_piece_download(
+            piece_index,
+            &on_webseed_piece_complete,
+            ctx))
+        {
+            // Failed to start - mark piece as free again
+            ctx.dm.picker.mark_free(piece_index)!!;
+            io::printfn("[WebSeed] Failed to start piece %d download: %s", piece_index, err);
+        }
+        else
+        {
+            io::printfn("[WebSeed] Started piece %d download", piece_index);
+        }
+    }
+}
+
+<*
+ Web seed piece completion callback.
+ Called when a piece download from a web seed completes (success or failure).
+*>
+fn void on_webseed_piece_complete(uint piece_index, char[] piece_data, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (piece_data.len == 0)
+    {
+        // Download failed - mark piece as free for retry from peers
+        io::printfn("[WebSeed] Piece %d download failed, will retry from peers", piece_index);
+        ctx.dm.picker.mark_free(piece_index)!!;
+        return;
+    }
+
+    // Get expected hash for verification
+    char[20] expected_hash;
+    usz hash_offset = (usz)piece_index * 20;
+    for (usz k = 0; k < 20; k++)
+    {
+        expected_hash[k] = ctx.torrent.info.pieces[hash_offset + k];
+    }
+
+    // Create a copy of piece data for async verification
+    char[] piece_data_copy = mem::new_array(char, piece_data.len);
+    for (usz j = 0; j < piece_data.len; j++)
+    {
+        piece_data_copy[j] = piece_data[j];
+    }
+
+    // Create context for web seed verification callback
+    WebSeedVerifyContext* verify_ctx = mem::new(WebSeedVerifyContext);
+    verify_ctx.download_ctx = ctx;
+    verify_ctx.piece_index = piece_index;
+    verify_ctx.piece_data = piece_data_copy;
+
+    // Start async verification
+    piece_assembler::verify_data(ctx.loop, piece_index, piece_data_copy,
+                                 expected_hash, &on_webseed_piece_verified, verify_ctx);
+}
+
+<*
+ Web seed piece verification callback.
+ Called after async hash verification of web seed piece completes.
+*>
+fn void on_webseed_piece_verified(uint piece_index, bool verified, void* user_data) @public
+{
+    WebSeedVerifyContext* verify_ctx = (WebSeedVerifyContext*)user_data;
+    DownloadContext* ctx = verify_ctx.download_ctx;
+
+    if (!verified)
+    {
+        // Hash mismatch - permanently blacklist the web seed URL (BEP 19 requirement)
+        io::eprintfn("[WebSeed] Piece %d hash mismatch - permanently disabling web seed URL!", piece_index);
+
+        // TODO: Track which URL was used for this piece and blacklist it
+        // For now, we mark the piece as free for retry
+        ctx.dm.picker.mark_free(piece_index)!!;
+
+        // Free the piece data copy
+        free(verify_ctx.piece_data);
+        free(verify_ctx);
+        return;
+    }
+
+    // Success! Pass to the standard piece completion handler
+    on_download_piece_complete(piece_index, verify_ctx.piece_data, true, ctx);
+
+    // Note: piece_data is freed by on_download_piece_complete -> on_piece_written
+    free(verify_ctx);
+}
+
+<*
  Start tracker announce with retry support.
  Uses multi-tracker manager (BEP 12) if available.
 *>
@@ -1386,16 +1538,21 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
     }
     io::printfn("");
 
-    // Now start tracker announce
+    // Now start tracker announce (if we have trackers)
     if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
     {
         io::printfn("Announcing to trackers (%d tiers available)...", ctx.tracker_mgr.get_tier_count());
+        announce_with_retry(ctx);
+    }
+    else if (ctx.torrent.announce.len > 0)
+    {
+        io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
+        announce_with_retry(ctx);
     }
     else
     {
-        io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
+        io::printfn("Skipping tracker announce (no trackers configured)");
     }
-    announce_with_retry(ctx);
 
     // Start DHT peer discovery if enabled
     if (ctx.dht_enabled && ctx.dht_client)
@@ -1750,16 +1907,51 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         ctx.tracker_mgr = null;
         ctx.current_tracker_url = torrent.announce;
 
+        // If announce is empty, this is likely a DHT-only/web seed-only torrent
+        if (ctx.current_tracker_url.len == 0)
+        {
+            io::printfn("No trackers found - will use DHT and web seeds only");
+        }
+
         // Populate GUI with single tracker
         if (ctx.gui_state)
         {
             raylib_gui::update_tracker_list(ctx.gui_state, null,
-                                             ctx.current_tracker_url, "Idle", -1);
+                                             ctx.current_tracker_url.len > 0 ? ctx.current_tracker_url : "(none - DHT only)",
+                                             "Idle", -1);
         }
     }
 
     // Initialize DHT for peer discovery
     init_dht(ctx, 6881);  // Use same port as BitTorrent protocol
+    io::printfn("");
+
+    // Initialize web seeding (BEP 19)
+    if (torrent.url_list.len > 0)
+    {
+        ctx.webseed_mgr = webseed::create(ctx.loop, torrent, 5);  // Max 5 concurrent web seed downloads
+        if (ctx.webseed_mgr)
+        {
+            io::printfn("Web seed support: %d URLs available", torrent.url_list.len);
+
+            // Start web seed timer immediately (web seeds work independently of trackers)
+            async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
+            if (catch err = timer_opt)
+            {
+                io::eprintfn("Warning: Failed to create web seed timer");
+            }
+            else
+            {
+                ctx.webseed_timer = timer_opt;
+                ctx.webseed_timer.start(5000, 5000, &on_webseed_timer_tick, ctx);
+                io::printfn("Web seed timer started (checking every 5 seconds)");
+            }
+        }
+    }
+    else
+    {
+        ctx.webseed_mgr = null;
+    }
     io::printfn("");
 
     // Initialize storage manager (create directories, open files)

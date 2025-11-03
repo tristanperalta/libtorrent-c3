@@ -1086,6 +1086,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.save_path = save_path;
     ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
     ctx.gui_state = ui;
+    ctx.webseed_mgr = null;
+    ctx.webseed_timer = null;
 
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
@@ -1173,6 +1175,31 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Initialize DHT for peer discovery
     raylib_gui::add_log(ui, "Starting DHT on port 6881...");
     download_session::init_dht(&ctx, 6881);
+
+    // Initialize web seeding (BEP 19)
+    if (torrent.url_list.len > 0)
+    {
+        ctx.webseed_mgr = libtorrent::webseed::create(loop, torrent, 5);
+        if (ctx.webseed_mgr)
+        {
+            DString msg;
+            msg.appendf("Web seed support: %d URLs available", torrent.url_list.len);
+            raylib_gui::add_log(ui, msg.str_view());
+
+            // Start web seed timer
+            async::timer::Timer*? timer_opt = async::timer::create(loop);
+            if (catch err = timer_opt)
+            {
+                raylib_gui::add_log(ui, "Warning: Failed to create web seed timer");
+            }
+            else
+            {
+                ctx.webseed_timer = timer_opt;
+                ctx.webseed_timer.start(5000, 5000, &download_session::on_webseed_timer_tick, &ctx);
+                raylib_gui::add_log(ui, "Web seed timer started");
+            }
+        }
+    }
 
     // Initialize storage manager (create directories, open files)
     raylib_gui::add_log(ui, "Initializing storage...");
@@ -1381,6 +1408,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.save_path = save_path;
     ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
     ctx.gui_state = null;  // Console mode has no GUI
+    ctx.webseed_mgr = null;
+    ctx.webseed_timer = null;
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
     async::timer::Timer* flush_timer = null;

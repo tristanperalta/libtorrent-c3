@@ -38,6 +38,7 @@ struct HttpWorkContext
     String url;          // Full URL to request
     String method;       // HTTP method
     String body;         // Request body (for POST)
+    String[] headers;    // Custom HTTP headers
 
     // Response data
     HttpResponse response;
@@ -241,6 +242,17 @@ fn void do_http_work(void* input, void** output)
         curl::easy_setopt(ctx.curl_handle, curl::CURLOPT_HTTPGET, 1L);
     }
 
+    // Set custom headers if provided
+    curl::Slist* header_list = null;
+    if (ctx.headers.len > 0)
+    {
+        foreach (header : ctx.headers)
+        {
+            header_list = curl::slist_append(header_list, header);
+        }
+        curl::easy_setopt(ctx.curl_handle, curl::CURLOPT_HTTPHEADER, header_list);
+    }
+
     // Setup write callback to collect response
     curl::easy_setopt(ctx.curl_handle, curl::CURLOPT_WRITEFUNCTION, &write_callback);
     curl::easy_setopt(ctx.curl_handle, curl::CURLOPT_WRITEDATA, ctx.response_buf);
@@ -271,6 +283,12 @@ fn void do_http_work(void* input, void** output)
             ctx.response.body = "";
         }
         ctx.success = true;
+    }
+
+    // Clean up header list if it was created
+    if (header_list)
+    {
+        curl::slist_free_all(header_list);
     }
 
     // Clean up curl handle
@@ -307,6 +325,16 @@ fn void on_http_complete(void* output, int status, void* user_data)
     if (ctx.url.len > 0) free(ctx.url);
     if (ctx.method.len > 0) free(ctx.method);
     if (ctx.body.len > 0) free(ctx.body);
+
+    // Free headers array
+    if (ctx.headers.len > 0)
+    {
+        foreach (header : ctx.headers)
+        {
+            if (header.len > 0) free(header);
+        }
+        free(ctx.headers);
+    }
 
     // Free work context (async_work doesn't free it per comment in async_work.c3:81-82)
     if (ctx.work_ctx) free(ctx.work_ctx);
@@ -350,6 +378,7 @@ fn void request_async(event_loop::EventLoop* loop,
     http_ctx.url = url.copy_str(mem);
     http_ctx.method = method.copy(mem);
     http_ctx.body = body.len > 0 ? body.copy(mem) : "";
+    http_ctx.headers = {};  // No custom headers
     http_ctx.callback = callback;
     http_ctx.user_data = user_data;
     http_ctx.success = false;
@@ -378,6 +407,95 @@ fn void request_async(event_loop::EventLoop* loop,
         free(http_ctx.url);
         free(http_ctx.method);
         if (http_ctx.body.len > 0) free(http_ctx.body);
+        free(work_ctx);
+        free(http_ctx);
+    }
+}
+
+<*
+ Make an async HTTP request with custom headers using thread pool.
+ Does NOT block the event loop!
+
+ @param loop : "Event loop"
+ @param host : "Hostname"
+ @param port : "Port number"
+ @param use_tls : "Use HTTPS if true"
+ @param method : "HTTP method (GET, POST, etc.)"
+ @param path : "Request path"
+ @param headers : "Array of HTTP headers (e.g., ['Range: bytes=0-1023'])"
+ @param body : "Request body (empty string for GET)"
+ @param callback : "Completion callback"
+ @param user_data : "User data passed to callback"
+*>
+fn void request_async_with_headers(event_loop::EventLoop* loop,
+                                    String host, ushort port, bool use_tls,
+                                    String method, String path, String[] headers,
+                                    String body,
+                                    HttpCallback callback, void* user_data) @public
+{
+    // Allocate HTTP work context
+    HttpWorkContext* http_ctx = mem::new(HttpWorkContext);
+
+    // Build full URL
+    DString url;
+    url.appendf("%s://%s:%d%s",
+                use_tls ? "https" : "http",
+                host, port, path);
+
+    // Initialize context
+    http_ctx.url = url.copy_str(mem);
+    http_ctx.method = method.copy(mem);
+    http_ctx.body = body.len > 0 ? body.copy(mem) : "";
+    http_ctx.callback = callback;
+    http_ctx.user_data = user_data;
+    http_ctx.success = false;
+
+    // Copy headers array
+    if (headers.len > 0)
+    {
+        http_ctx.headers = mem::new_array(String, headers.len);
+        foreach (i, header : headers)
+        {
+            http_ctx.headers[i] = header.copy(mem);
+        }
+    }
+    else
+    {
+        http_ctx.headers = {};
+    }
+
+    // Create async work context
+    async::event_loop::WorkContext* work_ctx = mem::new(async::event_loop::WorkContext);
+    work_ctx.input = http_ctx;
+    work_ctx.work_fn = &do_http_work;
+    work_ctx.callback = &on_http_complete;
+    work_ctx.user_data = user_data;
+
+    // Store work context for cleanup
+    http_ctx.work_ctx = work_ctx;
+
+    // Queue work
+    int result = loop.queue_work(work_ctx);
+    if (result != 0)
+    {
+        // Failed to queue - call callback with error
+        if (callback)
+        {
+            callback(null, -1, user_data);
+        }
+
+        // Clean up (must free work_ctx and http_ctx)
+        free(http_ctx.url);
+        free(http_ctx.method);
+        if (http_ctx.body.len > 0) free(http_ctx.body);
+        if (http_ctx.headers.len > 0)
+        {
+            foreach (header : http_ctx.headers)
+            {
+                if (header.len > 0) free(header);
+            }
+            free(http_ctx.headers);
+        }
         free(work_ctx);
         free(http_ctx);
     }

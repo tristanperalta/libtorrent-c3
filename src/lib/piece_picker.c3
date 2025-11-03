@@ -330,3 +330,79 @@ fn uint PiecePicker.get_availability(&self, uint piece_index) @public
     if (piece_index >= self.num_pieces) return 0;
     return self.pieces[piece_index].availability;
 }
+
+<*
+ Pick a piece for web seed download using gap-based algorithm (BEP 19).
+
+ BEP 19 Strategy:
+ - Find the largest contiguous sequence of incomplete pieces ("gap")
+ - Download from the beginning of the gap for maximum sequential data
+ - This allows HTTP/FTP to download long sequential runs efficiently
+
+ @return "Piece index to download, or fault if no pieces available"
+*>
+fn uint? PiecePicker.pick_piece_for_webseed(&self) @public
+{
+    // Track the largest gap found
+    uint max_gap_size = 0;
+    uint max_gap_start = 0;
+    uint current_gap_start = 0;
+    uint current_gap_size = 0;
+    bool in_gap = false;
+
+    // Scan all pieces to find gaps
+    foreach (i, piece : self.pieces)
+    {
+        if (piece.state == PieceState.COMPLETE)
+        {
+            // Gap ended - check if it's the largest so far
+            if (in_gap && current_gap_size > max_gap_size)
+            {
+                max_gap_size = current_gap_size;
+                max_gap_start = current_gap_start;
+            }
+            in_gap = false;
+            current_gap_size = 0;
+        }
+        else
+        {
+            // In a gap (FREE or DOWNLOADING)
+            if (!in_gap)
+            {
+                in_gap = true;
+                current_gap_start = (uint)i;
+                current_gap_size = 1;
+            }
+            else
+            {
+                current_gap_size++;
+            }
+        }
+    }
+
+    // Check final gap
+    if (in_gap && current_gap_size > max_gap_size)
+    {
+        max_gap_size = current_gap_size;
+        max_gap_start = current_gap_start;
+    }
+
+    // No gap found (all pieces complete)
+    if (max_gap_size == 0)
+    {
+        return NO_PIECES_AVAILABLE?;
+    }
+
+    // Within the largest gap, pick the first FREE piece
+    // (BEP 19: start at beginning of gap for sequential download)
+    for (uint i = max_gap_start; i < max_gap_start + max_gap_size && i < self.num_pieces; i++)
+    {
+        if (self.pieces[i].state == PieceState.FREE)
+        {
+            return i;
+        }
+    }
+
+    // Gap exists but all pieces in it are DOWNLOADING
+    return NO_PIECES_AVAILABLE?;
+}
