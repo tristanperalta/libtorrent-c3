@@ -24,6 +24,7 @@ import libtorrent::dht_get_peers;
 import libtorrent::webseed;
 import libtorrent::event_bus;
 import libtorrent::event_types;
+import libtorrent::speed_tracker;
 import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
@@ -115,6 +116,8 @@ struct DownloadContext
     ulong webseed_bytes_downloaded;     // Bytes from web seeds only
     long last_speed_update_time;        // Unix timestamp for speed calculation
     float current_download_speed;       // Current speed in bytes/sec
+    speed_tracker::SpeedTracker* speed_tracker;  // Speed tracking with sliding window
+    long last_gui_update_ms;            // Last GUI update time (for debouncing)
 
     // Resume verification
     uint num_pieces;                        // Total number of pieces
@@ -270,6 +273,13 @@ fn void on_complete_download(DownloadContext* ctx) @public
         ctx.dht_client = null;
     }
 
+    // Free speed tracker
+    if (ctx.speed_tracker)
+    {
+        ctx.speed_tracker.free();
+        ctx.speed_tracker = null;
+    }
+
     // Free tracker manager resources
     if (ctx.tracker_mgr)
     {
@@ -332,39 +342,40 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
 
     io::printfn("✓ Piece %d verified (%d bytes)", piece_index, piece_data.len);
 
-    // Track download statistics
-    ctx.total_bytes_downloaded += piece_data.len;
-
-    // Calculate download speed (update every 2 seconds)
-    long current_time = (long)time::now().to_seconds();
-    if (ctx.last_speed_update_time == 0)
+    // Update speed tracker with downloaded bytes (smooth sliding window calculation)
+    if (ctx.speed_tracker)
     {
-        ctx.last_speed_update_time = current_time;
+        ctx.speed_tracker.add_bytes((ulong)piece_data.len, speed_tracker::DownloadSource.PEER);
+
+        // Calculate speed - will return valid value once enough time has passed
+        float new_speed = ctx.speed_tracker.get_speed();
+        if (new_speed > 0.0)
+        {
+            ctx.current_download_speed = new_speed;
+        }
     }
 
-    long time_diff = current_time - ctx.last_speed_update_time;
-    if (time_diff >= 2)  // Update speed every 2 seconds
+    // Track total downloaded for cumulative stats
+    ctx.total_bytes_downloaded += piece_data.len;
+
+    // Publish piece completion event to EventBus
+    event_types::PieceEvent piece_evt = event_types::create_piece_event(
+        piece_index, (usz)piece_data.len, true, "peer"
+    );
+    ctx.event_bus.publish(event_types::EVENT_PIECE_COMPLETED, &piece_evt, event_types::PieceEvent.sizeof);
+
+    // Display speed in human-readable format
+    if (ctx.current_download_speed > 1024.0 * 1024.0)
     {
-        // Calculate speed in bytes/sec
-        ctx.current_download_speed = (float)ctx.total_bytes_downloaded / (float)time_diff;
-
-        // Display speed in human-readable format
-        if (ctx.current_download_speed > 1024.0 * 1024.0)
-        {
-            io::printfn("    [DM] Download speed: %.2f MB/s", ctx.current_download_speed / (1024.0 * 1024.0));
-        }
-        else if (ctx.current_download_speed > 1024.0)
-        {
-            io::printfn("    [DM] Download speed: %.2f KB/s", ctx.current_download_speed / 1024.0);
-        }
-        else
-        {
-            io::printfn("    [DM] Download speed: %.2f B/s", ctx.current_download_speed);
-        }
-
-        // Reset for next interval
-        ctx.total_bytes_downloaded = 0;
-        ctx.last_speed_update_time = current_time;
+        io::printfn("    [DM] Download speed: %.2f MB/s", ctx.current_download_speed / (1024.0 * 1024.0));
+    }
+    else if (ctx.current_download_speed > 1024.0)
+    {
+        io::printfn("    [DM] Download speed: %.2f KB/s", ctx.current_download_speed / 1024.0);
+    }
+    else
+    {
+        io::printfn("    [DM] Download speed: %.2f B/s", ctx.current_download_speed);
     }
 
     // Write piece to disk via storage_manager
@@ -378,12 +389,21 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
     usz total, complete, downloading;
     ctx.dm.get_progress(&total, &complete, &downloading);
 
-    // Publish progress event to EventBus (async dispatch)
-    event_types::ProgressEvent progress_evt = event_types::create_progress_event(
-        (uint)complete, (uint)downloading, (uint)total,
-        ctx.total_bytes_downloaded, ctx.current_download_speed, 0.0
-    );
-    ctx.event_bus.publish(event_types::EVENT_PROGRESS_UPDATED, &progress_evt, event_types::ProgressEvent.sizeof);
+    // Debounce GUI updates - only update once per second for readability
+    long now_ms = (long)(time::now().to_seconds() * 1000);
+    bool should_update_gui = (now_ms - ctx.last_gui_update_ms) >= 1000;  // 1 second
+
+    if (should_update_gui)
+    {
+        ctx.last_gui_update_ms = now_ms;
+
+        // Publish progress event to EventBus (async dispatch)
+        event_types::ProgressEvent progress_evt = event_types::create_progress_event(
+            (uint)complete, (uint)downloading, (uint)total,
+            ctx.total_bytes_downloaded, ctx.current_download_speed, 0.0
+        );
+        ctx.event_bus.publish(event_types::EVENT_PROGRESS_UPDATED, &progress_evt, event_types::ProgressEvent.sizeof);
+    }
 
     if (complete % 100 == 0 || complete == total)
     {
@@ -928,6 +948,12 @@ fn void on_storage_initialized(int status, void* user_data) @public
 
     io::printfn("Storage initialized successfully");
     io::printfn("");
+
+    // Create speed tracker if not already initialized
+    if (!ctx.speed_tracker)
+    {
+        ctx.speed_tracker = speed_tracker::create();
+    }
 
     // Now we can safely verify existing pieces (resume support)
     io::printfn("Checking for existing pieces...");
@@ -1903,6 +1929,9 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     ctx.num_pieces = num_pieces;
     ctx.pieces_verified_count = 0;
     ctx.next_piece_to_verify = 0;
+
+    // Create speed tracker with default 5-second sliding window
+    ctx.speed_tracker = speed_tracker::create();
 
     // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();

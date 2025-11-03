@@ -1034,7 +1034,7 @@ fn void on_progress_updated_event(String event_type, void* event_data, void* use
     ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected_peers);
 
     raylib_gui::update_progress(ctx.gui_state, evt.pieces_complete, evt.pieces_downloading,
-                                0, 0.0, 0.0);  // TODO: Calculate actual downloaded bytes and speeds
+                                (long)evt.bytes_downloaded, evt.download_speed, evt.upload_speed);
     raylib_gui::update_peers(ctx.gui_state, (int)connected_peers, (int)total_peers);
 }
 
@@ -1319,6 +1319,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.webseed_bytes_downloaded = 0;
     ctx.last_speed_update_time = 0;
     ctx.current_download_speed = 0.0;
+    ctx.last_gui_update_ms = 0;
 
     // Initialize event bus for pub/sub
     ctx.event_bus = libtorrent::event_bus::create(loop);
@@ -1668,6 +1669,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.webseed_bytes_downloaded = 0;
     ctx.last_speed_update_time = 0;
     ctx.current_download_speed = 0.0;
+    ctx.last_gui_update_ms = 0;
 
     // Initialize event bus for pub/sub
     ctx.event_bus = libtorrent::event_bus::create(loop);
