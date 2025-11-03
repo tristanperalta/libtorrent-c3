@@ -9,6 +9,8 @@ import libtorrent::metainfo;
 import libtorrent::http;
 import libtorrent::common;
 import libtorrent::storage_manager;
+import libtorrent::event_bus;
+import libtorrent::event_types;
 
 <*
  * BEP 19 Web Seeding Implementation
@@ -59,6 +61,7 @@ struct WebSeedDownload
     bool active;                   // Is this download slot in use?
     void* callback;                // Completion callback (PieceCallback)
     void* user_data;               // User data for callback
+    WebSeedManager* manager;       // Manager reference (for event publishing)
 }
 
 // Callback for piece completion
@@ -80,6 +83,8 @@ struct WebSeedManager
     uint num_pieces;                    // Total number of pieces
     usz max_concurrent;                 // Max concurrent downloads
     usz next_url_index;                 // Round-robin index for URL selection
+    event_bus::EventBus* event_bus;     // Event bus for publishing WebSeed events (can be null)
+    ulong total_bytes_downloaded;       // Track total bytes downloaded from all URLs
 }
 
 <*
@@ -87,11 +92,13 @@ struct WebSeedManager
  *
  * @param loop : "Event loop for async operations"
  * @param torrent : "Torrent metadata containing url-list"
+ * @param event_bus : "Event bus for publishing WebSeed events (can be null)"
  * @param max_concurrent : "Maximum concurrent web seed downloads"
  * @return "Initialized WebSeedManager or null if no web seeds"
  *>
 fn WebSeedManager* create(event_loop::EventLoop* loop,
                           metainfo::TorrentFile* torrent,
+                          event_bus::EventBus* event_bus,
                           usz max_concurrent = 20) @public
 {
     // No web seeds available
@@ -110,6 +117,8 @@ fn WebSeedManager* create(event_loop::EventLoop* loop,
     mgr.last_piece_length = torrent.info.calculate_last_piece_length();
     mgr.max_concurrent = max_concurrent;
     mgr.next_url_index = 0;
+    mgr.event_bus = event_bus;
+    mgr.total_bytes_downloaded = 0;
 
     // Initialize URL list
     mgr.urls = mem::new_array(WebSeedUrl, torrent.url_list.len);
@@ -377,6 +386,7 @@ fn fault? WebSeedManager.start_piece_download(&self, uint piece_index,
     download.url = url;
     download.callback = callback;
     download.user_data = user_data;
+    download.manager = self;
 
     // Allocate piece buffer
     uint piece_len = (piece_index == self.num_pieces - 1) ? self.last_piece_length : self.piece_length;
@@ -426,6 +436,15 @@ fn fault? WebSeedManager.start_piece_download(&self, uint piece_index,
         &on_http_piece_received, download
     );
 
+    // Publish download started event
+    if (self.event_bus)
+    {
+        event_types::WebSeedEvent evt = event_types::create_webseed_event(
+            piece_index, url.url, true, 0, "", self.total_bytes_downloaded
+        );
+        self.event_bus.publish(event_types::EVENT_WEBSEED_DOWNLOAD_STARTED, &evt, event_types::WebSeedEvent.sizeof);
+    }
+
     // Cleanup parsed URL components
     free(host);
     free(path);
@@ -447,6 +466,17 @@ fn void on_http_piece_received(http::HttpResponse* response, int status, void* u
         io::printfn("[WebSeed] HTTP request failed for piece %d", download.piece_index);
         download.url.consecutive_failures++;
         download.url.last_failure_time = (long)time::now().to_seconds();
+
+        // Publish download failed event
+        if (download.manager && download.manager.event_bus)
+        {
+            event_types::WebSeedEvent evt = event_types::create_webseed_event(
+                download.piece_index, download.url.url, false, 0, "Network error",
+                download.manager.total_bytes_downloaded
+            );
+            download.manager.event_bus.publish(event_types::EVENT_WEBSEED_DOWNLOAD_FAILED, &evt, event_types::WebSeedEvent.sizeof);
+        }
+
         download.active = false;
 
         // Call user callback with failure
@@ -465,6 +495,22 @@ fn void on_http_piece_received(http::HttpResponse* response, int status, void* u
         io::printfn("[WebSeed] HTTP error %d for piece %d", response.status, download.piece_index);
         download.url.consecutive_failures++;
         download.url.last_failure_time = (long)time::now().to_seconds();
+
+        // Publish download failed event
+        if (download.manager && download.manager.event_bus)
+        {
+            DString error_msg;
+            error_msg.appendf("HTTP error %d", response.status);
+            String error_str = error_msg.copy_str(mem);
+            defer free(error_str);
+
+            event_types::WebSeedEvent evt = event_types::create_webseed_event(
+                download.piece_index, download.url.url, false, response.status, error_str,
+                download.manager.total_bytes_downloaded
+            );
+            download.manager.event_bus.publish(event_types::EVENT_WEBSEED_DOWNLOAD_FAILED, &evt, event_types::WebSeedEvent.sizeof);
+        }
+
         download.active = false;
 
         // Call user callback with failure
@@ -492,6 +538,22 @@ fn void on_http_piece_received(http::HttpResponse* response, int status, void* u
     download.url.consecutive_failures = 0;
     download.url.last_failure_time = 0;
 
+    // Update total bytes downloaded
+    if (download.manager)
+    {
+        download.manager.total_bytes_downloaded += (ulong)copy_len;
+
+        // Publish download complete event
+        if (download.manager.event_bus)
+        {
+            event_types::WebSeedEvent evt = event_types::create_webseed_event(
+                download.piece_index, download.url.url, true, response.status, "",
+                download.manager.total_bytes_downloaded
+            );
+            download.manager.event_bus.publish(event_types::EVENT_WEBSEED_DOWNLOAD_COMPLETE, &evt, event_types::WebSeedEvent.sizeof);
+        }
+    }
+
     // Call user callback with success
     if (download.callback)
     {
@@ -514,6 +576,15 @@ fn void WebSeedManager.mark_url_failed(&self, WebSeedUrl* url) @public
 {
     io::printfn("[WebSeed] Permanently disabling URL due to hash mismatch: %s", url.url);
     url.enabled = false;
+
+    // Publish URL disabled event
+    if (self.event_bus)
+    {
+        event_types::WebSeedEvent evt = event_types::create_webseed_event(
+            0, url.url, false, 0, "Hash mismatch", self.total_bytes_downloaded
+        );
+        self.event_bus.publish(event_types::EVENT_WEBSEED_URL_DISABLED, &evt, event_types::WebSeedEvent.sizeof);
+    }
 }
 
 <*

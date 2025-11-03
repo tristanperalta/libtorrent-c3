@@ -1107,6 +1107,138 @@ fn void on_tracker_status_changed_event(String event_type, void* event_data, voi
                                      evt.tracker_url, evt.status, evt.peers_returned);
 }
 
+/**
+ * Event handler: DHT started
+ * Logs DHT initialization to GUI
+ */
+fn void on_dht_started_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    raylib_gui::add_log(ctx.gui_state, "[DHT] Started");
+}
+
+/**
+ * Event handler: DHT bootstrapped
+ * Logs when DHT has enough nodes to function
+ */
+fn void on_dht_bootstrapped_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::DhtEvent* evt = (event_types::DhtEvent*)event_data;
+
+    DString msg;
+    msg.appendf("[DHT] Bootstrapped (%d nodes)", evt.routing_table_size);
+    raylib_gui::add_log(ctx.gui_state, msg.str_view());
+}
+
+/**
+ * Event handler: DHT peers found
+ * Logs when DHT returns peers for a torrent
+ */
+fn void on_dht_peers_found_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::DhtEvent* evt = (event_types::DhtEvent*)event_data;
+
+    DString msg;
+    msg.appendf("[DHT] Found %d peers", evt.peers_found);
+    raylib_gui::add_log(ctx.gui_state, msg.str_view());
+}
+
+/**
+ * Event handler: DHT query complete
+ * Logs DHT query results (success or timeout)
+ */
+fn void on_dht_query_complete_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::DhtEvent* evt = (event_types::DhtEvent*)event_data;
+
+    DString msg;
+    msg.appendf("[DHT] %s", evt.status);
+    raylib_gui::add_log(ctx.gui_state, msg.str_view());
+}
+
+/**
+ * Event handler: WebSeed download started
+ * Logs when a piece download begins from a web seed
+ */
+fn void on_webseed_download_started_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
+
+    DString msg;
+    msg.appendf("[WebSeed] Downloading piece %d", evt.piece_index);
+    raylib_gui::add_log(ctx.gui_state, msg.str_view());
+}
+
+/**
+ * Event handler: WebSeed download complete
+ * Logs successful piece download from web seed
+ */
+fn void on_webseed_download_complete_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
+
+    DString msg;
+    msg.appendf("[WebSeed] Completed piece %d (total: %.2f MB)",
+                evt.piece_index, (float)evt.bytes_downloaded / 1048576.0);
+    raylib_gui::add_log(ctx.gui_state, msg.str_view());
+}
+
+/**
+ * Event handler: WebSeed download failed
+ * Logs failed web seed downloads with error details
+ */
+fn void on_webseed_download_failed_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
+
+    DString msg;
+    if (evt.http_status_code > 0)
+    {
+        msg.appendf("[WebSeed] Failed piece %d (HTTP %d)", evt.piece_index, evt.http_status_code);
+    }
+    else
+    {
+        msg.appendf("[WebSeed] Failed piece %d: %s", evt.piece_index, evt.error_message);
+    }
+    raylib_gui::add_log(ctx.gui_state, msg.str_view());
+}
+
+/**
+ * Event handler: WebSeed URL disabled
+ * Logs when a web seed URL is permanently disabled
+ */
+fn void on_webseed_url_disabled_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
+
+    DString msg;
+    msg.appendf("[WebSeed] URL disabled: %s", evt.error_message);
+    raylib_gui::add_log(ctx.gui_state, msg.str_view());
+}
+
 // ============================================================================
 // Download Command - Full torrent download with piece management
 // ============================================================================
@@ -1199,6 +1331,18 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.event_bus.subscribe(event_types::EVENT_PEER_STATS_UPDATED, &on_peer_stats_updated_event, &ctx);
     ctx.event_bus.subscribe(event_types::EVENT_TRACKER_STATUS_CHANGED, &on_tracker_status_changed_event, &ctx);
 
+    // Subscribe DHT event handlers
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_STARTED, &on_dht_started_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_BOOTSTRAPPED, &on_dht_bootstrapped_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_PEERS_FOUND, &on_dht_peers_found_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_QUERY_COMPLETE, &on_dht_query_complete_event, &ctx);
+
+    // Subscribe WebSeed event handlers
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_STARTED, &on_webseed_download_started_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_COMPLETE, &on_webseed_download_complete_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_FAILED, &on_webseed_download_failed_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_URL_DISABLED, &on_webseed_url_disabled_event, &ctx);
+
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
     {
@@ -1289,7 +1433,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Initialize web seeding (BEP 19)
     if (torrent.url_list.len > 0)
     {
-        ctx.webseed_mgr = libtorrent::webseed::create(loop, torrent);  // Uses default: 20 concurrent
+        ctx.webseed_mgr = libtorrent::webseed::create(loop, torrent, ctx.event_bus);  // Uses default: 20 concurrent
         if (ctx.webseed_mgr)
         {
             DString msg;

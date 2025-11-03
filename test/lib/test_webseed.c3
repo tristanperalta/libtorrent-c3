@@ -30,7 +30,7 @@ fn void test_webseed_init_no_seeds() @test
     defer loop.free();
 
     // Should return null when no web seeds
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,5);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,5);
     assert(mgr == null, "Manager should be null when no web seeds");
 }
 
@@ -59,7 +59,7 @@ fn void test_webseed_init_with_seeds() @test
     defer loop.free();
 
     // Create manager
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,5);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,5);
     assert(mgr != null, "Manager should be created with web seeds");
     defer if (mgr) mgr.free();
 
@@ -96,7 +96,7 @@ fn void test_webseed_url_blacklisting() @test
     event_loop::EventLoop loop = loop_opt;
     defer loop.free();
 
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,5);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,5);
     assert(mgr != null, "Manager should be created");
     defer if (mgr) mgr.free();
 
@@ -140,7 +140,7 @@ fn void test_webseed_url_temporary_failure() @test
     event_loop::EventLoop loop = loop_opt;
     defer loop.free();
 
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,5);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,5);
     assert(mgr != null, "Manager should be created");
     defer if (mgr) mgr.free();
 
@@ -200,7 +200,7 @@ fn void test_webseed_range_header() @test
     event_loop::EventLoop loop = loop_opt;
     defer loop.free();
 
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,5);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,5);
     assert(mgr != null, "Manager should be created");
     defer if (mgr) mgr.free();
 
@@ -293,7 +293,7 @@ fn void test_webseed_concurrent_limit() @test
     defer loop.free();
 
     // Create manager with max 3 concurrent downloads
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,3);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,3);
     assert(mgr != null, "Manager should be created");
     defer if (mgr) mgr.free();
 
@@ -332,7 +332,7 @@ fn void test_webseed_no_available_urls() @test
     event_loop::EventLoop loop = loop_opt;
     defer loop.free();
 
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,5);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,5);
     assert(mgr != null, "Manager should be created");
     defer if (mgr) mgr.free();
 
@@ -374,7 +374,7 @@ fn void test_webseed_download_slots() @test
     event_loop::EventLoop loop = loop_opt;
     defer loop.free();
 
-    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent,2);
+    webseed::WebSeedManager* mgr = webseed::create(&loop, &torrent, null,2);
     assert(mgr != null, "Manager should be created");
     defer if (mgr) mgr.free();
 

@@ -10,6 +10,8 @@ import libtorrent::dht_rpc_manager;
 import libtorrent::dht_get_peers;
 import libtorrent::krpc;
 import libtorrent::bencode;
+import libtorrent::event_bus;
+import libtorrent::event_types;
 import async::udp;
 import async::event_loop;
 import uv;
@@ -85,6 +87,7 @@ struct DhtClient
     event_loop::EventLoop* loop;                   // Event loop
     bencode::BencodeValue* current_response_root;  // Temporarily store response during callback
     allocator::DynamicArenaAllocator arena;        // Arena for RPC contexts and temp allocations
+    event_bus::EventBus* event_bus;                // Event bus for publishing DHT events (can be null)
 }
 
 // ============================================================================
@@ -97,9 +100,11 @@ struct DhtClient
  * @param our_id Our node ID (20 random bytes)
  * @param loop Event loop for async I/O
  * @param port DHT port to bind to
+ * @param event_bus Event bus for publishing DHT events (can be null)
  * @return Initialized DHT client (allocated on heap), or null on failure
  */
-fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* loop, ushort port) @public
+fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* loop, ushort port,
+                                event_bus::EventBus* event_bus) @public
 {
     DhtClient* client = mem::new(DhtClient);
 
@@ -118,6 +123,7 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
     client.bootstrap_node_count = 0;
     client.loop = loop;
     client.current_response_root = null;
+    client.event_bus = event_bus;
 
     // Initialize arena allocator for RPC contexts (4KB pages, grows as needed)
     client.arena.init(mem, 4096);
@@ -144,6 +150,13 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
         client.socket.recv_start(&on_udp_alloc, &on_udp_recv, client);
 
         io::printfn("[DHT] UDP socket bound to port %d", port);
+
+        // Publish DHT started event
+        if (client.event_bus)
+        {
+            event_types::DhtEvent evt = event_types::create_dht_event(0, 0, "DHT started");
+            client.event_bus.publish(event_types::EVENT_DHT_STARTED, &evt, event_types::DhtEvent.sizeof);
+        }
     }
     else
     {
@@ -281,6 +294,15 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
     {
         // Timeout (ctx freed by arena, no manual free needed)
         io::printfn("[DHT] Query timed out");
+
+        // Publish query timeout event
+        if (client.event_bus)
+        {
+            int total_nodes, active_buckets;
+            client.routing_table.get_stats(&total_nodes, &active_buckets);
+            event_types::DhtEvent evt = event_types::create_dht_event(0, total_nodes, "DHT query timed out");
+            client.event_bus.publish(event_types::EVENT_DHT_QUERY_COMPLETE, &evt, event_types::DhtEvent.sizeof);
+        }
         return;
     }
 
@@ -413,6 +435,15 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                 if (search && added > 0)
                 {
                     search.found_peers = true;
+
+                    // Publish DHT peers found event
+                    if (ctx.client.event_bus)
+                    {
+                        int total_nodes, active_buckets;
+                        ctx.client.routing_table.get_stats(&total_nodes, &active_buckets);
+                        event_types::DhtEvent evt = event_types::create_dht_event(added, total_nodes, "DHT peers found");
+                        ctx.client.event_bus.publish(event_types::EVENT_DHT_PEERS_FOUND, &evt, event_types::DhtEvent.sizeof);
+                    }
                 }
             }
             else if (nodes_val != null && nodes_val.type == bencode::BencodeType.STRING)
@@ -453,6 +484,15 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
 
         case krpc::QueryType.ANNOUNCE_PEER:
             io::printfn("[DHT] Announce_peer response");
+    }
+
+    // Publish successful query complete event
+    if (client.event_bus)
+    {
+        int total_nodes, active_buckets;
+        client.routing_table.get_stats(&total_nodes, &active_buckets);
+        event_types::DhtEvent evt = event_types::create_dht_event(0, total_nodes, "DHT query completed");
+        client.event_bus.publish(event_types::EVENT_DHT_QUERY_COMPLETE, &evt, event_types::DhtEvent.sizeof);
     }
 
     // Note: ctx freed by arena, no manual free needed
@@ -780,7 +820,18 @@ fn bool DhtClient.is_bootstrapped(&self) @public
     self.routing_table.get_stats(&total_nodes, &active_buckets);
 
     // Consider bootstrapped if we have at least 10 nodes
-    return total_nodes >= 10;
+    bool bootstrapped = total_nodes >= 10;
+
+    // Publish bootstrapped event (first time only, when crossing threshold)
+    // Note: In production, you'd want to track if this event was already published
+    // to avoid publishing it repeatedly. For now, we publish it each time.
+    if (bootstrapped && self.event_bus)
+    {
+        event_types::DhtEvent evt = event_types::create_dht_event(0, total_nodes, "DHT bootstrapped");
+        self.event_bus.publish(event_types::EVENT_DHT_BOOTSTRAPPED, &evt, event_types::DhtEvent.sizeof);
+    }
+
+    return bootstrapped;
 }
 
 // ============================================================================

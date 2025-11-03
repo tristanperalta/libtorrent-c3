@@ -30,6 +30,7 @@ const String EVENT_WEBSEED_DOWNLOAD_FAILED = "webseed.download_failed";
 const String EVENT_WEBSEED_URL_DISABLED = "webseed.url_disabled";
 
 const String EVENT_DHT_STARTED = "dht.started";
+const String EVENT_DHT_BOOTSTRAPPED = "dht.bootstrapped";
 const String EVENT_DHT_PEERS_FOUND = "dht.peers_found";
 const String EVENT_DHT_QUERY_COMPLETE = "dht.query_complete";
 
@@ -100,7 +101,9 @@ struct WebSeedEvent
     uint piece_index;          // Which piece
     String url;                // Web seed URL
     bool success;              // true for success, false for failure
+    int http_status_code;      // HTTP status code (200, 404, 503, etc.) or 0 if N/A
     String error_message;      // Error message (only for failures)
+    ulong bytes_downloaded;    // Total bytes downloaded from this URL (for stats)
 }
 
 /**
@@ -109,6 +112,7 @@ struct WebSeedEvent
 struct DhtEvent
 {
     int peers_found;           // Number of peers found
+    int routing_table_size;    // Number of nodes in routing table
     String status;             // Status message
 }
 
@@ -197,13 +201,16 @@ fn TrackerEvent create_tracker_event(String url, String status, int peers_return
 /**
  * Create a web seed event.
  */
-fn WebSeedEvent create_webseed_event(uint piece_index, String url, bool success, String error_msg) @public
+fn WebSeedEvent create_webseed_event(uint piece_index, String url, bool success,
+                                     int http_status, String error_msg, ulong bytes_total) @public
 {
     WebSeedEvent evt;
     evt.piece_index = piece_index;
     evt.url = url;
     evt.success = success;
+    evt.http_status_code = http_status;
     evt.error_message = error_msg;
+    evt.bytes_downloaded = bytes_total;
     return evt;
 }
 
@@ -216,6 +223,18 @@ fn StorageEvent create_storage_event(uint verified, uint total, bool complete) @
     evt.pieces_verified = verified;
     evt.pieces_total = total;
     evt.complete = complete;
+    return evt;
+}
+
+/**
+ * Create a DHT event.
+ */
+fn DhtEvent create_dht_event(int peers_found, int routing_table_size, String status) @public
+{
+    DhtEvent evt;
+    evt.peers_found = peers_found;
+    evt.routing_table_size = routing_table_size;
+    evt.status = status;
     return evt;
 }
 

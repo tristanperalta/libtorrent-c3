@@ -39,7 +39,7 @@ fn common::Ipv4Addr create_test_ip(char a, char b, char c, char d)
 fn void test_create_dht_client() @test
 {
     common::NodeId our_id = create_test_node_id(0x42);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     // Verify our ID was copied
@@ -59,7 +59,7 @@ fn void test_create_dht_client() @test
 fn void test_get_state() @test
 {
     common::NodeId our_id = create_test_node_id(0x50);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     dht_client::DhtState state = client.get_state();
@@ -75,7 +75,7 @@ fn void test_get_state() @test
 fn void test_add_bootstrap_node() @test
 {
     common::NodeId our_id = create_test_node_id(0x60);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     common::Ipv4Addr ip = create_test_ip(192, 168, 1, 1);
@@ -90,7 +90,7 @@ fn void test_add_bootstrap_node() @test
 fn void test_add_multiple_bootstrap_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0x70);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     // Add 5 bootstrap nodes
@@ -109,7 +109,7 @@ fn void test_add_multiple_bootstrap_nodes() @test
 fn void test_add_default_bootstrap_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0x80);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     client.add_default_bootstrap_nodes();
@@ -127,7 +127,7 @@ fn void test_add_default_bootstrap_nodes() @test
 fn void test_send_ping() @test
 {
     common::NodeId our_id = create_test_node_id(0x90);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     common::NodeId target_id = create_test_node_id(0xA0);
@@ -147,7 +147,7 @@ fn void test_send_ping() @test
 fn void test_send_find_node() @test
 {
     common::NodeId our_id = create_test_node_id(0xB0);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     common::NodeId target_id = create_test_node_id(0xC0);
@@ -172,7 +172,7 @@ fn void test_send_find_node() @test
 fn void test_bootstrap_no_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0xE0);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     // Try to bootstrap without adding nodes
@@ -185,7 +185,7 @@ fn void test_bootstrap_no_nodes() @test
 fn void test_bootstrap_with_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0xF0);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     // Add bootstrap nodes
@@ -205,7 +205,7 @@ fn void test_bootstrap_with_nodes() @test
 fn void test_is_bootstrapped() @test
 {
     common::NodeId our_id = create_test_node_id(0x11);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     // Should not be bootstrapped initially
@@ -222,7 +222,7 @@ fn void test_is_bootstrapped() @test
 fn void test_get_stats() @test
 {
     common::NodeId our_id = create_test_node_id(0x22);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     int total, active, transactions;
@@ -242,7 +242,7 @@ fn void test_get_stats() @test
 fn void test_tick() @test
 {
     common::NodeId our_id = create_test_node_id(0x33);
-    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
     // Set state to running
