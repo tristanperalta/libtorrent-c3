@@ -92,7 +92,7 @@ struct WebSeedManager
  *>
 fn WebSeedManager* create(event_loop::EventLoop* loop,
                           metainfo::TorrentFile* torrent,
-                          usz max_concurrent = 5) @public
+                          usz max_concurrent = 20) @public
 {
     // No web seeds available
     if (torrent.url_list.len == 0)

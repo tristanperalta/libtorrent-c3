@@ -1,6 +1,7 @@
 module torrent_client::download_session;
 
 import std::io;
+import std::time;
 import std::encoding::hex;
 import uv;
 import libtorrent;
@@ -106,6 +107,12 @@ struct DownloadContext
     // Download state
     bool download_complete;
     int exit_code;
+
+    // Download statistics
+    ulong total_bytes_downloaded;       // Total bytes downloaded (all sources)
+    ulong webseed_bytes_downloaded;     // Bytes from web seeds only
+    long last_speed_update_time;        // Unix timestamp for speed calculation
+    float current_download_speed;       // Current speed in bytes/sec
 
     // Resume verification
     uint num_pieces;                        // Total number of pieces
@@ -319,6 +326,41 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
     }
 
     io::printfn("✓ Piece %d verified (%d bytes)", piece_index, piece_data.len);
+
+    // Track download statistics
+    ctx.total_bytes_downloaded += piece_data.len;
+
+    // Calculate download speed (update every 2 seconds)
+    long current_time = (long)time::now().to_seconds();
+    if (ctx.last_speed_update_time == 0)
+    {
+        ctx.last_speed_update_time = current_time;
+    }
+
+    long time_diff = current_time - ctx.last_speed_update_time;
+    if (time_diff >= 2)  // Update speed every 2 seconds
+    {
+        // Calculate speed in bytes/sec
+        ctx.current_download_speed = (float)ctx.total_bytes_downloaded / (float)time_diff;
+
+        // Display speed in human-readable format
+        if (ctx.current_download_speed > 1024.0 * 1024.0)
+        {
+            io::printfn("    [DM] Download speed: %.2f MB/s", ctx.current_download_speed / (1024.0 * 1024.0));
+        }
+        else if (ctx.current_download_speed > 1024.0)
+        {
+            io::printfn("    [DM] Download speed: %.2f KB/s", ctx.current_download_speed / 1024.0);
+        }
+        else
+        {
+            io::printfn("    [DM] Download speed: %.2f B/s", ctx.current_download_speed);
+        }
+
+        // Reset for next interval
+        ctx.total_bytes_downloaded = 0;
+        ctx.last_speed_update_time = current_time;
+    }
 
     // Write piece to disk via storage_manager
     // Create context to manage piece_data lifecycle
@@ -1372,8 +1414,9 @@ fn void on_webseed_timer_tick(async::timer::Timer* timer, void* user_data) @publ
         return;
     }
 
-    // Try to start new web seed downloads if we have slots
-    if (active < 5)  // Max 5 concurrent web seed downloads
+    // Try to fill ALL available web seed slots aggressively
+    usz max_concurrent = ctx.webseed_mgr.max_concurrent;
+    while (active < max_concurrent)
     {
         // Pick a piece using gap-based selection (BEP 19)
         uint? piece_opt = ctx.dm.picker.pick_piece_for_webseed();
@@ -1397,11 +1440,11 @@ fn void on_webseed_timer_tick(async::timer::Timer* timer, void* user_data) @publ
             // Failed to start - mark piece as free again
             ctx.dm.picker.mark_free(piece_index)!!;
             io::printfn("[WebSeed] Failed to start piece %d download: %s", piece_index, err);
+            break;  // Stop trying if we failed
         }
-        else
-        {
-            io::printfn("[WebSeed] Started piece %d download", piece_index);
-        }
+
+        // Successfully started - increment counter and continue filling slots
+        active++;
     }
 }
 
@@ -1929,7 +1972,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Initialize web seeding (BEP 19)
     if (torrent.url_list.len > 0)
     {
-        ctx.webseed_mgr = webseed::create(ctx.loop, torrent, 5);  // Max 5 concurrent web seed downloads
+        ctx.webseed_mgr = webseed::create(ctx.loop, torrent);  // Uses default: 20 concurrent downloads
         if (ctx.webseed_mgr)
         {
             io::printfn("Web seed support: %d URLs available", torrent.url_list.len);
@@ -1943,8 +1986,8 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
             else
             {
                 ctx.webseed_timer = timer_opt;
-                ctx.webseed_timer.start(5000, 5000, &on_webseed_timer_tick, ctx);
-                io::printfn("Web seed timer started (checking every 5 seconds)");
+                ctx.webseed_timer.start(2000, 2000, &on_webseed_timer_tick, ctx);
+                io::printfn("Web seed timer started (checking every 2 seconds)");
             }
         }
     }

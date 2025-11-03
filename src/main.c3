@@ -1088,6 +1088,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.gui_state = ui;
     ctx.webseed_mgr = null;
     ctx.webseed_timer = null;
+    ctx.total_bytes_downloaded = 0;
+    ctx.webseed_bytes_downloaded = 0;
+    ctx.last_speed_update_time = 0;
+    ctx.current_download_speed = 0.0;
 
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
@@ -1179,7 +1183,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Initialize web seeding (BEP 19)
     if (torrent.url_list.len > 0)
     {
-        ctx.webseed_mgr = libtorrent::webseed::create(loop, torrent, 5);
+        ctx.webseed_mgr = libtorrent::webseed::create(loop, torrent);  // Uses default: 20 concurrent
         if (ctx.webseed_mgr)
         {
             DString msg;
@@ -1195,7 +1199,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
             else
             {
                 ctx.webseed_timer = timer_opt;
-                ctx.webseed_timer.start(5000, 5000, &download_session::on_webseed_timer_tick, &ctx);
+                ctx.webseed_timer.start(2000, 2000, &download_session::on_webseed_timer_tick, &ctx);
                 raylib_gui::add_log(ui, "Web seed timer started");
             }
         }
@@ -1410,6 +1414,10 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.gui_state = null;  // Console mode has no GUI
     ctx.webseed_mgr = null;
     ctx.webseed_timer = null;
+    ctx.total_bytes_downloaded = 0;
+    ctx.webseed_bytes_downloaded = 0;
+    ctx.last_speed_update_time = 0;
+    ctx.current_download_speed = 0.0;
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
     async::timer::Timer* flush_timer = null;
