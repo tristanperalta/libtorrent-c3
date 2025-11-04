@@ -14,6 +14,22 @@ The key architectural decision is the separation between library and executable,
 - The executable (`src/main.c3`) contains the module `torrent_client` and imports `libtorrent`
 - Both targets are built independently but the executable depends on the library at runtime
 
+## General Guidelines
+
+### Test Count References
+
+**IMPORTANT: Never include test count references** in the following places:
+- **Git commit messages** - Don't add phrases like "(there are 700+ passing tests)" or "All 705 tests pass"
+- **Code comments** - Don't add test count comments in source code
+- **README.md** - Don't include test count statistics in the description or features list
+
+Test counts change frequently as the codebase evolves and become stale/inaccurate quickly. The test suite itself is the source of truth for test counts.
+
+**Acceptable places for test counts:**
+- Test output/logs during CI/CD runs
+- Temporary debugging or development notes (not committed)
+- Documentation specifically about testing methodology (if kept up to date)
+
 ## Architecture Principle: Non-Blocking Async I/O
 
 **This is a non-blocking torrent client.** All I/O operations must be asynchronous to prevent blocking the event loop.
@@ -264,12 +280,20 @@ fn void my_function() @public
 - Executable code uses `module torrent_client;`
 - The executable imports the library with `import libtorrent;`
 
-### Test Functions
-Tests use the `@test` attribute and `assert()` for validation:
+### Writing Tests
+
+Tests are written using the `@test` attribute:
+
 ```c3
-fn void test_something() @test
+fn void test_parse_valid_torrent() @test
 {
-  assert(condition, "Error message");
+    String data = create_test_torrent();
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer metainfo::free_torrent_file(torrent);
+
+    assert(torrent.info.name.len > 0, "Expected valid torrent name");
 }
 ```
 

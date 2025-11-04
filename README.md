@@ -1,11 +1,15 @@
 # libtorrent-c3
 
-A BitTorrent client and library written in C3. Downloads torrents, exchanges peers automatically, and validates paths to prevent security attacks. Supports symlinks, file attributes, and peer exchange (PEX). 492+ tests ensure reliability.
+A BitTorrent client and library written in C3. Downloads torrents, exchanges peers automatically, and validates paths to prevent security attacks. Supports symlinks, file attributes, and peer exchange (PEX)
 
 ## Features
 
 - **Parse .torrent files** including symlinks and file attributes (BEP 47)
+- **Magnet links** with metadata exchange (BEP 9)
 - **Exchange peers automatically** without trackers using PEX (BEP 11)
+- **Fast Extension** for improved peer bootstrapping (BEP 6)
+- **IPv6 support** with dual-stack networking (BEP 7)
+- **Private torrents** with DHT/PEX disabled (BEP 27)
 - **Download with GUI or CLI** - optional raylib interface with real-time progress
 - **Validates paths** to prevent directory traversal and symlink escapes
 - **Extension protocol** (BEP 10) for capability negotiation
@@ -265,26 +269,11 @@ fn void peer_example()
 
 ## Development
 
+For detailed development guidelines, C3-specific patterns, and coding standards, see [CLAUDE.md](CLAUDE.md).
+
 ### Project Configuration
 
 The project is configured via `project.json`, which defines:
 - Build targets and their types (dynamic library vs executable)
 - Source and test file locations
 - Compiler and linker settings (PIC for shared library)
-
-### Writing Tests
-
-Tests are written using the `@test` attribute:
-
-```c3
-fn void test_parse_valid_torrent() @test
-{
-    String data = create_test_torrent();
-    defer free(data);
-
-    TorrentFile* torrent = metainfo::parse(data)!!;
-    defer metainfo::free_torrent_file(torrent);
-
-    assert(torrent.info.name.len > 0, "Expected valid torrent name");
-}
-```
