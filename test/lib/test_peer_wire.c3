@@ -458,3 +458,76 @@ fn void test_message_total_size_incomplete() @test
     }
     assert(false, "Should fail on incomplete data");
 }
+
+// ============================================================================
+// BEP 9: Extension Handshake with ut_metadata Tests
+// ============================================================================
+
+fn void test_extension_handshake_with_metadata() @test
+{
+    // Create handshake with ut_pex and ut_metadata support
+    peer_wire::ExtensionHandshake handshake;
+    handshake.ut_pex_id = 1;
+    handshake.ut_metadata_id = 2;
+    handshake.port = 6881;
+    handshake.client_name = "libtorrent-c3 0.1";
+    handshake.reqq = 250;
+    handshake.metadata_size = 50000;  // 50KB metadata
+
+    // Encode
+    char[] encoded = peer_wire::encode_extension_handshake(&handshake);
+    defer free(encoded);
+
+    // Verify it's a valid extension message
+    assert(encoded.len >= 6, "Message should have header + payload");
+    assert(encoded[4] == (char)peer_wire::MessageType.EXTENDED, "Should be EXTENDED message");
+    assert(encoded[5] == peer_wire::EXTENSION_HANDSHAKE_ID, "Should be handshake");
+
+    // Decode the extension message
+    peer_wire::ExtensionMessage? ext_msg = peer_wire::decode_extension_message(encoded);
+    ext_msg!!;
+    defer ext_msg.free();
+
+    // Decode the handshake
+    peer_wire::ExtensionHandshake decoded = peer_wire::decode_extension_handshake(ext_msg.payload)!!;
+    defer if (decoded.client_name.len > 0) free(decoded.client_name);
+
+    // Verify all fields
+    assert(decoded.ut_pex_id == 1, "ut_pex ID should match");
+    assert(decoded.ut_metadata_id == 2, "ut_metadata ID should match");
+    assert(decoded.port == 6881, "Port should match");
+    assert(decoded.client_name == "libtorrent-c3 0.1", "Client name should match");
+    assert(decoded.reqq == 250, "reqq should match");
+    assert(decoded.metadata_size == 50000, "metadata_size should match");
+
+    io::printn("Extension handshake with ut_metadata works correctly ✓");
+}
+
+fn void test_extension_handshake_metadata_only() @test
+{
+    // Create handshake with only ut_metadata (no PEX)
+    peer_wire::ExtensionHandshake handshake;
+    handshake.ut_pex_id = 0;  // Disabled
+    handshake.ut_metadata_id = 3;
+    handshake.port = 0;
+    handshake.client_name = "";
+    handshake.reqq = 0;
+    handshake.metadata_size = 16384;  // 16KB metadata
+
+    // Encode
+    char[] encoded = peer_wire::encode_extension_handshake(&handshake);
+    defer free(encoded);
+
+    // Decode
+    peer_wire::ExtensionMessage ext_msg = peer_wire::decode_extension_message(encoded)!!;
+    defer ext_msg.free();
+
+    peer_wire::ExtensionHandshake decoded = peer_wire::decode_extension_handshake(ext_msg.payload)!!;
+
+    // Verify
+    assert(decoded.ut_pex_id == 0, "ut_pex should be disabled");
+    assert(decoded.ut_metadata_id == 3, "ut_metadata ID should match");
+    assert(decoded.metadata_size == 16384, "metadata_size should match");
+
+    io::printn("Extension handshake with ut_metadata only works correctly ✓");
+}

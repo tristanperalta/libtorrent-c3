@@ -5,6 +5,8 @@ import async::event_loop;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import libtorrent::pex;
+import libtorrent::metadata_exchange;
+import libtorrent::bencode;
 import libtorrent::common;
 import std::io;
 import std::time;
@@ -70,6 +72,19 @@ alias StateCallback = fn void(PeerConnection* peer, PeerState state, DisconnectR
 // Parameters: peer (connection), pex_message (decoded PEX message), user_data (context)
 alias PexCallback = fn void(PeerConnection* peer, pex::PexMessage* pex_msg, void* user_data);
 
+// Unified metadata message structure for callbacks (BEP 9)
+struct MetadataMessage
+{
+    metadata_exchange::MetadataMessageType msg_type;
+    uint piece;
+    uint total_size;  // Only valid for DATA messages
+    char[] data;      // Only valid for DATA messages
+}
+
+// Callback for when metadata message is received (BEP 9).
+// Parameters: peer (connection), metadata_message (decoded metadata message), user_data (context)
+alias MetadataCallback = fn void(PeerConnection* peer, MetadataMessage* metadata_msg, void* user_data);
+
 // Peer connection structure.
 // Manages the connection to a single peer.
 struct PeerConnection
@@ -107,6 +122,12 @@ struct PeerConnection
     long last_pex_sent_sec;         // Timestamp of last PEX message sent in seconds (rate limiting)
     bool pex_initialized;           // Whether last_pex_sent_sec has been initialized
 
+    // Metadata Exchange (BEP 9) - for magnet link support
+    bool supports_metadata;      // Peer supports ut_metadata
+    char peer_metadata_msg_id;   // Peer's message ID for ut_metadata (0 = disabled)
+    char our_metadata_msg_id;    // Our message ID for ut_metadata (fixed at 2)
+    uint peer_metadata_size;     // Size of metadata the peer has (0 = unknown/not sharing)
+
     // Message buffering
     DString recv_buffer;     // Accumulates TCP chunks
 
@@ -114,6 +135,7 @@ struct PeerConnection
     MessageCallback msg_cb;
     StateCallback state_cb;
     PexCallback pex_cb;
+    MetadataCallback metadata_cb;
     void* user_data;
 }
 
@@ -128,6 +150,7 @@ struct PeerConnection
  @param msg_cb : "Callback for received messages"
  @param state_cb : "Callback for state changes (can be null)"
  @param pex_cb : "Callback for PEX messages (can be null)"
+ @param metadata_cb : "Callback for metadata messages (can be null, BEP 9)"
  @param user_data : "User context for callbacks"
  @param is_private : "BEP 27: Private torrent flag (disables PEX)"
  @return "Peer connection or fault"
@@ -135,7 +158,8 @@ struct PeerConnection
 fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort port,
                               common::InfoHash info_hash, common::PeerId our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
-                              PexCallback pex_cb, void* user_data, bool is_private) @public
+                              PexCallback pex_cb, MetadataCallback metadata_cb,
+                              void* user_data, bool is_private) @public
 {
     PeerConnection* peer = mem::new(PeerConnection);
     peer.loop = loop;
@@ -168,10 +192,17 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.dropped_peers = {};
     peer.pex_initialized = false;
 
+    // Initialize metadata exchange state (BEP 9)
+    peer.supports_metadata = false;
+    peer.peer_metadata_msg_id = 0;
+    peer.our_metadata_msg_id = 2;  // Fixed message ID for ut_metadata
+    peer.peer_metadata_size = 0;
+
     // Initialize callbacks
     peer.msg_cb = msg_cb;
     peer.state_cb = state_cb;
     peer.pex_cb = pex_cb;
+    peer.metadata_cb = metadata_cb;
     peer.user_data = user_data;
 
     // Connect to peer
@@ -704,9 +735,12 @@ fn void send_extension_handshake(PeerConnection* peer) @private
     peer_wire::ExtensionHandshake ext_hs;
     // BEP 27: Don't advertise ut_pex for private torrents
     ext_hs.ut_pex_id = peer.is_private ? 0 : peer.our_pex_msg_id;
+    // BEP 9: Advertise ut_metadata support
+    ext_hs.ut_metadata_id = peer.our_metadata_msg_id;
     ext_hs.port = 6881;  // Our listen port (TODO: make configurable)
     ext_hs.client_name = "libtorrent-c3 0.1.0";
     ext_hs.reqq = 250;  // Max outstanding requests
+    ext_hs.metadata_size = 0;  // Set to actual size when we have metadata
 
     char[] msg = peer_wire::encode_extension_handshake(&ext_hs);
     defer free(msg);
@@ -748,6 +782,16 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
         // io::printfn("[EXT] Peer supports PEX (msg_id: %d)", peer.peer_pex_msg_id);
     }
 
+    // Check if peer supports ut_metadata (BEP 9)
+    if (ext_hs.ut_metadata_id > 0)
+    {
+        peer.supports_metadata = true;
+        peer.peer_metadata_msg_id = ext_hs.ut_metadata_id;
+        peer.peer_metadata_size = ext_hs.metadata_size;
+        logger::logf(logger::LogLevel.INFO, "[Metadata] Peer supports metadata exchange (msg_id: %d, size: %d)",
+                     peer.peer_metadata_msg_id, peer.peer_metadata_size);
+    }
+
     // Debug output disabled for logging mode
     // if (ext_hs.client_name.len > 0)
     // {
@@ -779,6 +823,11 @@ fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
     {
         // PEX message
         handle_pex_message(peer, ext_msg.payload);
+    }
+    else if (ext_msg.ext_msg_id == peer.our_metadata_msg_id)
+    {
+        // Metadata exchange message (BEP 9)
+        handle_metadata_message(peer, ext_msg.payload);
     }
     else
     {
@@ -973,4 +1022,159 @@ fn void PeerConnection.drop_pex_peer(&self, common::Ipv4Addr ip, ushort port) @p
     // Replace old array
     if (self.dropped_peers.len > 0) free(self.dropped_peers);
     self.dropped_peers = new_peers;
+}
+
+// ============================================================================
+// Metadata Exchange (BEP 9)
+// ============================================================================
+
+<*
+ Handle metadata exchange message from peer (BEP 9).
+*>
+fn void handle_metadata_message(PeerConnection* peer, char[] payload) @private
+{
+    // First parse just to get the msg_type field
+    bencode::BencodeValue*? root_opt = bencode::decode((String)payload);
+    if (catch excuse = root_opt)
+    {
+        logger::log(logger::LogLevel.ERROR, "Failed to decode metadata message");
+        return;
+    }
+
+    bencode::BencodeValue* root = root_opt;
+    defer root.free();
+
+    if (root.type != bencode::BencodeType.DICT)
+    {
+        logger::log(logger::LogLevel.ERROR, "Metadata message is not a dictionary");
+        return;
+    }
+
+    bencode::BencodeValue* msg_type_val = root.dict_get("msg_type");
+    if (!msg_type_val || msg_type_val.type != bencode::BencodeType.INTEGER)
+    {
+        logger::log(logger::LogLevel.ERROR, "Metadata message missing msg_type");
+        return;
+    }
+
+    metadata_exchange::MetadataMessageType msg_type = (metadata_exchange::MetadataMessageType)msg_type_val.integer;
+
+    MetadataMessage metadata_msg;
+    metadata_msg.msg_type = msg_type;
+    metadata_msg.total_size = 0;
+    metadata_msg.data = {};
+
+    // Decode based on message type
+    switch (msg_type)
+    {
+        case metadata_exchange::MetadataMessageType.REQUEST:
+            metadata_exchange::MetadataRequest? req_opt = metadata_exchange::decode_request(payload);
+            if (catch excuse = req_opt)
+            {
+                logger::log(logger::LogLevel.ERROR, "Failed to decode metadata REQUEST");
+                return;
+            }
+            metadata_msg.piece = req_opt.piece;
+            logger::logf(logger::LogLevel.INFO, "[Metadata] Received REQUEST for piece %d", metadata_msg.piece);
+
+        case metadata_exchange::MetadataMessageType.DATA:
+            metadata_exchange::MetadataData? data_opt = metadata_exchange::decode_data(payload);
+            if (catch excuse = data_opt)
+            {
+                logger::log(logger::LogLevel.ERROR, "Failed to decode metadata DATA");
+                return;
+            }
+            metadata_msg.piece = data_opt.piece;
+            metadata_msg.total_size = data_opt.total_size;
+            metadata_msg.data = data_opt.data;  // Transfer ownership
+            logger::logf(logger::LogLevel.INFO, "[Metadata] Received DATA for piece %d (%d bytes)",
+                         metadata_msg.piece, metadata_msg.data.len);
+
+        case metadata_exchange::MetadataMessageType.REJECT:
+            metadata_exchange::MetadataReject? reject_opt = metadata_exchange::decode_reject(payload);
+            if (catch excuse = reject_opt)
+            {
+                logger::log(logger::LogLevel.ERROR, "Failed to decode metadata REJECT");
+                return;
+            }
+            metadata_msg.piece = reject_opt.piece;
+            logger::logf(logger::LogLevel.INFO, "[Metadata] Received REJECT for piece %d", metadata_msg.piece);
+
+        default:
+            logger::logf(logger::LogLevel.ERROR, "Unknown metadata message type: %d", msg_type);
+            return;
+    }
+
+    // Notify user callback (e.g., metadata_download manager)
+    if (peer.metadata_cb)
+    {
+        peer.metadata_cb(peer, &metadata_msg, peer.user_data);
+    }
+
+    // Free data if allocated
+    if (metadata_msg.data.len > 0)
+    {
+        free(metadata_msg.data);
+    }
+}
+
+<*
+ Send a metadata exchange message to peer (BEP 9).
+
+ @param msg_type : "Message type (REQUEST, DATA, or REJECT)"
+ @param piece : "Piece index"
+ @param total_size : "Total metadata size (only for DATA messages)"
+ @param data : "Metadata piece data (only for DATA messages, can be empty)"
+ @return "void or fault"
+*>
+fn void? PeerConnection.send_metadata_message(&self, metadata_exchange::MetadataMessageType msg_type,
+                                               uint piece, uint total_size, char[] data) @public
+{
+    if (!self.supports_metadata || self.peer_metadata_msg_id == 0)
+    {
+        return;  // Peer doesn't support metadata exchange
+    }
+
+    // Encode based on message type
+    char[] metadata_payload;
+    switch (msg_type)
+    {
+        case metadata_exchange::MetadataMessageType.REQUEST:
+            metadata_payload = metadata_exchange::encode_request(piece);
+        case metadata_exchange::MetadataMessageType.DATA:
+            metadata_payload = metadata_exchange::encode_data(piece, total_size, data);
+        case metadata_exchange::MetadataMessageType.REJECT:
+            metadata_payload = metadata_exchange::encode_reject(piece);
+        default:
+            logger::logf(logger::LogLevel.ERROR, "Unknown metadata message type: %d", msg_type);
+            return;
+    }
+    defer free(metadata_payload);
+
+    // Encode as extension message
+    char[] ext_msg = peer_wire::encode_extension_message(self.peer_metadata_msg_id, metadata_payload);
+    defer free(ext_msg);
+
+    // Send message
+    if (catch err = send_message(self, ext_msg))
+    {
+        logger::log(logger::LogLevel.ERROR, "Failed to send metadata message");
+        return err?;
+    }
+
+    // Log metadata activity
+    String msg_type_str;
+    switch (msg_type)
+    {
+        case metadata_exchange::MetadataMessageType.REQUEST:
+            msg_type_str = "REQUEST";
+        case metadata_exchange::MetadataMessageType.DATA:
+            msg_type_str = "DATA";
+        case metadata_exchange::MetadataMessageType.REJECT:
+            msg_type_str = "REJECT";
+        default:
+            msg_type_str = "UNKNOWN";
+    }
+    logger::logf(logger::LogLevel.INFO, "[Metadata] Sent %s for piece %d",
+                 msg_type_str, piece);
 }

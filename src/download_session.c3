@@ -25,6 +25,9 @@ import libtorrent::webseed;
 import libtorrent::event_bus;
 import libtorrent::event_types;
 import libtorrent::speed_tracker;
+import libtorrent::metadata_download;
+import libtorrent::metadata_exchange;
+import torrent_client::magnet_download_session;
 import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
@@ -106,6 +109,11 @@ struct DownloadContext
     // Web seeding (BEP 19)
     webseed::WebSeedManager* webseed_mgr;   // HTTP/FTP web seed manager
     async::timer::Timer* webseed_timer;     // Periodic web seed piece requests
+
+    // Magnet link support (BEP 9)
+    bool is_magnet_download;                         // True if started from magnet link
+    metadata_download::MetadataDownload* metadata_dl; // Metadata download manager
+    async::timer::Timer* metadata_timer;             // Periodic metadata request/timeout check
 
     // Download state
     bool download_complete;

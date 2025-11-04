@@ -231,12 +231,15 @@ struct ExtensionHandshake
 {
     // m: Dictionary mapping extension names to message IDs
     // For PEX: { "ut_pex": <our_msg_id> }
-    char ut_pex_id;  // Our local message ID for ut_pex (0 = disabled)
+    // For Metadata: { "ut_metadata": <our_msg_id> }
+    char ut_pex_id;       // Our local message ID for ut_pex (0 = disabled)
+    char ut_metadata_id;  // Our local message ID for ut_metadata (0 = disabled)
 
     // Optional fields
     ushort port;          // Our TCP listen port (0 = unknown)
     String client_name;   // Client name and version (e.g., "libtorrent-c3 0.1")
     uint reqq;            // Max outstanding requests (default 250)
+    uint metadata_size;   // Size of metadata in bytes (BEP 9, 0 = unknown/not sharing)
 }
 
 <*
@@ -425,7 +428,7 @@ fn char[] encode_extension_handshake(ExtensionHandshake* handshake) @public
 
     builder.append("d");  // Start dictionary
 
-    // m: { "ut_pex": <id> }
+    // m: { "ut_pex": <id>, "ut_metadata": <id> }
     builder.append("1:md");
     if (handshake.ut_pex_id > 0)
     {
@@ -433,7 +436,21 @@ fn char[] encode_extension_handshake(ExtensionHandshake* handshake) @public
         builder.appendf("%d", (int)handshake.ut_pex_id);
         builder.append("e");
     }
+    if (handshake.ut_metadata_id > 0)
+    {
+        builder.append("11:ut_metadatai");
+        builder.appendf("%d", (int)handshake.ut_metadata_id);
+        builder.append("e");
+    }
     builder.append("e");  // End 'm' dictionary
+
+    // metadata_size: total size of metadata (BEP 9)
+    if (handshake.metadata_size > 0)
+    {
+        builder.append("13:metadata_sizei");
+        builder.appendf("%d", handshake.metadata_size);
+        builder.append("e");
+    }
 
     // p: port (if provided)
     if (handshake.port > 0)
@@ -695,9 +712,11 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
 
     ExtensionHandshake handshake;
     handshake.ut_pex_id = 0;
+    handshake.ut_metadata_id = 0;
     handshake.port = 0;
     handshake.client_name = "";
     handshake.reqq = 0;
+    handshake.metadata_size = 0;
 
     // Parse "m" dictionary (extension name -> message ID mappings)
     bencode::BencodeValue* m_dict = root.dict_get("m");
@@ -709,6 +728,20 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
         {
             handshake.ut_pex_id = (char)pex_val.integer;
         }
+
+        // Look for "ut_metadata" key (BEP 9)
+        bencode::BencodeValue* metadata_val = m_dict.dict_get("ut_metadata");
+        if (metadata_val && metadata_val.type == bencode::BencodeType.INTEGER)
+        {
+            handshake.ut_metadata_id = (char)metadata_val.integer;
+        }
+    }
+
+    // Parse "metadata_size" (BEP 9 - size of info dictionary)
+    bencode::BencodeValue* metadata_size_val = root.dict_get("metadata_size");
+    if (metadata_size_val && metadata_size_val.type == bencode::BencodeType.INTEGER)
+    {
+        handshake.metadata_size = (uint)metadata_size_val.integer;
     }
 
     // Parse "p" (port)

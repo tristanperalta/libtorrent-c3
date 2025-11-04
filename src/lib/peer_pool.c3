@@ -229,6 +229,7 @@ struct PeerPool
     PeerConnectedCallback on_connected;       // Called when peer connects successfully
     PeerMessageCallback on_message;           // Called when peer sends message
     PeerDisconnectedCallback on_disconnected; // Called when peer disconnects
+    peer_connection::MetadataCallback on_metadata; // Called when metadata message received (BEP 9)
     void* user_data;              // User data passed to callbacks
 }
 
@@ -387,6 +388,7 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     pool.on_connected = null;
     pool.on_message = null;
     pool.on_disconnected = null;
+    pool.on_metadata = null;
     pool.user_data = null;
 
     return pool;
@@ -1085,6 +1087,7 @@ fn void PeerPool.connect_to_peers(&self) @public
             &on_peer_message_internal,  // Bridge: adds IP/port
             &on_peer_state_internal,    // Bridge: adds IP/port
             &on_pex_message_internal,   // Bridge: adds PEX peers to pool
+            self.on_metadata,            // Metadata callback for magnet links (BEP 9)
             (PeerPool*)self,             // Pass pool as user_data for bridge
             self.is_private              // BEP 27: Pass private flag
         );

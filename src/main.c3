@@ -18,12 +18,14 @@ import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::logger;
+import libtorrent::magnet_link;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::event_bus;
 import libtorrent::event_types;
 import torrent_client::log_outputs;
 import torrent_client::download_session;
+import torrent_client::magnet_download_session;
 import raylib_gui;
 
 // ============================================================================
@@ -100,11 +102,22 @@ fn int main(int argc, ZString* argv)
         String torrent_path = (String)argv[2].str_view();
         return cmd_connect(&loop, torrent_path);
     }
+    else if (command == "magnet")
+    {
+        if (argc < 3)
+        {
+            io::eprintfn("Error: 'magnet' command requires a magnet URI");
+            print_usage();
+            return 1;
+        }
+        String magnet_uri = (String)argv[2].str_view();
+        return cmd_magnet(magnet_uri);
+    }
     else if (command == "download")
     {
         if (argc < 3)
         {
-            io::eprintfn("Error: 'download' command requires a torrent file path");
+            io::eprintfn("Error: 'download' command requires a torrent file or magnet URI");
             print_usage();
             return 1;
         }
@@ -193,6 +206,76 @@ fn void on_info_load_complete(String data, int status, void* user_data)
 }
 
 <*
+ Magnet command: parse and display magnet link (BEP 9).
+
+ @param magnet_uri : "Magnet URI to parse"
+ @return "Exit code (0 = success, 1 = error)"
+*>
+fn int cmd_magnet(String magnet_uri)
+{
+    io::printfn("Parsing magnet link...");
+    io::printfn("");
+
+    // Parse magnet URI
+    magnet_link::MagnetLink*? magnet_opt = magnet_link::parse(magnet_uri);
+    if (catch err = magnet_opt)
+    {
+        io::eprintfn("Error: Failed to parse magnet URI");
+        io::eprintfn("  %s", err);
+        return 1;
+    }
+
+    magnet_link::MagnetLink* magnet = magnet_opt;
+    defer magnet.free();
+
+    // Display info hash
+    io::printfn("Info Hash (hex):");
+    io::printf("  ");
+    for (usz i = 0; i < 20; i++)
+    {
+        char byte = magnet.info_hash[i];
+        io::printf("%02x", (uint)(byte & 0xFF));
+    }
+    io::printfn("");
+    io::printfn("");
+
+    // Display name if present
+    if (magnet.name.len > 0)
+    {
+        io::printfn("Display Name:");
+        io::printfn("  %s", magnet.name);
+        io::printfn("");
+    }
+
+    // Display trackers
+    if (magnet.trackers.len > 0)
+    {
+        io::printfn("Trackers (%d):", magnet.trackers.len);
+        foreach (tracker : magnet.trackers)
+        {
+            io::printfn("  %s", tracker);
+        }
+        io::printfn("");
+    }
+
+    // Display peers
+    if (magnet.peers.len > 0)
+    {
+        io::printfn("Peers (%d):", magnet.peers.len);
+        foreach (peer : magnet.peers)
+        {
+            io::printfn("  %s", peer);
+        }
+        io::printfn("");
+    }
+
+    io::printfn("Note: To download from a magnet link, metadata must be fetched from peers.");
+    io::printfn("      This requires connecting to trackers/DHT and downloading the .torrent metadata.");
+
+    return 0;
+}
+
+<*
  Info command: load and display torrent metadata (async).
 
  @param loop : "Event loop"
@@ -220,13 +303,14 @@ fn int cmd_info(event_loop::EventLoop* loop, String torrent_path)
 
 fn void print_usage()
 {
-    io::printfn("Usage: torrent-client [COMMAND] <torrent-file> [OPTIONS]");
+    io::printfn("Usage: torrent-client [COMMAND] <torrent-file|magnet-link> [OPTIONS]");
     io::printfn("");
     io::printfn("Commands:");
     io::printfn("  info <file>          Display torrent metadata (default)");
     io::printfn("  announce <file>      Announce to tracker and show peer list");
     io::printfn("  connect <file>       Announce and connect to peers with handshake");
     io::printfn("  download <file>      Download torrent to disk");
+    io::printfn("  magnet <uri>         Parse and display magnet link (BEP 9)");
     io::printfn("");
     io::printfn("Download Options:");
     io::printfn("  --save-path <path>   Directory to save files (default: current directory)");
@@ -239,6 +323,7 @@ fn void print_usage()
     io::printfn("  torrent-client info ubuntu.torrent");
     io::printfn("  torrent-client announce ubuntu.torrent");
     io::printfn("  torrent-client connect ubuntu.torrent");
+    io::printfn("  torrent-client magnet 'magnet:?xt=urn:btih:...'");
     io::printfn("  torrent-client download ubuntu.torrent");
     io::printfn("  torrent-client download ubuntu.torrent --save-path ~/Downloads --numwant 100");
     io::printfn("  torrent-client download ubuntu.torrent --log-file download.log --debug");
@@ -782,6 +867,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
             &on_connect_peer_message,
             &on_connect_peer_state,
             null,  // No PEX callback for simple client
+            null,  // No metadata callback for simple client
             ctx,
             ctx.torrent.info.private  // BEP 27: Pass private flag
         );
@@ -1699,9 +1785,18 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         }
     }
 
-    // Load torrent file async
-    torrent_loader::load_file_async(loop, torrent_path,
-                                     &download_session::on_download_load_complete, &ctx);
+    // Check if this is a magnet link or torrent file
+    if (torrent_path.starts_with("magnet:"))
+    {
+        // Magnet link download - start metadata download process
+        magnet_download_session::start_magnet_download(&ctx, torrent_path);
+    }
+    else
+    {
+        // Load torrent file async
+        torrent_loader::load_file_async(loop, torrent_path,
+                                         &download_session::on_download_load_complete, &ctx);
+    }
 
     // Run event loop - blocks until download completes or error
     // The loop exits naturally when all handles are closed
