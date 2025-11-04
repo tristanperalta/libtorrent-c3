@@ -782,7 +782,8 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
             &on_connect_peer_message,
             &on_connect_peer_state,
             null,  // No PEX callback for simple client
-            ctx
+            ctx,
+            ctx.torrent.info.private  // BEP 27: Pass private flag
         );
 
         if (catch err = conn)
@@ -835,7 +836,7 @@ fn void on_connect_load_complete(String data, int status, void* user_data)
     // Create peer pool (Phase 1 - storage only)
     common::PeerId our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = peer_pool::get_default_config();
-    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
+    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
 
     // Get tracker URL
     String tracker_url = torrent.announce;
@@ -1417,7 +1418,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = peer_pool::get_default_config();
-    ctx.peer_pool = peer_pool::create(loop, pool_config, &torrent.info_hash, &our_peer_id);
+    ctx.peer_pool = peer_pool::create(loop, pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
 
     // Set peer pool callbacks
     ctx.peer_pool.set_callbacks(

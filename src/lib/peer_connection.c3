@@ -83,6 +83,7 @@ struct PeerConnection
     common::InfoHash info_hash;
     common::PeerId our_peer_id;
     common::PeerId remote_peer_id;
+    bool is_private;             // BEP 27: Private torrent flag (DHT/PEX disabled)
 
     // Peer state flags (BEP 3)
     bool am_choking;         // We are choking the peer
@@ -128,12 +129,13 @@ struct PeerConnection
  @param state_cb : "Callback for state changes (can be null)"
  @param pex_cb : "Callback for PEX messages (can be null)"
  @param user_data : "User context for callbacks"
+ @param is_private : "BEP 27: Private torrent flag (disables PEX)"
  @return "Peer connection or fault"
 *>
 fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort port,
                               common::InfoHash info_hash, common::PeerId our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
-                              PexCallback pex_cb, void* user_data) @public
+                              PexCallback pex_cb, void* user_data, bool is_private) @public
 {
     PeerConnection* peer = mem::new(PeerConnection);
     peer.loop = loop;
@@ -145,6 +147,7 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
         peer.info_hash[i] = info_hash[i];
         peer.our_peer_id[i] = our_peer_id[i];
     }
+    peer.is_private = is_private;
 
     // Initialize state (BEP 3: start choking and not interested)
     peer.am_choking = true;
@@ -699,7 +702,8 @@ fn fault? PeerConnection.send_keepalive(&self) @public
 fn void send_extension_handshake(PeerConnection* peer) @private
 {
     peer_wire::ExtensionHandshake ext_hs;
-    ext_hs.ut_pex_id = peer.our_pex_msg_id;  // Advertise ut_pex support
+    // BEP 27: Don't advertise ut_pex for private torrents
+    ext_hs.ut_pex_id = peer.is_private ? 0 : peer.our_pex_msg_id;
     ext_hs.port = 6881;  // Our listen port (TODO: make configurable)
     ext_hs.client_name = "libtorrent-c3 0.1.0";
     ext_hs.reqq = 250;  // Max outstanding requests
@@ -787,6 +791,14 @@ fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
 *>
 fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
 {
+    // BEP 27: Ignore PEX messages for private torrents
+    if (peer.is_private)
+    {
+        logger::logf(logger::LogLevel.WARN,
+                    "[PEX] Ignoring PEX message from peer on private torrent (BEP 27)");
+        return;
+    }
+
     pex::PexMessage? pex_msg_opt = pex::decode_pex_message(payload);
     if (catch excuse = pex_msg_opt)
     {
@@ -820,6 +832,12 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
 *>
 fn void? PeerConnection.send_pex_message(&self) @public
 {
+    // BEP 27: Don't send PEX for private torrents
+    if (self.is_private)
+    {
+        return;  // Silently skip PEX for private torrents
+    }
+
     if (!self.supports_pex || self.peer_pex_msg_id == 0)
     {
         return;  // Peer doesn't support PEX

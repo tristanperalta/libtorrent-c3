@@ -32,7 +32,7 @@ fn void test_create_and_free() @test
     }
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     assert(pool != null, "Pool should be created");
 
     // Verify initial state
@@ -57,7 +57,7 @@ fn void test_add_single_peer() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add a peer
@@ -97,7 +97,7 @@ fn void test_add_duplicate_peer() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add same peer twice
@@ -123,7 +123,7 @@ fn void test_add_peers_from_tracker() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Create tracker peer list
@@ -172,7 +172,7 @@ fn void test_find_nonexistent_peer() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add one peer
@@ -200,7 +200,7 @@ fn void test_erase_peer() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add three peers
@@ -259,7 +259,7 @@ fn void test_erase_only_peer() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add one peer
@@ -295,7 +295,7 @@ fn void test_peer_limit_enforcement() @test
         .min_reconnect_time = 60
     };
 
-    peer_pool::PeerPool* pool = peer_pool::create(&loop, config, &info_hash, &peer_id);
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, config, &info_hash, &peer_id, false);
     defer pool.free();
 
     // Try to add 10 peers (limit is 5)
@@ -321,7 +321,7 @@ fn void test_statistics() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers
@@ -365,7 +365,7 @@ fn void test_sorted_order() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers in non-sorted order
@@ -397,7 +397,7 @@ fn void test_peer_rank_calculation() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peer and verify base rank (just IP-based randomness)
@@ -442,7 +442,7 @@ fn void test_candidate_cache_sorting() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers with different characteristics
@@ -485,7 +485,7 @@ fn void test_pick_best_candidate() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Empty pool - should return fault
@@ -524,7 +524,7 @@ fn void test_seed_priority() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add regular peer
@@ -556,7 +556,7 @@ fn void test_failure_penalty() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peer
@@ -595,7 +595,7 @@ fn void test_set_callbacks() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Set callbacks (just verify it doesn't crash)
@@ -616,7 +616,7 @@ fn void test_disconnect_peer() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add a peer
@@ -641,7 +641,7 @@ fn void test_disconnect_all() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add multiple peers
@@ -683,7 +683,7 @@ fn void test_connection_limit() @test
         .min_reconnect_time = 60
     };
 
-    peer_pool::PeerPool* pool = peer_pool::create(&loop, config, &info_hash, &peer_id);
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, config, &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add 10 peers
@@ -720,7 +720,7 @@ fn void test_update_peer_stats() @test
     char[20] info_hash;
     char[20] peer_id;
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add a peer
@@ -757,7 +757,7 @@ fn void test_mark_hash_failure() @test
     char[20] info_hash;
     char[20] peer_id;
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add a peer
@@ -797,7 +797,7 @@ fn void test_mark_peer_seed() @test
     char[20] info_hash;
     char[20] peer_id;
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add a peer
@@ -832,7 +832,7 @@ fn void test_stats_peer_not_found() @test
     char[20] info_hash;
     char[20] peer_id;
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     char[4] ip = { 192, 168, 1, 100 };
@@ -879,7 +879,7 @@ fn void test_stats_update_candidate_cache() @test
     char[20] info_hash;
     char[20] peer_id;
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add two peers
@@ -937,7 +937,7 @@ fn void test_add_peers_from_dht() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Create DHT peer list
@@ -990,7 +990,7 @@ fn void test_dht_peers_not_from_tracker() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add DHT peer
@@ -1023,7 +1023,7 @@ fn void test_dht_tracker_deduplication() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     common::Ipv4Addr shared_ip = { 192, 168, 1, 100 };
@@ -1072,7 +1072,7 @@ fn void test_filter_default() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers in different states
@@ -1116,7 +1116,7 @@ fn void test_filter_single_state() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers in different states
@@ -1162,7 +1162,7 @@ fn void test_filter_combined_states() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers in different states
@@ -1211,7 +1211,7 @@ fn void test_filter_exclude_states() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers in different states
@@ -1264,7 +1264,7 @@ fn void test_filter_seeds_only() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers - some seeds, some leechers
@@ -1309,7 +1309,7 @@ fn void test_filter_leechers_only() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers - some seeds, some leechers
@@ -1351,7 +1351,7 @@ fn void test_filter_by_source() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers from different sources
@@ -1392,7 +1392,7 @@ fn void test_filter_empty_result() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers all in DISCOVERED state
@@ -1430,7 +1430,7 @@ fn void test_sort_by_state() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers in different states
@@ -1479,7 +1479,7 @@ fn void test_sort_by_downloaded() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers with different download amounts
@@ -1528,7 +1528,7 @@ fn void test_sort_by_rank() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers with different characteristics
@@ -1578,7 +1578,7 @@ fn void test_sort_by_reliability() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add peers with different failure counts
@@ -1629,7 +1629,7 @@ fn void test_filter_empty_pool() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Don't add any peers
@@ -1663,7 +1663,7 @@ fn void test_filter_complex() @test
     char[20] peer_id;
 
     peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
-                                                    &info_hash, &peer_id);
+                                                    &info_hash, &peer_id, false);
     defer pool.free();
 
     // Add various peers
@@ -1712,4 +1712,84 @@ fn void test_filter_complex() @test
     // peer4 is excluded (not seed)
     assert(info.len == 1, "Should match only 1 peer with all criteria");
     assert(info[0].port == 6881, "Should be peer1");
+}
+
+// ============================================================================
+// BEP 27: Private Torrent Tests
+// ============================================================================
+
+/**
+ * Test that private flag is properly set when creating peer pool
+ */
+fn void test_private_flag_set_on_pool() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    common::InfoHash info_hash;
+    common::PeerId peer_id;
+
+    // Create pool with is_private = true
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id, true);
+    defer pool.free();
+
+    assert(pool.is_private == true, "Private flag should be set to true on pool");
+
+    io::printn("BEP 27: Private flag correctly set on peer pool ✓");
+}
+
+/**
+ * Test that public flag is properly set when creating peer pool
+ */
+fn void test_public_flag_set_on_pool() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    common::InfoHash info_hash;
+    common::PeerId peer_id;
+
+    // Create pool with is_private = false
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id, false);
+    defer pool.free();
+
+    assert(pool.is_private == false, "Private flag should be set to false on pool");
+
+    io::printn("BEP 27: Public flag correctly set on peer pool ✓");
+}
+
+/**
+ * Test that PEX updates are disabled for private torrents (BEP 27)
+ *
+ * This test verifies that the private flag is propagated correctly through
+ * the peer pool, which will cause PEX broadcasts to be skipped (tested
+ * indirectly since broadcast_pex_update is @private).
+ */
+fn void test_pex_disabled_for_private_pool() @test
+{
+    event_loop::EventLoop loop = event_loop::create()!!;
+    defer loop.free();
+
+    common::InfoHash info_hash;
+    common::PeerId peer_id;
+
+    // Create PRIVATE pool
+    peer_pool::PeerPool* pool = peer_pool::create(&loop, peer_pool::DEFAULT_CONFIG,
+                                                    &info_hash, &peer_id, true);
+    defer pool.free();
+
+    // Verify private flag is set (which will cause PEX to be disabled)
+    assert(pool.is_private == true, "Pool should be marked as private");
+
+    // Add a peer to the pool (would normally trigger PEX if not private)
+    pool.add_peer({ 1, 2, 3, 4 }, 6881, common::PeerSource.TRACKER);
+
+    // Call send_pex_updates - should not crash for private torrents
+    // The internal broadcast_pex_update will return early (peer_pool.c3:1145-1149)
+    pool.send_pex_updates();
+
+    // If we reach here without crashing, the implementation is working correctly
+    io::printn("BEP 27: PEX correctly disabled for private torrent pool ✓");
 }

@@ -3,6 +3,7 @@ module libtorrent::peer_connection::test;
 import libtorrent::peer_connection;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
+import libtorrent::common;
 import async::event_loop;
 import std::io;
 
@@ -488,3 +489,11 @@ fn void test_message_callback_invocation() @test
     assert(ctx.messages_received == 1, "Should have invoked message callback");
     assert(ctx.last_message_type == peer_wire::MessageType.CHOKE, "Should report CHOKE message");
 }
+
+// ============================================================================
+// BEP 27: Private Torrent Tests
+// ============================================================================
+
+// Note: PeerConnection tests for BEP 27 are covered by integration tests
+// Direct unit tests would require mocking the network layer to avoid memory leaks
+// The private flag functionality is tested in peer_pool tests instead

@@ -223,6 +223,7 @@ struct PeerPool
     // Torrent info (needed for peer connections)
     common::InfoHash info_hash;   // Torrent info hash
     common::PeerId our_peer_id;   // Our peer ID
+    bool is_private;              // BEP 27: Private torrent flag (DHT/PEX disabled)
 
     // Callbacks (user-provided)
     PeerConnectedCallback on_connected;       // Called when peer connects successfully
@@ -354,12 +355,14 @@ fn int compare_peers_by_rank(TorrentPeer* a, TorrentPeer* b)
  @param config : "Configuration"
  @param info_hash : "Torrent info hash"
  @param our_peer_id : "Our peer ID"
+ @param is_private : "BEP 27: Private torrent flag (disables DHT/PEX)"
  @return "Initialized peer pool"
 *>
 fn PeerPool* create(event_loop::EventLoop* loop,
                     PeerPoolConfig config,
                     common::InfoHash* info_hash,
-                    common::PeerId* our_peer_id) @public
+                    common::PeerId* our_peer_id,
+                    bool is_private) @public
 {
     PeerPool* pool = mem::new(PeerPool);
     pool.loop = loop;
@@ -368,6 +371,7 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     // Copy info hash and peer ID
     pool.info_hash[..] = (*info_hash)[..];
     pool.our_peer_id[..] = (*our_peer_id)[..];
+    pool.is_private = is_private;
 
     // Initialize empty peer list
     pool.peers = {};
@@ -1081,7 +1085,8 @@ fn void PeerPool.connect_to_peers(&self) @public
             &on_peer_message_internal,  // Bridge: adds IP/port
             &on_peer_state_internal,    // Bridge: adds IP/port
             &on_pex_message_internal,   // Bridge: adds PEX peers to pool
-            (PeerPool*)self              // Pass pool as user_data for bridge
+            (PeerPool*)self,             // Pass pool as user_data for bridge
+            self.is_private              // BEP 27: Pass private flag
         );
 
         if (catch err = conn_opt)
@@ -1137,6 +1142,12 @@ fn void PeerPool.connect_to_peers(&self) @public
 *>
 fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, bool added) @private
 {
+    // BEP 27: Don't broadcast PEX for private torrents
+    if (pool.is_private)
+    {
+        return;
+    }
+
     // Security: Don't broadcast private/reserved IPs
     if (pex::is_private_or_reserved_ip(ip))
     {

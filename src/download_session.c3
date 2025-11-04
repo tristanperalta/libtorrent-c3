@@ -1941,8 +1941,12 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         .max_failcount = 3,             // Future: Phase 3 will track failures
         .min_reconnect_time = 60        // Future: Phase 3 will handle retries
     };
-    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id);
+    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
     io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);
+    if (torrent.info.private)
+    {
+        io::printfn("⚠️  Private torrent detected - DHT and PEX will be disabled (BEP 27)");
+    }
 
     // Set peer pool callbacks
     ctx.peer_pool.set_callbacks(
@@ -1990,8 +1994,16 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
     }
 
-    // Initialize DHT for peer discovery
-    init_dht(ctx, 6881);  // Use same port as BitTorrent protocol
+    // Initialize DHT for peer discovery (skip for private torrents per BEP 27)
+    if (!ctx.torrent.info.private)
+    {
+        init_dht(ctx, 6881);  // Use same port as BitTorrent protocol
+    }
+    else
+    {
+        io::printfn("[DHT] Skipping DHT initialization for private torrent (BEP 27)");
+        ctx.dht_enabled = false;
+    }
     io::printfn("");
 
     // Initialize web seeding (BEP 19)

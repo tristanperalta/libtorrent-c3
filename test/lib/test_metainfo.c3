@@ -364,3 +364,124 @@ fn void test_info_hash_deterministic() @test
 
     io::printn("Info hash is deterministic ✓");
 }
+
+// ============================================================================
+// BEP 27: Private Torrent Tests
+// ============================================================================
+
+/**
+ * Test parsing private=1 flag (BEP 27)
+ */
+fn void test_parse_private_torrent() @test
+{
+    // Create a torrent with private=1
+    char[20] dummy_hash;
+    for (usz i = 0; i < 20; i++)
+    {
+        dummy_hash[i] = (char)i;
+    }
+
+    // Build info dictionary with private=1
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string("private.txt"),
+        "length", bencode::make_integer(100),
+        "piece length", bencode::make_integer(16384),
+        "pieces", bencode::make_string((String)dummy_hash[..]),
+        "private", bencode::make_integer(1)  // BEP 27: Private torrent
+    );
+
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com:8080/announce"),
+        "info", info
+    );
+    defer root.free();
+
+    String data = root.encode();
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer torrent.free();
+
+    // Verify private flag is set
+    assert(torrent.info.private == true, "Expected private=1 to be parsed as true");
+
+    io::printn("Private torrent (private=1) parsed correctly ✓");
+}
+
+/**
+ * Test parsing private=0 flag (BEP 27)
+ */
+fn void test_parse_public_torrent_explicit() @test
+{
+    // Create a torrent with private=0
+    char[20] dummy_hash;
+    for (usz i = 0; i < 20; i++)
+    {
+        dummy_hash[i] = (char)i;
+    }
+
+    // Build info dictionary with private=0
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string("public.txt"),
+        "length", bencode::make_integer(100),
+        "piece length", bencode::make_integer(16384),
+        "pieces", bencode::make_string((String)dummy_hash[..]),
+        "private", bencode::make_integer(0)  // Explicitly public
+    );
+
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com:8080/announce"),
+        "info", info
+    );
+    defer root.free();
+
+    String data = root.encode();
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer torrent.free();
+
+    // Verify private flag is false
+    assert(torrent.info.private == false, "Expected private=0 to be parsed as false");
+
+    io::printn("Public torrent (private=0) parsed correctly ✓");
+}
+
+/**
+ * Test parsing torrent without private flag (defaults to public per BEP 27)
+ */
+fn void test_parse_public_torrent_default() @test
+{
+    // Create a torrent without private field (should default to false)
+    char[20] dummy_hash;
+    for (usz i = 0; i < 20; i++)
+    {
+        dummy_hash[i] = (char)i;
+    }
+
+    // Build info dictionary WITHOUT private field
+    BencodeValue* info = bencode::@bdict(
+        "name", bencode::make_string("default_public.txt"),
+        "length", bencode::make_integer(100),
+        "piece length", bencode::make_integer(16384),
+        "pieces", bencode::make_string((String)dummy_hash[..])
+        // No private field - should default to false
+    );
+
+    BencodeValue* root = bencode::@bdict(
+        "announce", bencode::make_string("http://tracker.example.com:8080/announce"),
+        "info", info
+    );
+    defer root.free();
+
+    String data = root.encode();
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer torrent.free();
+
+    // Verify private flag defaults to false
+    assert(torrent.info.private == false, "Expected missing private field to default to false");
+
+    io::printn("Public torrent (no private field) defaults to false ✓");
+}

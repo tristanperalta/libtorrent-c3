@@ -67,6 +67,7 @@ struct TorrentInfo
     char[] pieces;          // SHA1 hashes (20 bytes each)
     bool is_multi_file;     // true if multi-file torrent
     FileEntry[] files;      // Files list (multi-file mode only)
+    bool private;           // BEP 27: Private torrent flag (DHT/PEX disabled)
 }
 
 /**
@@ -507,6 +508,18 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
     }
 
     info.pieces = copy_bytes(pieces_val.string);
+
+    // Extract 'private' (optional - BEP 27)
+    // If private=1, DHT and PEX must be disabled
+    BencodeValue* private_val = info_val.dict_get("private");
+    if (private_val && private_val.type == bencode::BencodeType.INTEGER)
+    {
+        info.private = (private_val.integer == 1);
+    }
+    else
+    {
+        info.private = false;  // Default to public torrent
+    }
 
     return {};  // Success
 }
