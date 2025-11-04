@@ -456,12 +456,12 @@ fn void on_metadata_timer(async::timer::Timer* timer, void* user_data) @public
     if (!ctx.peer_pool) return;
 
     // Try to find a peer that supports metadata
-    foreach (peer_info : ctx.peer_pool.peers)
+    ctx.peer_pool.peers.@each(; common::SocketAddress addr, peer_pool::TorrentPeer* peer_info)
     {
         // Skip if not connected or no connection object
-        if (!peer_info.connection) continue;
-        if (peer_info.state != peer_pool::PeerState.CONNECTED) continue;
-        if (!peer_info.connection.supports_metadata) continue;
+        if (!peer_info.connection) return; // Continue to next peer
+        if (peer_info.state != peer_pool::PeerState.CONNECTED) return; // Continue to next peer
+        if (!peer_info.connection.supports_metadata) return; // Continue to next peer
 
         // Initialize metadata size from first peer that has it
         if (ctx.metadata_dl.num_pieces == 0 && peer_info.connection.peer_metadata_size > 0)
@@ -485,6 +485,6 @@ fn void on_metadata_timer(async::timer::Timer* timer, void* user_data) @public
         io::printfn("[Metadata] Requested piece %d from peer %s", next_piece, peer_info.addr);
 
         // Only request from one peer at a time to avoid duplicates
-        break;
-    }
+        return; // Exit @each early (was break)
+    };
 }

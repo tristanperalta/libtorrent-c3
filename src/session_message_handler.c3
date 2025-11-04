@@ -394,10 +394,8 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
         usz handshake_ok_count = 0;
 
         // Get all peers from pool and find one that's READY
-        for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
+        ctx.peer_pool.peers.@each(; common::SocketAddress addr, peer_pool::TorrentPeer* peer_info)
         {
-            peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
-
             if (peer_info.connection) has_connection_count++;
             if (peer_info.state == peer_pool::PeerState.CONNECTED) is_connected_count++;
             if (peer_info.handshake_ok) handshake_ok_count++;
@@ -428,7 +426,7 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
                     if (!is_allowed)
                     {
                         // Skip this peer - choked and piece not in allowed_fast set
-                        continue;
+                        return; // Continue to next peer (was continue)
                     }
                     // else: proceed to request (choked but piece IS in allowed_fast set)
                 }
@@ -440,14 +438,14 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
                 if (catch excuse = ctx.dm.mark_block_requested(req.piece_index, req.offset))
                 {
                     // Piece no longer downloading (race condition) - ignore this request
-                    break;
+                    return; // Exit @each early (was break)
                 }
 
                 requests_sent++;
                 requested = true;
-                break;
+                return; // Exit @each early (was break)
             }
-        }
+        };
 
         if (!requested)
         {

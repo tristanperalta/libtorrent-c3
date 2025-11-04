@@ -127,6 +127,93 @@ fn String SocketAddress.to_string(&self) @public
 }
 
 <*
+ Calculate hash for SocketAddress (for use in HashMap).
+ Uses FNV-1a hash algorithm for good distribution.
+
+ @param self : "Socket address to hash"
+ @return "32-bit hash value"
+*>
+fn uint SocketAddress.hash(&self) @public
+{
+    // FNV-1a hash constants
+    const uint FNV_OFFSET_BASIS = 2166136261u;
+    const uint FNV_PRIME = 16777619u;
+
+    uint hash = FNV_OFFSET_BASIS;
+
+    // Hash the address bytes
+    if (self.addr.is_ipv6)
+    {
+        // IPv6: Hash all 16 bytes
+        char* bytes = (char*)&self.addr.ipv6;
+        for (usz i = 0; i < IPV6_ADDR_SIZE; i++)
+        {
+            hash ^= (uint)bytes[i];
+            hash *= FNV_PRIME;
+        }
+    }
+    else
+    {
+        // IPv4: Hash 4 bytes
+        hash ^= (uint)self.addr.ipv4.a;
+        hash *= FNV_PRIME;
+        hash ^= (uint)self.addr.ipv4.b;
+        hash *= FNV_PRIME;
+        hash ^= (uint)self.addr.ipv4.c;
+        hash *= FNV_PRIME;
+        hash ^= (uint)self.addr.ipv4.d;
+        hash *= FNV_PRIME;
+    }
+
+    // Hash the port (big-endian)
+    hash ^= (uint)(self.port >> 8);
+    hash *= FNV_PRIME;
+    hash ^= (uint)(self.port & 0xFF);
+    hash *= FNV_PRIME;
+
+    return hash;
+}
+
+<*
+ Equality operator overload for SocketAddress (C3 0.7.1+).
+ Allows natural comparison syntax: addr1 == addr2
+
+ @param self : "First socket address"
+ @param other : "Second socket address"
+ @return "true if addresses and ports match"
+*>
+fn bool SocketAddress.equals(&self, SocketAddress other) @operator(==) @public
+{
+    // Different IP versions can't be equal
+    if (self.addr.is_ipv6 != other.addr.is_ipv6) return false;
+
+    // Ports must match
+    if (self.port != other.port) return false;
+
+    // Compare address bytes
+    if (self.addr.is_ipv6)
+    {
+        // IPv6: Compare all 16 bytes
+        char* a = (char*)&self.addr.ipv6;
+        char* b = (char*)&other.addr.ipv6;
+        for (usz i = 0; i < IPV6_ADDR_SIZE; i++)
+        {
+            if (a[i] != b[i]) return false;
+        }
+    }
+    else
+    {
+        // IPv4: Compare 4 bytes
+        if (self.addr.ipv4.a != other.addr.ipv4.a) return false;
+        if (self.addr.ipv4.b != other.addr.ipv4.b) return false;
+        if (self.addr.ipv4.c != other.addr.ipv4.c) return false;
+        if (self.addr.ipv4.d != other.addr.ipv4.d) return false;
+    }
+
+    return true;
+}
+
+<*
  Parse a socket address from compact IPv4 format (BEP 3).
  Compact format: 4 bytes (IP) + 2 bytes (port), both big-endian.
 

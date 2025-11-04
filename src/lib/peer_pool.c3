@@ -12,6 +12,7 @@ import libtorrent::logger;
 import std::io;
 import std::time;
 import std::sort;
+import std::collections::map;
 
 <*
  Peer Pool - Async Peer Management
@@ -22,15 +23,21 @@ import std::sort;
  This module implements a per-torrent peer manager that:
  - Stores discovered peers (up to max_peerlist_size, default 1000)
  - Manages active connections (up to max_active_connections, default 25)
- - Deduplicates peers by IP:port
+ - Deduplicates peers by IP:port using HashMap (O(1) operations)
  - Ranks peers by quality
  - Automatically retries/bans peers based on failures
 
- Phase 1: Core Storage & Discovery
- - Basic peer storage with sorted array
- - Deduplication by IP:port
- - Capacity management
- - Find and erase operations
+ Implementation Details:
+ - Uses HashMap{SocketAddress, TorrentPeer*} for O(1) peer operations
+ - Automatic deduplication via SocketAddress.hash() and equals()
+ - Candidate cache maintains sorted array for connection prioritization
+ - All iterations use HashMap @each macro for safe enumeration
+
+ Performance Characteristics:
+ - Peer lookup: O(1) vs O(log n) with sorted array
+ - Peer insertion: O(1) vs O(n) with sorted array
+ - Peer removal: O(1) vs O(n) with sorted array
+ - Candidate ranking: O(n log n) sorting maintained separately
 *>
 
 // Faults
@@ -208,9 +215,8 @@ struct PeerPool
     PeerPoolConfig config;        // Configuration
 
     // Storage
-    // Note: C3 doesn't have HashMap yet, so we use sorted array for O(log n) lookups
-    // Sorted by IP:port for binary search
-    TorrentPeer*[] peers;         // Main peer list (sorted by IP:port)
+    // HashMap provides O(1) deduplication, insertion, lookup, and deletion
+    HashMap{common::SocketAddress, TorrentPeer*} peers;  // Main peer storage (deduplicated)
 
     // Phase 2: Candidate selection (sorted by rank, highest first)
     TorrentPeer*[] candidate_cache;  // Ready-to-connect peers (sorted by rank descending)
@@ -230,90 +236,6 @@ struct PeerPool
     PeerDisconnectedCallback on_disconnected; // Called when peer disconnects
     peer_connection::MetadataCallback on_metadata; // Called when metadata message received (BEP 9)
     void* user_data;              // User data passed to callbacks
-}
-
-<*
- Compare two peers by IP:port for sorting.
- Returns: <0 if a < b, 0 if a == b, >0 if a > b
-*>
-fn int compare_peers(TorrentPeer* a, TorrentPeer* b)
-{
-    // BEP 7: Dual-stack comparison (IPv4 vs IPv6)
-    // First compare by address family (IPv4 < IPv6)
-    // is_ipv6 is bool: false=0 (IPv4), true=1 (IPv6)
-    if (a.addr.addr.is_ipv6 != b.addr.addr.is_ipv6)
-    {
-        return (int)a.addr.addr.is_ipv6 - (int)b.addr.addr.is_ipv6;
-    }
-
-    // Same address family - compare address bytes
-    if (!a.addr.addr.is_ipv6)
-    {
-        // Compare IPv4 addresses (4 bytes: a, b, c, d)
-        if (a.addr.addr.ipv4.a != b.addr.addr.ipv4.a) return (int)a.addr.addr.ipv4.a - (int)b.addr.addr.ipv4.a;
-        if (a.addr.addr.ipv4.b != b.addr.addr.ipv4.b) return (int)a.addr.addr.ipv4.b - (int)b.addr.addr.ipv4.b;
-        if (a.addr.addr.ipv4.c != b.addr.addr.ipv4.c) return (int)a.addr.addr.ipv4.c - (int)b.addr.addr.ipv4.c;
-        if (a.addr.addr.ipv4.d != b.addr.addr.ipv4.d) return (int)a.addr.addr.ipv4.d - (int)b.addr.addr.ipv4.d;
-    }
-    else
-    {
-        // Compare IPv6 addresses (16 bytes)
-        // Access raw bytes through pointer cast
-        char* a_bytes = (char*)&a.addr.addr.ipv6;
-        char* b_bytes = (char*)&b.addr.addr.ipv6;
-        for (usz i = 0; i < common::IPV6_ADDR_SIZE; i++)
-        {
-            if (a_bytes[i] != b_bytes[i])
-            {
-                return (int)a_bytes[i] - (int)b_bytes[i];
-            }
-        }
-    }
-
-    // Address is equal, compare port
-    return (int)a.addr.port - (int)b.addr.port;
-}
-
-<*
- Find peer index using binary search (BEP 7: dual-stack).
- Returns index if found, otherwise returns the insertion point (as negative).
-*>
-fn isz find_peer_index(PeerPool* pool, common::SocketAddress* addr)
-{
-    if (pool.peers.len == 0)
-    {
-        return -1; // Insert at index 0
-    }
-
-    // Create temporary peer for comparison
-    TorrentPeer temp;
-    temp.addr = *addr;
-
-    // Binary search
-    isz left = 0;
-    isz right = (isz)pool.peers.len - 1;
-
-    while (left <= right)
-    {
-        isz mid = left + (right - left) / 2;
-        int cmp = compare_peers(&temp, pool.peers[mid]);
-
-        if (cmp == 0)
-        {
-            return mid; // Found
-        }
-        else if (cmp < 0)
-        {
-            right = mid - 1;
-        }
-        else
-        {
-            left = mid + 1;
-        }
-    }
-
-    // Not found, return insertion point as negative
-    return -(left + 1);
 }
 
 <*
@@ -403,8 +325,8 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     pool.our_peer_id[..] = (*our_peer_id)[..];
     pool.is_private = is_private;
 
-    // Initialize empty peer list
-    pool.peers = {};
+    // Initialize HashMap for O(1) peer operations
+    pool.peers.init(mem);
 
     // Initialize empty candidate cache (Phase 2)
     pool.candidate_cache = {};
@@ -439,22 +361,19 @@ fn void PeerPool.free(&self) @public
     // Disconnect all active connections (Phase 3)
     self.disconnect_all();
 
-    // Free all peer structures
-    for (usz i = 0; i < self.peers.len; i++)
+    // Free all peer structures from HashMap
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
         // Free bitfield if allocated
-        if (self.peers[i].pieces.data.len > 0)
+        if (peer.pieces.data.len > 0)
         {
-            self.peers[i].pieces.free();
+            peer.pieces.free();
         }
-        std::core::mem::free(self.peers[i]);
-    }
+        std::core::mem::free(peer);
+    };
 
-    // Free peer array
-    if (self.peers.len > 0)
-    {
-        std::core::mem::free(self.peers);
-    }
+    // Free HashMap itself
+    self.peers.free();
 
     // Free candidate cache (Phase 2)
     // Note: candidate_cache contains pointers to same peers, so don't free the peers again
@@ -486,18 +405,18 @@ fn void PeerPool.update_candidate_cache(&self) @public
         self.candidate_cache = {};
     }
 
-    // Count eligible candidates
+    // Count eligible candidates using HashMap iteration
     usz eligible_count = 0;
-    for (usz i = 0; i < self.peers.len; i++)
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        PeerState state = self.peers[i].state;
+        PeerState state = peer.state;
         // Only DISCOVERED and DISCONNECTED peers are eligible for new connections
         // (CONNECTING, CONNECTED, and BANNED are not)
         if (state == PeerState.DISCOVERED || state == PeerState.DISCONNECTED)
         {
             eligible_count++;
         }
-    }
+    };
 
     if (eligible_count == 0)
     {
@@ -509,19 +428,19 @@ fn void PeerPool.update_candidate_cache(&self) @public
 
     // Populate cache with eligible peers and update ranks
     usz cache_index = 0;
-    for (usz i = 0; i < self.peers.len; i++)
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        PeerState state = self.peers[i].state;
+        PeerState state = peer.state;
         if (state == PeerState.DISCOVERED || state == PeerState.DISCONNECTED)
         {
             // Update peer rank
-            self.peers[i].peer_rank = calculate_peer_rank(self, self.peers[i]);
+            peer.peer_rank = calculate_peer_rank(self, peer);
 
             // Add to cache
-            self.candidate_cache[cache_index] = self.peers[i];
+            self.candidate_cache[cache_index] = peer;
             cache_index++;
         }
-    }
+    };
 
     // Sort cache by rank (highest first) using quicksort (O(n log n))
     sort::quicksort(self.candidate_cache, &compare_peers_by_rank);
@@ -588,14 +507,14 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
 
     // Find which peer this connection belongs to
     TorrentPeer* peer_info = null;
-    for (usz i = 0; i < pool.peers.len; i++)
+    pool.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        if (pool.peers[i].connection == conn)
+        if (peer.connection == conn)
         {
-            peer_info = pool.peers[i];
-            break;
+            peer_info = peer;
+            return; // Exit @each early
         }
-    }
+    };
 
     if (!peer_info) return;
 
@@ -688,14 +607,14 @@ fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
 
     // Find which peer this connection belongs to
     TorrentPeer* peer_info = null;
-    for (usz i = 0; i < pool.peers.len; i++)
+    pool.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        if (pool.peers[i].connection == conn)
+        if (peer.connection == conn)
         {
-            peer_info = pool.peers[i];
-            break;
+            peer_info = peer;
+            return; // Exit @each early
         }
-    }
+    };
 
     if (!peer_info) return;
 
@@ -758,78 +677,58 @@ fn void PeerPool.set_callbacks(&self,
 *>
 fn void PeerPool.add_peer(&self, common::SocketAddress* addr, common::PeerSource source, char pex_flags = 0) @public
 {
-    // Check if peer already exists
-    isz idx = find_peer_index(self, addr);
-    if (idx >= 0)
+    // O(1) HashMap lookup to check if peer already exists
+    TorrentPeer**? existing_ref = self.peers.get_ref(*addr);
+
+    if (catch excuse = existing_ref)
     {
-        // Already exists, prioritize TRACKER source over others
-        if (source == common::PeerSource.TRACKER && self.peers[idx].source != common::PeerSource.TRACKER)
+        // Peer doesn't exist - add new peer
+
+        // Check capacity
+        if (self.peers.len() >= self.config.max_peerlist_size)
         {
-            self.peers[idx].source = common::PeerSource.TRACKER;
+            // TODO: Enforce limit by removing lowest-ranked peer
+            // For now, just don't add
+            return;
         }
-        return;
-    }
 
-    // Check capacity
-    if (self.peers.len >= self.config.max_peerlist_size)
+        // Create new peer
+        TorrentPeer* peer = mem::new(TorrentPeer);
+        peer.addr = *addr;
+        peer.connection = null;
+        peer.state = PeerState.DISCOVERED;
+        peer.prev_amount_download = 0;
+        peer.prev_amount_upload = 0;
+        peer.hashfails = 0;
+        peer.failcount = 0;
+        peer.last_connected = 0;
+        peer.seed = false;
+        peer.optimistically_unchoked = false;
+        peer.handshake_ok = false;
+        peer.received_bitfield = false;
+        peer.source = source;
+
+        // Initialize peer_id to zeros
+        peer.peer_id = {};
+
+        // Initialize empty bitfield (will be set when we receive BITFIELD message)
+        peer.pieces = {};
+
+        // Calculate initial rank (Phase 2)
+        peer.peer_rank = calculate_peer_rank(self, peer);
+
+        // O(1) HashMap insertion (no array allocation or copying needed!)
+        self.peers.set(*addr, peer);
+    }
+    else
     {
-        // TODO: Enforce limit by removing lowest-ranked peer
-        // For now, just don't add
-        return;
+        // Peer already exists - prioritize TRACKER source over others
+        TorrentPeer* existing_peer = *existing_ref;
+        if (source == common::PeerSource.TRACKER && existing_peer.source != common::PeerSource.TRACKER)
+        {
+            existing_peer.source = common::PeerSource.TRACKER;
+        }
     }
-
-    // Create new peer
-    TorrentPeer* peer = mem::new(TorrentPeer);
-    peer.addr = *addr;
-    peer.connection = null;
-    peer.state = PeerState.DISCOVERED;
-    peer.prev_amount_download = 0;
-    peer.prev_amount_upload = 0;
-    peer.hashfails = 0;
-    peer.failcount = 0;
-    peer.last_connected = 0;
-    peer.seed = false;
-    peer.optimistically_unchoked = false;
-    peer.handshake_ok = false;
-    peer.received_bitfield = false;
-    peer.source = source;
-
-    // Initialize peer_id to zeros
-    peer.peer_id = {};
-
-    // Initialize empty bitfield (will be set when we receive BITFIELD message)
-    peer.pieces = {};
-
-    // Calculate initial rank (Phase 2)
-    peer.peer_rank = calculate_peer_rank(self, peer);
-
-    // Insert at correct position to maintain sort order
-    isz insert_pos = -(idx + 1);  // Convert negative index to insertion point
-
-    // Allocate new array with space for one more peer
-    TorrentPeer*[] new_peers = mem::new_array(TorrentPeer*, self.peers.len + 1);
-
-    // Copy peers before insertion point
-    for (usz i = 0; i < (usz)insert_pos; i++)
-    {
-        new_peers[i] = self.peers[i];
-    }
-
-    // Insert new peer
-    new_peers[insert_pos] = peer;
-
-    // Copy peers after insertion point
-    for (usz i = (usz)insert_pos; i < self.peers.len; i++)
-    {
-        new_peers[i + 1] = self.peers[i];
-    }
-
-    // Replace old array
-    if (self.peers.len > 0)
-    {
-        std::core::mem::free(self.peers);
-    }
-    self.peers = new_peers;
 }
 
 <*
@@ -883,12 +782,13 @@ fn void PeerPool.add_peers_from_dht(&self, common::SocketAddress[] peers) @publi
 *>
 fn TorrentPeer*? PeerPool.find_peer(&self, common::SocketAddress* addr) @public
 {
-    isz idx = find_peer_index(self, addr);
-    if (idx < 0)
+    // O(1) HashMap lookup
+    TorrentPeer**? peer_ref = self.peers.get_ref(*addr);
+    if (catch excuse = peer_ref)
     {
         return PEER_NOT_FOUND?;
     }
-    return self.peers[idx];
+    return *peer_ref;
 }
 
 <*
@@ -900,48 +800,20 @@ fn void PeerPool.erase_peer(&self, TorrentPeer* peer) @public
 {
     if (!peer) return;
 
-    // Find peer index
-    isz idx = find_peer_index(self, &peer.addr);
-    if (idx < 0)
-    {
-        return; // Not found
-    }
+    // Save address before freeing (needed for HashMap removal)
+    common::SocketAddress addr = peer.addr;
 
     // Free bitfield if allocated
-    if (self.peers[idx].pieces.data.len > 0)
+    if (peer.pieces.data.len > 0)
     {
-        self.peers[idx].pieces.free();
+        peer.pieces.free();
     }
 
     // Free the peer structure
-    std::core::mem::free(self.peers[idx]);
+    std::core::mem::free(peer);
 
-    // If this is the only peer, just clear the array
-    if (self.peers.len == 1)
-    {
-        std::core::mem::free(self.peers);
-        self.peers = {};
-        return;
-    }
-
-    // Allocate new array with one less peer
-    TorrentPeer*[] new_peers = mem::new_array(TorrentPeer*, self.peers.len - 1);
-
-    // Copy peers before erased peer
-    for (usz i = 0; i < (usz)idx; i++)
-    {
-        new_peers[i] = self.peers[i];
-    }
-
-    // Copy peers after erased peer
-    for (usz i = (usz)idx + 1; i < self.peers.len; i++)
-    {
-        new_peers[i - 1] = self.peers[i];
-    }
-
-    // Replace old array
-    std::core::mem::free(self.peers);
-    self.peers = new_peers;
+    // O(1) HashMap removal (no array allocation or copying needed!)
+    self.peers.remove(addr);
 }
 
 <*
@@ -958,14 +830,15 @@ fn void PeerPool.get_stats(&self,
                             usz* connecting,
                             usz* connected) @public
 {
-    *total_peers = self.peers.len;
+    *total_peers = self.peers.len();
     *candidates = 0;
     *connecting = 0;
     *connected = 0;
 
-    for (usz i = 0; i < self.peers.len; i++)
+    // Iterate HashMap with @each macro
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        switch (self.peers[i].state)
+        switch (peer.state)
         {
             case PeerState.CANDIDATE:
                 (*candidates)++;
@@ -976,7 +849,7 @@ fn void PeerPool.get_stats(&self,
             default:
                 // Count DISCOVERED, DISCONNECTED, BANNED in total only
         }
-    }
+    };
 }
 
 // ===== Phase 3: Async Connection Management =====
@@ -1023,15 +896,16 @@ fn void PeerPool.disconnect_peer(&self, common::SocketAddress* addr) @public
 *>
 fn void PeerPool.disconnect_all(&self) @public
 {
-    for (usz i = 0; i < self.peers.len; i++)
+    // Iterate HashMap with @each macro
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        if (self.peers[i].connection)
+        if (peer.connection)
         {
-            self.peers[i].connection.close();
-            self.peers[i].connection = null;
-            self.peers[i].state = PeerState.DISCONNECTED;
+            peer.connection.close();
+            peer.connection = null;
+            peer.state = PeerState.DISCONNECTED;
         }
-    }
+    };
 
     self.num_active_connections = 0;
 
@@ -1049,10 +923,10 @@ fn void PeerPool.disconnect_all_gracefully(&self) @public
 {
     // Count peers for logging
     usz connected_count = 0;
-    for (usz i = 0; i < self.peers.len; i++)
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        if (self.peers[i].connection) connected_count++;
-    }
+        if (peer.connection) connected_count++;
+    };
 
     if (connected_count > 0)
     {
@@ -1062,15 +936,15 @@ fn void PeerPool.disconnect_all_gracefully(&self) @public
     }
 
     // Gracefully disconnect each peer
-    for (usz i = 0; i < self.peers.len; i++)
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        if (self.peers[i].connection)
+        if (peer.connection)
         {
-            self.peers[i].connection.graceful_close();
-            self.peers[i].connection = null;
-            self.peers[i].state = PeerState.DISCONNECTED;
+            peer.connection.graceful_close();
+            peer.connection = null;
+            peer.state = PeerState.DISCONNECTED;
         }
-    }
+    };
 
     self.num_active_connections = 0;
 
@@ -1230,14 +1104,12 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
 
     // Broadcast to all connected peers that support PEX
     usz notified_count = 0;
-    for (usz i = 0; i < pool.peers.len; i++)
+    pool.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        TorrentPeer* peer = pool.peers[i];
-
         // Skip if not connected or no connection object
         if (peer.state != PeerState.CONNECTED || !peer.connection)
         {
-            continue;
+            return; // Continue to next peer
         }
 
         // Don't broadcast a peer to itself (BEP 7: check IPv4 peers only, PEX is IPv4-only)
@@ -1246,7 +1118,7 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
             peer.addr.addr.ipv4.c == ip[2] && peer.addr.addr.ipv4.d == ip[3] &&
             peer.addr.port == port)
         {
-            continue;
+            return; // Continue to next peer
         }
 
         // Queue the PEX update for this peer
@@ -1259,7 +1131,7 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
             peer.connection.drop_pex_peer(ip, port);
         }
         notified_count++;
-    }
+    };
 
     if (notified_count > 0)
     {
@@ -1278,17 +1150,15 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
 *>
 fn void PeerPool.send_pex_updates(&self) @public
 {
-    for (usz i = 0; i < self.peers.len; i++)
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        TorrentPeer* peer = self.peers[i];
-
         if (peer.state == PeerState.CONNECTED && peer.connection)
         {
             // send_pex_message handles rate limiting internally
             // Ignore any errors (peer may have disconnected, etc.)
             (void)peer.connection.send_pex_message();
         }
-    }
+    };
 }
 
 <*
@@ -1301,16 +1171,14 @@ fn void PeerPool.send_pex_updates(&self) @public
 *>
 fn void PeerPool.send_keepalives(&self) @public
 {
-    for (usz i = 0; i < self.peers.len; i++)
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        TorrentPeer* peer = self.peers[i];
-
         if (peer.state == PeerState.CONNECTED && peer.connection)
         {
             // Ignore any errors (peer may have disconnected, etc.)
             (void)peer.connection.send_keepalive();
         }
-    }
+    };
 }
 
 <*
@@ -1747,7 +1615,7 @@ fn PeerDisplayInfo build_display_info(TorrentPeer* peer)
 fn PeerDisplayInfo[] PeerPool.get_peer_display_info_filtered(&self, PeerFilter* filter,
                                                                PeerSortOrder sort_order) @public => @pool()
 {
-    if (self.peers.len == 0)
+    if (self.peers.len() == 0)
     {
         PeerDisplayInfo[] empty;
         return empty;
@@ -1755,17 +1623,17 @@ fn PeerDisplayInfo[] PeerPool.get_peer_display_info_filtered(&self, PeerFilter* 
 
     // First pass: filter peers and build array of pointers
     // Use temp allocator since this is short-lived
-    TorrentPeer*[] filtered_peers = mem::temp_array(TorrentPeer*, self.peers.len);
+    TorrentPeer*[] filtered_peers = mem::temp_array(TorrentPeer*, self.peers.len());
 
     usz filtered_count = 0;
-    for (usz i = 0; i < self.peers.len; i++)
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        if (peer_passes_filter(self.peers[i], filter))
+        if (peer_passes_filter(peer, filter))
         {
-            filtered_peers[filtered_count] = self.peers[i];
+            filtered_peers[filtered_count] = peer;
             filtered_count++;
         }
-    }
+    };
 
     if (filtered_count == 0)
     {

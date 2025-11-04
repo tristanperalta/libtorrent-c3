@@ -401,14 +401,18 @@ fn void test_sorted_order() @test
     pool.add_peer(&addr4, common::PeerSource.TRACKER);
     pool.add_peer(&addr5, common::PeerSource.TRACKER);
 
-    // Verify they're stored in sorted order
-    // 10.0.0.1:6881 < 192.168.1.1:6881 < 192.168.1.2:6882 < 192.168.1.3:6883 < 192.168.1.5:6885
+    // Verify all peers were added (HashMap doesn't maintain sorted order)
+    // Instead, we verify that all peers can be found by address
+    usz total, candidates, connecting, connected;
+    pool.get_stats(&total, &candidates, &connecting, &connected);
+    assert(total == 5, "Should have 5 peers total");
 
-    assert(pool.peers[0].addr.addr.ipv4.a == 10, "First peer should be 10.x.x.x");
-    assert(pool.peers[1].addr.addr.ipv4.d == 1 && pool.peers[1].addr.port == 6881, "Second peer should be 192.168.1.1:6881");
-    assert(pool.peers[2].addr.addr.ipv4.d == 2 && pool.peers[2].addr.port == 6882, "Third peer should be 192.168.1.2:6882");
-    assert(pool.peers[3].addr.addr.ipv4.d == 3 && pool.peers[3].addr.port == 6883, "Fourth peer should be 192.168.1.3:6883");
-    assert(pool.peers[4].addr.addr.ipv4.d == 5 && pool.peers[4].addr.port == 6885, "Fifth peer should be 192.168.1.5:6885");
+    // Verify each peer can be found using @ok() builtin
+    assert(@ok(pool.find_peer(&addr1)), "Should find peer 192.168.1.5:6885");
+    assert(@ok(pool.find_peer(&addr2)), "Should find peer 192.168.1.1:6881");
+    assert(@ok(pool.find_peer(&addr3)), "Should find peer 192.168.1.3:6883");
+    assert(@ok(pool.find_peer(&addr4)), "Should find peer 10.0.0.1:6881");
+    assert(@ok(pool.find_peer(&addr5)), "Should find peer 192.168.1.2:6882");
 }
 
 // ===== Phase 2 Tests: Peer Ranking & Candidate Selection =====

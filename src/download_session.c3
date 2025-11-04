@@ -330,14 +330,13 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
         // Mark all peers who sent blocks for this piece as having hash failure
         // TODO: Track which specific peer sent which block (requires per-block tracking)
         // For now, we penalize all connected peers slightly
-        for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
+        ctx.peer_pool.peers.@each(; common::SocketAddress addr, peer_pool::TorrentPeer* peer_info)
         {
-            peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
             if (peer_info.state == peer_pool::PeerState.CONNECTED)
             {
                 ctx.peer_pool.mark_hash_failure(&peer_info.addr)!!;
             }
-        }
+        };
 
         // Mark piece as failed for retry
         ctx.dm.fail_piece(piece_index)!!;
@@ -424,9 +423,8 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
 
     // Start downloading more pieces from available peers
     // Use actual peer bitfields to start new piece downloads
-    for (usz i = 0; i < ctx.peer_pool.peers.len; i++)
+    ctx.peer_pool.peers.@each(; common::SocketAddress addr, peer_pool::TorrentPeer* peer_info)
     {
-        peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
         if (peer_info.state == peer_pool::PeerState.CONNECTED && peer_info.handshake_ok)
         {
             // Convert peer's Bitfield to bool[] for piece picker
@@ -442,14 +440,14 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
             if (catch excuse = ctx.dm.start_piece_download(peer_pieces))
             {
                 // No more slots available or no pieces this peer has that we need
-                break;
+                return; // Exit @each early (was break)
             }
             else
             {
                 // Successfully started a new piece - try to fill more slots
             }
         }
-    }
+    };
 
     // Continue requesting blocks
     request_blocks_from_peers(ctx);
