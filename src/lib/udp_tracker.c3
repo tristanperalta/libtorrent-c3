@@ -135,7 +135,7 @@ struct AnnounceResponse {
     int interval;
     int leechers;
     int seeders;
-    common::Peer[] peers_data;
+    // Note: Peer data is parsed separately from raw bytes
 }
 
 struct ErrorResponse {
@@ -564,7 +564,8 @@ fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Soc
     ctx.announce_response[..] = data[..];
 
     // Parse announce response
-    udp_tracker::AnnounceResponse? response = udp_tracker::unpack_announce_response(ctx.announce_response, (char[]*)&ctx.result.peers);
+    char[] raw_peers;
+    udp_tracker::AnnounceResponse? response = udp_tracker::unpack_announce_response(ctx.announce_response, &raw_peers);
 
     if (catch err = response)
     {
@@ -581,6 +582,16 @@ fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Soc
         ctx.error = ASYNC_ERROR_INVALID_RESPONSE;
         cleanup_and_callback(ctx);
         return;
+    }
+
+    // Parse compact peer data into SocketAddress[]
+    if (catch err = tracker::parse_compact_peers(raw_peers))
+    {
+        ctx.result.peers = {};  // Empty array on parse error
+    }
+    else
+    {
+        ctx.result.peers = tracker::parse_compact_peers(raw_peers)!!;
     }
 
     // Success - convert to TrackerResponse

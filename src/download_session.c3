@@ -335,7 +335,7 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
             peer_pool::TorrentPeer* peer_info = ctx.peer_pool.peers[i];
             if (peer_info.state == peer_pool::PeerState.CONNECTED)
             {
-                ctx.peer_pool.mark_hash_failure(peer_info.ip, peer_info.port)!!;
+                ctx.peer_pool.mark_hash_failure(&peer_info.addr)!!;
             }
         }
 
@@ -464,10 +464,10 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
  */
 fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                                   peer_wire::Message* msg,
-                                  common::Ipv4Addr ip, ushort port,
+                                  common::SocketAddress* addr,
                                   void* user_data) @public
 {
-    session_message_handler::handle_peer_message(peer, msg, ip, port, user_data);
+    session_message_handler::handle_peer_message(peer, msg, addr, user_data);
 }
 
 /**
@@ -483,16 +483,16 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
  Callback when peer successfully connects.
 *>
 fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
-                                    common::Ipv4Addr ip, ushort port,
+                                    common::SocketAddress* addr,
                                     void* user_data) @public
 {
     download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
 
-    io::printfn("  Peer %d.%d.%d.%d:%d connected and ready",
-                ip[0], ip[1], ip[2], ip[3], port);
+    // Peer connected and ready (BEP 7: dual-stack)
+    io::printfn("  Peer %s connected and ready", addr);
 
     // Get peer from pool
-    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(ip, port);
+    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(addr);
     if (catch err = peer_opt) return;
 
     peer_pool::TorrentPeer* peer_info = peer_opt;
@@ -505,35 +505,39 @@ fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
         usz num_pieces = (usz)((ctx.torrent.info.length + ctx.torrent.info.piece_length - 1) /
                                ctx.torrent.info.piece_length);
 
-        uint[] allowed_fast = fast_extension::generate_default_allowed_fast_set(
-            ip, ctx.torrent.info_hash, (uint)num_pieces);
-        defer free(allowed_fast);
-
-        // Send ALLOWED_FAST message for each piece
-        foreach (piece_index : allowed_fast)
+        // BEP 6 requires IPv4 address for allowed_fast calculation
+        // For IPv6 peers, we skip allowed_fast (BEP 6 doesn't define IPv6 behavior)
+        if (!addr.addr.is_ipv6)
         {
-            if (catch excuse = peer.send_allowed_fast(piece_index))
+            common::Ipv4Addr ipv4_bytes = addr.to_ipv4_bytes();
+            uint[] allowed_fast = fast_extension::generate_default_allowed_fast_set(
+                ipv4_bytes, ctx.torrent.info_hash, (uint)num_pieces);
+            defer free(allowed_fast);
+
+            // Send ALLOWED_FAST message for each piece
+            foreach (piece_index : allowed_fast)
             {
-                // Failed to send, but continue with others
+                if (catch excuse = peer.send_allowed_fast(piece_index))
+                {
+                    // Failed to send, but continue with others
+                }
             }
-        }
 
-        // Store the allowed_fast set we sent to this peer
-        peer_info.connection.peer_allowed_fast.free();
-        peer_info.connection.peer_allowed_fast.init(mem);
-        foreach (piece_index : allowed_fast)
-        {
-            peer_info.connection.peer_allowed_fast.push(piece_index);
-        }
+            // Store the allowed_fast set we sent to this peer
+            peer_info.connection.peer_allowed_fast.free();
+            peer_info.connection.peer_allowed_fast.init(mem);
+            foreach (piece_index : allowed_fast)
+            {
+                peer_info.connection.peer_allowed_fast.push(piece_index);
+            }
 
-        io::printfn("  Sent %d ALLOWED_FAST pieces to peer %d.%d.%d.%d:%d",
-                    allowed_fast.len, ip[0], ip[1], ip[2], ip[3], port);
+            io::printfn("  Sent %d ALLOWED_FAST pieces to peer %s", allowed_fast.len, addr);
+        }
     }
 
     // Send INTERESTED message to the peer
     peer.send_interested()!!;
-    io::printfn("  Sent INTERESTED to peer %d.%d.%d.%d:%d",
-                ip[0], ip[1], ip[2], ip[3], port);
+    io::printfn("  Sent INTERESTED to peer %s", addr);
 
     // DON'T start piece downloads yet - wait for BITFIELD first
     // The BITFIELD message handler will start downloads
@@ -542,14 +546,15 @@ fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
 <*
  Callback when peer disconnects.
 *>
-fn void on_download_peer_disconnected(common::Ipv4Addr ip, ushort port,
+fn void on_download_peer_disconnected(common::SocketAddress* addr,
                                        bool was_error,
                                        void* user_data) @public
 {
     download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
 
-    io::printfn("  Peer %d.%d.%d.%d:%d disconnected%s",
-                ip[0], ip[1], ip[2], ip[3], port,
+    // Peer disconnected (BEP 7: dual-stack)
+    io::printfn("  Peer %s disconnected%s",
+                addr,
                 was_error ? " (error)" : "");
 
     // Peer pool automatically tries to replace failed connections
@@ -644,7 +649,7 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
     );
     ctx.event_bus.publish(event_types::EVENT_TRACKER_ANNOUNCE_SUCCESS, &tracker_evt, event_types::TrackerEvent.sizeof);
 
-    // Add all peers to peer pool
+    // Add all peers to peer pool (already SocketAddress[] from tracker)
     ctx.peer_pool.add_peers_from_tracker(response.peers);
 
     // Show peer pool stats
@@ -1361,8 +1366,8 @@ fn void on_dht_peers_found(download_session::DownloadContext* ctx) @public
 {
     if (!ctx.dht_search) return;
 
-    // Get discovered peers from DHT
-    common::Peer[] dht_peers = ctx.dht_search.get_peers();
+    // Get discovered peers from DHT (already SocketAddress[])
+    common::SocketAddress[] dht_peers = ctx.dht_search.get_peers();
     defer free(dht_peers);
 
     if (dht_peers.len == 0)
@@ -1372,8 +1377,6 @@ fn void on_dht_peers_found(download_session::DownloadContext* ctx) @public
     }
 
     io::printfn("[DHT] Found %d peers", dht_peers.len);
-
-    // Add DHT peers to peer pool
     ctx.peer_pool.add_peers_from_dht(dht_peers);
 
     // Show updated peer pool stats

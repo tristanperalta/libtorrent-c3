@@ -118,27 +118,27 @@ fn void test_parse_compact_peers() @test {
         10,  0,   0, 1,   0xC8, 0xD5   // 10.0.0.1:51413 (0xC8D5 = 51413)
     };
 
-    common::Peer[]? peers_opt = tracker::parse_compact_peers(peer_data);
+    common::SocketAddress[]? peers_opt = tracker::parse_compact_peers(peer_data);
     if (catch excuse = peers_opt) {
         assert(false, "Should parse valid peer data");
         return;
     }
 
-    common::Peer[] peers = peers_opt;
+    common::SocketAddress[] peers = peers_opt;
     assert(peers.len == 2, "Should parse 2 peers");
 
     // Check first peer
-    assert(peers[0].ip[0] == (char)192, "First peer IP byte 0 should be 192");
-    assert(peers[0].ip[1] == (char)168, "First peer IP byte 1 should be 168");
-    assert(peers[0].ip[2] == (char)1, "First peer IP byte 2 should be 1");
-    assert(peers[0].ip[3] == (char)1, "First peer IP byte 3 should be 1");
+    assert(peers[0].addr.ipv4.a == (char)192, "First peer IP byte 0 should be 192");
+    assert(peers[0].addr.ipv4.b == (char)168, "First peer IP byte 1 should be 168");
+    assert(peers[0].addr.ipv4.c == (char)1, "First peer IP byte 2 should be 1");
+    assert(peers[0].addr.ipv4.d == (char)1, "First peer IP byte 3 should be 1");
     assert(peers[0].port == 6881, "First peer port should be 6881");
 
     // Check second peer
-    assert(peers[1].ip[0] == (char)10, "Second peer IP byte 0 should be 10");
-    assert(peers[1].ip[1] == (char)0, "Second peer IP byte 1 should be 0");
-    assert(peers[1].ip[2] == (char)0, "Second peer IP byte 2 should be 0");
-    assert(peers[1].ip[3] == (char)1, "Second peer IP byte 3 should be 1");
+    assert(peers[1].addr.ipv4.a == (char)10, "Second peer IP byte 0 should be 10");
+    assert(peers[1].addr.ipv4.b == (char)0, "Second peer IP byte 1 should be 0");
+    assert(peers[1].addr.ipv4.c == (char)0, "Second peer IP byte 2 should be 0");
+    assert(peers[1].addr.ipv4.d == (char)1, "Second peer IP byte 3 should be 1");
     assert(peers[1].port == 51413, "Second peer port should be 51413");
 
     free(peers);
@@ -152,7 +152,7 @@ fn void test_parse_compact_peers_invalid_length() @test {
     // Invalid: 7 bytes (not divisible by 6)
     char[] peer_data = { 192, 168, 1, 1, 0x1A, 0xE1, 0xFF };
 
-    common::Peer[]? peers = tracker::parse_compact_peers(peer_data);
+    common::SocketAddress[]? peers = tracker::parse_compact_peers(peer_data);
     if (catch excuse = peers) {
         // Expected failure - test passes
     } else {
@@ -167,13 +167,13 @@ fn void test_parse_compact_peers_invalid_length() @test {
 fn void test_parse_compact_peers_empty() @test {
     char[] empty;
 
-    common::Peer[]? peers_opt = tracker::parse_compact_peers(empty);
+    common::SocketAddress[]? peers_opt = tracker::parse_compact_peers(empty);
     if (catch excuse = peers_opt) {
         assert(false, "Should handle empty data");
         return;
     }
 
-    common::Peer[] peers = peers_opt;
+    common::SocketAddress[] peers = peers_opt;
     assert(peers.len == 0, "Should return empty array");
 }
 
@@ -211,7 +211,10 @@ fn void test_parse_tracker_response_success() @test {
     assert(result.peers.len == 2, "Should have 2 peers");
     assert(result.failure_reason.len == 0, "Should have no failure reason");
 
+    // Free allocated memory
     free(result.peers);
+    if (result.failure_reason.len > 0) free(result.failure_reason);
+    if (result.warning_message.len > 0) free(result.warning_message);
 }
 
 <*

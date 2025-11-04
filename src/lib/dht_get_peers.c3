@@ -47,13 +47,13 @@ struct AnnounceToken
  */
 struct GetPeersSearch
 {
-    dht_traversal::Traversal* traversal;      // Underlying traversal
-    common::InfoHash info_hash;               // Target info hash
-    common::Peer[MAX_PEERS_PER_TORRENT] peers; // Collected peers
-    int peer_count;                           // Number of peers collected
-    AnnounceToken[8] tokens;                  // Announce tokens from closest nodes
-    int token_count;                          // Number of tokens collected
-    bool found_peers;                         // Whether we found any peers
+    dht_traversal::Traversal* traversal;             // Underlying traversal
+    common::InfoHash info_hash;                      // Target info hash
+    common::SocketAddress[MAX_PEERS_PER_TORRENT] peers; // Collected peers
+    int peer_count;                                  // Number of peers collected
+    AnnounceToken[8] tokens;                         // Announce tokens from closest nodes
+    int token_count;                                 // Number of tokens collected
+    bool found_peers;                                // Whether we found any peers
 }
 
 // ============================================================================
@@ -108,20 +108,44 @@ fn void GetPeersSearch.free(&self) @public
 /**
  * Add a peer to the search results
  *
- * @param ip Peer IP address
- * @param port Peer port
+ * @param peer_addr Socket address (IPv4 or IPv6)
  * @return true if peer was added
  */
-fn bool GetPeersSearch.add_peer(&self, common::Ipv4Addr ip, ushort port) @public
+fn bool GetPeersSearch.add_peer(&self, common::SocketAddress peer_addr) @public
 {
-    // Check if we already have this peer
+    // Check if we already have this peer (compare IP and port)
     for (int i = 0; i < self.peer_count; i++)
     {
-        if (self.peers[i].ip[0] == ip[0] &&
-            self.peers[i].ip[1] == ip[1] &&
-            self.peers[i].ip[2] == ip[2] &&
-            self.peers[i].ip[3] == ip[3] &&
-            self.peers[i].port == port)
+        // Compare IP version first
+        if (self.peers[i].addr.is_ipv6 != peer_addr.addr.is_ipv6) continue;
+
+        // Compare address bytes
+        bool addr_match;
+        if (peer_addr.addr.is_ipv6)
+        {
+            // Compare IPv6 addresses
+            char* a = (char*)&self.peers[i].addr.ipv6;
+            char* b = (char*)&peer_addr.addr.ipv6;
+            addr_match = true;
+            for (usz j = 0; j < common::IPV6_ADDR_SIZE; j++)
+            {
+                if (a[j] != b[j])
+                {
+                    addr_match = false;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            // Compare IPv4 addresses
+            addr_match = (self.peers[i].addr.ipv4.a == peer_addr.addr.ipv4.a &&
+                         self.peers[i].addr.ipv4.b == peer_addr.addr.ipv4.b &&
+                         self.peers[i].addr.ipv4.c == peer_addr.addr.ipv4.c &&
+                         self.peers[i].addr.ipv4.d == peer_addr.addr.ipv4.d);
+        }
+
+        if (addr_match && self.peers[i].port == peer_addr.port)
         {
             return false;  // Duplicate
         }
@@ -131,10 +155,7 @@ fn bool GetPeersSearch.add_peer(&self, common::Ipv4Addr ip, ushort port) @public
     if (self.peer_count >= MAX_PEERS_PER_TORRENT) return false;
 
     // Add peer
-    common::Peer* peer = &self.peers[self.peer_count];
-    for (int i = 0; i < 4; i++) peer.ip[i] = ip[i];
-    peer.port = port;
-
+    self.peers[self.peer_count] = peer_addr;
     self.peer_count++;
     self.found_peers = true;
 
@@ -154,15 +175,16 @@ fn int GetPeersSearch.add_peers_compact(&self, char[] compact_peers) @public
     // Each peer is 6 bytes: 4 bytes IP + 2 bytes port
     for (usz i = 0; i + 6 <= compact_peers.len; i += 6)
     {
-        common::Ipv4Addr ip;
-        ip[0] = compact_peers[i];
-        ip[1] = compact_peers[i + 1];
-        ip[2] = compact_peers[i + 2];
-        ip[3] = compact_peers[i + 3];
+        // Manually create address instead of using slice
+        common::SocketAddress addr;
+        addr.addr.is_ipv6 = false;
+        addr.addr.ipv4.a = compact_peers[i];
+        addr.addr.ipv4.b = compact_peers[i + 1];
+        addr.addr.ipv4.c = compact_peers[i + 2];
+        addr.addr.ipv4.d = compact_peers[i + 3];
+        addr.port = ((ushort)compact_peers[i + 4] << 8) | (ushort)compact_peers[i + 5];
 
-        ushort port = ((ushort)compact_peers[i + 4] << 8) | (ushort)compact_peers[i + 5];
-
-        if (self.add_peer(ip, port))
+        if (self.add_peer(addr))
         {
             added++;
         }
@@ -176,9 +198,9 @@ fn int GetPeersSearch.add_peers_compact(&self, char[] compact_peers) @public
  *
  * @return Array of peers (caller must free)
  */
-fn common::Peer[] GetPeersSearch.get_peers(&self) @public
+fn common::SocketAddress[] GetPeersSearch.get_peers(&self) @public
 {
-    common::Peer[] result = mem::new_array(common::Peer, self.peer_count);
+    common::SocketAddress[] result = mem::new_array(common::SocketAddress, self.peer_count);
     for (int i = 0; i < self.peer_count; i++)
     {
         result[i] = self.peers[i];

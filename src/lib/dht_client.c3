@@ -408,25 +408,23 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                     if (peer_val && peer_val.type == bencode::BencodeType.STRING &&
                         peer_val.string.len >= 6)
                     {
-                        // Compact peer format: 4 bytes IP + 2 bytes port
-                        common::Ipv4Addr ip;
-                        ip[0] = peer_val.string[0];
-                        ip[1] = peer_val.string[1];
-                        ip[2] = peer_val.string[2];
-                        ip[3] = peer_val.string[3];
+                        // Parse compact peer format using helper
+                        char[] compact_data = peer_val.string[0:6];
+                        if (catch err = common::socket_address_from_compact_ipv4(compact_data))
+                        {
+                            // Invalid peer data, skip
+                            continue;
+                        }
 
-                        ushort port = ((ushort)peer_val.string[4] << 8) |
-                                       (ushort)peer_val.string[5];
+                        common::SocketAddress addr = common::socket_address_from_compact_ipv4(compact_data)!!;
 
                         // Add peer to search if we have search context
-                        if (search && search.add_peer(ip, port))
+                        if (search && search.add_peer(addr))
                         {
                             added++;
                             if (added <= 3)  // Log first 3
                             {
-                                String ip_str = ip_to_string(ip);
-                                defer free(ip_str);
-                                io::printfn("[DHT]   Peer: %s:%d", ip_str, port);
+                                io::printfn("[DHT]   Peer: %s", addr);
                             }
                         }
                     }

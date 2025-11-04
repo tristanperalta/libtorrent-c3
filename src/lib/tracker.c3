@@ -52,7 +52,7 @@ struct TrackerResponse {
     long min_interval;      // Minimum announce interval (optional)
     long complete;          // Number of seeders
     long incomplete;        // Number of leechers
-    common::Peer[] peers;   // List of peers
+    common::SocketAddress[] peers;   // List of peers
     String failure_reason;  // Error message if request failed (empty if none)
     String warning_message; // Optional warning from tracker (empty if none)
 }
@@ -158,35 +158,33 @@ fn String build_announce_url(String tracker_url, common::InfoHash* info_hash,
  @param peer_data : "Raw peer data from tracker"
  @return "Array of parsed peers or fault"
 *>
-fn common::Peer[]? parse_compact_peers(char[] peer_data)
+fn common::SocketAddress[]? parse_compact_peers(char[] peer_data)
 {
-    // Validate length is multiple of COMPACT_PEER_SIZE
-    if (peer_data.len % common::COMPACT_PEER_SIZE != 0) {
+    // Validate length is multiple of 6
+    const usz IPV4_COMPACT_SIZE = 6;  // 4 bytes IP + 2 bytes port
+    if (peer_data.len % IPV4_COMPACT_SIZE != 0) {
         return TRACKER_INVALID_RESPONSE?;
     }
 
-    usz count = peer_data.len / common::COMPACT_PEER_SIZE;
+    usz count = peer_data.len / IPV4_COMPACT_SIZE;
     if (count == 0) {
-        common::Peer[] empty;
+        common::SocketAddress[] empty;
         return empty;
     }
 
-    common::Peer[] peers = mem::new_array(common::Peer, count);
+    common::SocketAddress[] peers = mem::new_array(common::SocketAddress, count);
 
     for (usz i = 0; i < count; i++)
     {
-        usz offset = i * common::COMPACT_PEER_SIZE;
+        usz offset = i * IPV4_COMPACT_SIZE;
 
-        // Copy IPv4 address (4 bytes)
-        foreach (j, byte : peer_data[offset:common::IPV4_ADDR_SIZE])
-        {
-            peers[i].ip[j] = byte;
-        }
-
-        // Parse port (2 bytes, big-endian / network byte order)
-        char byte_high = peer_data[offset + common::IPV4_ADDR_SIZE];
-        char byte_low = peer_data[offset + common::IPV4_ADDR_SIZE + 1];
-        peers[i].port = (((ushort)byte_high & 0xFF) << 8) | ((ushort)byte_low & 0xFF);
+        // Manually parse instead of using slice to avoid C3 compiler issue
+        peers[i].addr.is_ipv6 = false;
+        peers[i].addr.ipv4.a = peer_data[offset];
+        peers[i].addr.ipv4.b = peer_data[offset + 1];
+        peers[i].addr.ipv4.c = peer_data[offset + 2];
+        peers[i].addr.ipv4.d = peer_data[offset + 3];
+        peers[i].port = ((ushort)peer_data[offset + 4] << 8) | (ushort)peer_data[offset + 5];
     }
 
     return peers;
@@ -260,13 +258,80 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    // Extract peers (compact format)
-    if (BencodeValue* peers = root.dict_get("peers")) {
-        if (peers.type == bencode::BencodeType.STRING) {
-            // Compact format (binary string)
-            response.peers = parse_compact_peers(peers.string)!;
+    // Extract peers (BEP 7: support both IPv4 "peers" and IPv6 "peers6")
+    common::SocketAddress[] ipv4_peers = {};
+    common::SocketAddress[] ipv6_peers = {};
+
+    // Parse IPv4 peers from "peers" key
+    if (BencodeValue* peers = root.dict_get("peers"))
+    {
+        if (peers.type == bencode::BencodeType.STRING)
+        {
+            // Compact format (6 bytes per peer: 4-byte IP + 2-byte port)
+            common::SocketAddress[]? ipv4_result = parse_compact_peers(peers.string);
+            if (catch err = ipv4_result)
+            {
+                ipv4_peers = {};  // Ignore parse errors, continue with IPv6
+            }
+            else
+            {
+                ipv4_peers = ipv4_result;
+            }
         }
         // TODO: Handle dictionary format for peers (less common)
+    }
+
+    // Parse IPv6 peers from "peers6" key (BEP 7)
+    if (BencodeValue* peers6 = root.dict_get("peers6"))
+    {
+        if (peers6.type == bencode::BencodeType.STRING)
+        {
+            // Compact IPv6 format (18 bytes per peer: 16-byte IP + 2-byte port)
+            usz count = peers6.string.len / common::COMPACT_PEER_IPV6_SIZE;
+            if (count > 0 && peers6.string.len % common::COMPACT_PEER_IPV6_SIZE == 0)
+            {
+                ipv6_peers = mem::new_array(common::SocketAddress, count);
+                for (usz i = 0; i < count; i++)
+                {
+                    usz offset = i * common::COMPACT_PEER_IPV6_SIZE;
+                    char[] compact_data = peers6.string[offset:offset + common::COMPACT_PEER_IPV6_SIZE];
+
+                    if (catch err = common::socket_address_from_compact_ipv6(compact_data))
+                    {
+                        // Skip invalid peer, continue with next
+                        continue;
+                    }
+                    ipv6_peers[i] = common::socket_address_from_compact_ipv6(compact_data)!!;
+                }
+            }
+        }
+    }
+
+    // Combine IPv4 and IPv6 peers into single array
+    usz total_peers = ipv4_peers.len + ipv6_peers.len;
+    if (total_peers > 0)
+    {
+        response.peers = mem::new_array(common::SocketAddress, total_peers);
+
+        // Copy IPv4 peers first
+        for (usz i = 0; i < ipv4_peers.len; i++)
+        {
+            response.peers[i] = ipv4_peers[i];
+        }
+
+        // Then IPv6 peers
+        for (usz i = 0; i < ipv6_peers.len; i++)
+        {
+            response.peers[ipv4_peers.len + i] = ipv6_peers[i];
+        }
+
+        // Free temporary arrays
+        if (ipv4_peers.len > 0) free(ipv4_peers);
+        if (ipv6_peers.len > 0) free(ipv6_peers);
+    }
+    else
+    {
+        response.peers = {};  // No peers
     }
 
     return response;

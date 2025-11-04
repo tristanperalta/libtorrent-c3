@@ -1,4 +1,6 @@
 module libtorrent::common;
+import std::net;
+import std::io;
 
 <*
  BitTorrent Protocol Common Types and Constants
@@ -7,10 +9,14 @@ module libtorrent::common;
 
  This module provides common protocol-level definitions to ensure
  consistency and avoid duplication across tracker, peer, and network code.
+
+ NOTE: Migrating from custom PeerAddr to std::net::InetAddress-based SocketAddress
+ for better standard library integration and cleaner IPv6 support.
 *>
 
 // Protocol size constants (BEP 3 standard)
 const usz IPV4_ADDR_SIZE = 4;     // IPv4 address size in bytes
+const usz IPV6_ADDR_SIZE = 16;    // IPv6 address size in bytes (BEP 7)
 const usz PEER_ID_SIZE = 20;      // Peer ID size in bytes (BEP 3)
 const usz SHA1_HASH_SIZE = 20;    // SHA1 info hash size in bytes (BEP 3)
 
@@ -23,8 +29,9 @@ const usz PROTOCOL_STRING_LEN = 19;       // Length of protocol string
 // Block and piece constants (BEP 3)
 const usz STANDARD_BLOCK_SIZE = 16384;    // Standard 16KB block size
 
-// Compact peer format constants (BEP 3)
+// Compact peer format constants (BEP 3, BEP 7)
 const usz COMPACT_PEER_SIZE = 6;          // IPv4 (4) + port (2)
+const usz COMPACT_PEER_IPV6_SIZE = 18;    // IPv6 (16) + port (2) - BEP 7
 const usz COMPACT_PEER_PORT_SIZE = 2;     // Port size in compact format
 
 // Type aliases for common protocol types
@@ -32,19 +39,51 @@ alias InfoHash = char[SHA1_HASH_SIZE];     // Torrent info hash
 alias PeerId = char[PEER_ID_SIZE];         // BitTorrent peer ID
 alias NodeId = char[SHA1_HASH_SIZE];       // DHT node ID (BEP 5)
 alias Ipv4Addr = char[IPV4_ADDR_SIZE];     // IPv4 address in network byte order
+alias Ipv6Addr = char[IPV6_ADDR_SIZE];     // IPv6 address in network byte order (BEP 7)
 
 // Type aliases for block/piece indexing (used across multiple modules)
 typedef PieceIndex = uint;
 typedef BlockOffset = uint;
 
+// Faults for socket address parsing
+faultdef INVALID_COMPACT_FORMAT;
+
 <*
- Peer discovered from any source (tracker, DHT, PEX, etc.)
- Standard peer representation used across all peer discovery methods.
+ Socket address combining IP address and port (BEP 7: IPv6 support)
+ =====================================================================
+ Uses std::net::InetAddress for robust dual-stack IP handling.
+ This is the NEW PREFERRED type, replacing the custom PeerAddr struct.
+
+ Benefits over PeerAddr:
+ - Automatic formatting via Printable interface
+ - Built-in utility methods (is_loopback, is_site_local, etc.)
+ - Better IPv6 representation (proper colon notation)
+ - Standard library integration
+
+ Migration: This will eventually replace PeerAddr throughout the codebase.
 *>
-struct Peer
+struct SocketAddress (Printable)
 {
-    Ipv4Addr ip;    // IPv4 address
-    ushort port;    // Port number
+    net::InetAddress addr;  // IPv4 or IPv6 address
+    ushort port;            // Port number
+}
+
+<*
+ Format a SocketAddress for printing (Printable interface).
+ Automatically called when using %s in printf/appendf.
+
+ Returns formatted address like "192.168.1.1:6881" for IPv4
+ or "[2001:db8::1]:6881" for IPv6 (brackets per RFC 3986).
+*>
+fn usz? SocketAddress.to_format(&self, Formatter* formatter) @dynamic
+{
+    if (self.addr.is_ipv6)
+    {
+        // IPv6: Wrap in brackets per RFC 3986
+        return formatter.printf("[%s]:%d", self.addr, self.port);
+    }
+    // IPv4: Simple dotted-decimal notation
+    return formatter.printf("%s:%d", self.addr, self.port);
 }
 
 <*
@@ -59,4 +98,108 @@ enum PeerSource : char
     PEX,            // Peer Exchange (BEP 11)
     LSD,            // Local Service Discovery (BEP 14) - future
     DHT_ANNOUNCE    // DHT announce response - future
+}
+
+<*
+ Format a socket address for display.
+ Returns a formatted string like "192.168.1.1:6881" for IPv4
+ or "[2001:db8::1]:6881" for IPv6.
+
+ Uses InetAddress's built-in Printable interface for clean formatting.
+
+ @param self : "Socket address to format"
+ @return "Formatted string (caller must free)"
+*>
+fn String SocketAddress.to_string(&self) @public
+{
+    DString builder;
+    if (self.addr.is_ipv6)
+    {
+        // IPv6: Wrap address in brackets per RFC 3986
+        builder.appendf("[%s]:%d", self.addr, self.port);
+    }
+    else
+    {
+        // IPv4: Simple dotted-decimal notation
+        builder.appendf("%s:%d", self.addr, self.port);
+    }
+    return builder.copy_str(mem);
+}
+
+<*
+ Parse a socket address from compact IPv4 format (BEP 3).
+ Compact format: 4 bytes (IP) + 2 bytes (port), both big-endian.
+
+ @param bytes : "6-byte compact peer format"
+ @return "Parsed socket address, or fault if invalid"
+*>
+fn SocketAddress? socket_address_from_compact_ipv4(char[] bytes) @public
+{
+    if (bytes.len != COMPACT_PEER_SIZE) return INVALID_COMPACT_FORMAT?;
+
+    SocketAddress addr;
+    addr.addr.is_ipv6 = false;
+
+    // CRITICAL: IPv4 is stored in bits 96-127 (last 4 bytes) of InetAddress
+    addr.addr.ipv4.a = bytes[0];
+    addr.addr.ipv4.b = bytes[1];
+    addr.addr.ipv4.c = bytes[2];
+    addr.addr.ipv4.d = bytes[3];
+
+    // Port is big-endian (network byte order)
+    addr.port = ((ushort)bytes[4] << 8) | (ushort)bytes[5];
+
+    return addr;
+}
+
+<*
+ Parse a socket address from compact IPv6 format (BEP 7).
+ Compact format: 16 bytes (IP) + 2 bytes (port), both big-endian.
+
+ @param bytes : "18-byte compact peer format"
+ @return "Parsed socket address, or fault if invalid"
+*>
+fn SocketAddress? socket_address_from_compact_ipv6(char[] bytes) @public
+{
+    if (bytes.len != COMPACT_PEER_IPV6_SIZE) return INVALID_COMPACT_FORMAT?;
+
+    SocketAddress addr;
+    addr.addr.is_ipv6 = true;
+
+    // IPv6 uses all 16 bytes - copy directly into the union
+    // Note: InetAddress stores IPv6 as array of bytes in network order
+    for (usz i = 0; i < IPV6_ADDR_SIZE; i++)
+    {
+        // Access raw bytes through pointer cast
+        ((char*)&addr.addr.ipv6)[i] = bytes[i];
+    }
+
+    // Port is big-endian (network byte order)
+    addr.port = ((ushort)bytes[16] << 8) | (ushort)bytes[17];
+
+    return addr;
+}
+
+<*
+ Extract raw IPv4 address bytes (BEP 6: Fast Extension).
+ Required for generating allowed_fast piece sets which need raw IP bytes.
+
+ IMPORTANT: Only call this for IPv4 addresses. The function will assert
+ if called on an IPv6 address.
+
+ @param self : "Socket address (must be IPv4)"
+ @return "4-byte IPv4 address in network byte order"
+*>
+fn Ipv4Addr SocketAddress.to_ipv4_bytes(&self) @public
+{
+    assert(!self.addr.is_ipv6, "Cannot extract IPv4 bytes from IPv6 address");
+
+    // Extract IPv4 bytes from bits 96-127 of InetAddress
+    Ipv4Addr bytes;
+    bytes[0] = self.addr.ipv4.a;
+    bytes[1] = self.addr.ipv4.b;
+    bytes[2] = self.addr.ipv4.c;
+    bytes[3] = self.addr.ipv4.d;
+
+    return bytes;
 }

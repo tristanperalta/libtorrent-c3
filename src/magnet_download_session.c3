@@ -214,9 +214,10 @@ fn void on_announce_complete(tracker::TrackerResponse* response, int status, voi
 
     io::printfn("Tracker announce successful! Found %d peers", response.peers.len);
 
-    // Add peers to peer pool
+    // Add peers to peer pool (BEP 7: convert Peer[] to PeerAddr[])
     if (response.peers.len > 0)
     {
+        // Add peers to pool (already SocketAddress[] from tracker)
         ctx.peer_pool.add_peers_from_tracker(response.peers);
 
         // Connect to peers
@@ -481,10 +482,7 @@ fn void on_metadata_timer(async::timer::Timer* timer, void* user_data) @public
         // Mark as requested after sending
         ctx.metadata_dl.mark_piece_requested((uint)next_piece);
 
-        io::printfn("[Metadata] Requested piece %d from peer %d.%d.%d.%d:%d",
-                    next_piece,
-                    peer_info.ip[0], peer_info.ip[1], peer_info.ip[2], peer_info.ip[3],
-                    peer_info.port);
+        io::printfn("[Metadata] Requested piece %d from peer %s", next_piece, peer_info.addr);
 
         // Only request from one peer at a time to avoid duplicates
         break;

@@ -77,9 +77,8 @@ enum PeerState : const char
 // Single peer info
 struct TorrentPeer
 {
-    // Identity
-    common::Ipv4Addr ip;         // IPv4 address
-    ushort port;                 // Port number
+    // Identity (BEP 7: Dual-stack IPv4/IPv6 support)
+    common::SocketAddress addr;  // Peer address (IPv4 or IPv6)
     common::PeerId peer_id;      // Peer ID (empty until handshake)
 
     // Connection
@@ -193,13 +192,13 @@ fn PeerFilter create_default_filter() @public
     return filter;
 }
 
-// Callbacks
+// Callbacks (BEP 7: dual-stack IPv4/IPv6)
 alias PeerConnectedCallback = fn void(peer_connection::PeerConnection* peer,
-                                       common::Ipv4Addr ip, ushort port, void* user_data);
+                                       common::SocketAddress* addr, void* user_data);
 alias PeerMessageCallback = fn void(peer_connection::PeerConnection* peer,
                                      peer_wire::Message* msg,
-                                     common::Ipv4Addr ip, ushort port, void* user_data);
-alias PeerDisconnectedCallback = fn void(common::Ipv4Addr ip, ushort port,
+                                     common::SocketAddress* addr, void* user_data);
+alias PeerDisconnectedCallback = fn void(common::SocketAddress* addr,
                                           bool was_error, void* user_data);
 
 // Main peer pool
@@ -239,24 +238,47 @@ struct PeerPool
 *>
 fn int compare_peers(TorrentPeer* a, TorrentPeer* b)
 {
-    // Compare IP bytes
-    for (usz i = 0; i < 4; i++)
+    // BEP 7: Dual-stack comparison (IPv4 vs IPv6)
+    // First compare by address family (IPv4 < IPv6)
+    // is_ipv6 is bool: false=0 (IPv4), true=1 (IPv6)
+    if (a.addr.addr.is_ipv6 != b.addr.addr.is_ipv6)
     {
-        if (a.ip[i] != b.ip[i])
+        return (int)a.addr.addr.is_ipv6 - (int)b.addr.addr.is_ipv6;
+    }
+
+    // Same address family - compare address bytes
+    if (!a.addr.addr.is_ipv6)
+    {
+        // Compare IPv4 addresses (4 bytes: a, b, c, d)
+        if (a.addr.addr.ipv4.a != b.addr.addr.ipv4.a) return (int)a.addr.addr.ipv4.a - (int)b.addr.addr.ipv4.a;
+        if (a.addr.addr.ipv4.b != b.addr.addr.ipv4.b) return (int)a.addr.addr.ipv4.b - (int)b.addr.addr.ipv4.b;
+        if (a.addr.addr.ipv4.c != b.addr.addr.ipv4.c) return (int)a.addr.addr.ipv4.c - (int)b.addr.addr.ipv4.c;
+        if (a.addr.addr.ipv4.d != b.addr.addr.ipv4.d) return (int)a.addr.addr.ipv4.d - (int)b.addr.addr.ipv4.d;
+    }
+    else
+    {
+        // Compare IPv6 addresses (16 bytes)
+        // Access raw bytes through pointer cast
+        char* a_bytes = (char*)&a.addr.addr.ipv6;
+        char* b_bytes = (char*)&b.addr.addr.ipv6;
+        for (usz i = 0; i < common::IPV6_ADDR_SIZE; i++)
         {
-            return (int)a.ip[i] - (int)b.ip[i];
+            if (a_bytes[i] != b_bytes[i])
+            {
+                return (int)a_bytes[i] - (int)b_bytes[i];
+            }
         }
     }
 
-    // IP is equal, compare port
-    return (int)a.port - (int)b.port;
+    // Address is equal, compare port
+    return (int)a.addr.port - (int)b.addr.port;
 }
 
 <*
- Find peer index using binary search.
+ Find peer index using binary search (BEP 7: dual-stack).
  Returns index if found, otherwise returns the insertion point (as negative).
 *>
-fn isz find_peer_index(PeerPool* pool, common::Ipv4Addr ip, ushort port)
+fn isz find_peer_index(PeerPool* pool, common::SocketAddress* addr)
 {
     if (pool.peers.len == 0)
     {
@@ -265,8 +287,7 @@ fn isz find_peer_index(PeerPool* pool, common::Ipv4Addr ip, ushort port)
 
     // Create temporary peer for comparison
     TorrentPeer temp;
-    temp.ip = ip;
-    temp.port = port;
+    temp.addr = *addr;
 
     // Binary search
     isz left = 0;
@@ -330,10 +351,18 @@ fn int calculate_peer_rank(PeerPool* pool, TorrentPeer* peer)
     // Penalize hash failures (bad peer)
     rank -= (int)peer.hashfails * 30;
 
-    // Add deterministic randomness based on IP
+    // Add deterministic randomness based on IP (BEP 7: dual-stack)
     // This ensures symmetric priority (both peers rank each other similarly)
     // and provides variety in initial connection attempts
-    rank += ((int)peer.ip[3] * 7) % 20;
+    if (!peer.addr.addr.is_ipv6)
+    {
+        rank += ((int)peer.addr.addr.ipv4.d * 7) % 20;  // Last byte of IPv4
+    }
+    else
+    {
+        char* ipv6_bytes = (char*)&peer.addr.addr.ipv6;
+        rank += ((int)ipv6_bytes[15] * 7) % 20;  // Use last byte of IPv6
+    }
 
     return rank;
 }
@@ -576,22 +605,27 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             // Peer handshake complete - notify user
             if (pool.on_connected)
             {
-                pool.on_connected(conn, peer_info.ip, peer_info.port, pool.user_data);
+                pool.on_connected(conn, &peer_info.addr, pool.user_data);
             }
 
             // Broadcast this new peer to all other connected peers via PEX
-            broadcast_pex_update(pool, peer_info.ip, peer_info.port, true);
+            // Note: PEX currently only supports IPv4 (BEP 11)
+            if (!peer_info.addr.addr.is_ipv6)
+            {
+                // Extract IPv4 bytes for PEX
+                common::Ipv4Addr ipv4_bytes = peer_info.addr.to_ipv4_bytes();
+                broadcast_pex_update(pool, ipv4_bytes, peer_info.addr.port, true);
+            }
             return;
 
         case peer_connection::PeerState.CLOSED:
             // Peer disconnected - increment failcount and possibly ban
             peer_info.failcount++;
 
-            // Log disconnect with reason and failcount
+            // Log disconnect with reason and failcount (BEP 7: format IPv4/IPv6)
             logger::logf(logger::LogLevel.DEBUG,
-                "Peer %d.%d.%d.%d:%d disconnected (reason: %s, failcount: %d/%d)",
-                peer_info.ip[0], peer_info.ip[1], peer_info.ip[2], peer_info.ip[3],
-                peer_info.port,
+                "Peer %s disconnected (reason: %s, failcount: %d/%d)",
+                peer_info.addr,
                 disconnect_reason_to_string(reason),
                 peer_info.failcount,
                 pool.config.max_failcount);
@@ -601,9 +635,8 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             {
                 peer_info.state = PeerState.BANNED;
                 logger::logf(logger::LogLevel.WARN,
-                    "Banned peer %d.%d.%d.%d:%d after %d failures",
-                    peer_info.ip[0], peer_info.ip[1], peer_info.ip[2], peer_info.ip[3],
-                    peer_info.port,
+                    "Banned peer %s after %d failures",
+                    peer_info.addr,
                     peer_info.failcount);
             }
             else
@@ -620,11 +653,15 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
 
             if (pool.on_disconnected)
             {
-                pool.on_disconnected(peer_info.ip, peer_info.port, true, pool.user_data);
+                pool.on_disconnected(&peer_info.addr, true, pool.user_data);
             }
 
-            // Broadcast this peer drop to all other connected peers via PEX
-            broadcast_pex_update(pool, peer_info.ip, peer_info.port, false);
+            // Broadcast this peer drop to all other connected peers via PEX (BEP 11: IPv4 only)
+            if (!peer_info.addr.addr.is_ipv6)
+            {
+                common::Ipv4Addr ipv4_bytes = peer_info.addr.to_ipv4_bytes();
+                broadcast_pex_update(pool, ipv4_bytes, peer_info.addr.port, false);
+            }
 
             // Try to replace this connection (unless we're shutting down or peer is banned)
             if (!pool.shutting_down && peer_info.state != PeerState.BANNED)
@@ -662,10 +699,10 @@ fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
 
     if (!peer_info) return;
 
-    // Forward to user callback with IP/port
+    // Forward to user callback with peer address
     if (pool.on_message)
     {
-        pool.on_message(conn, msg, peer_info.ip, peer_info.port, pool.user_data);
+        pool.on_message(conn, msg, &peer_info.addr, pool.user_data);
     }
 }
 
@@ -712,17 +749,17 @@ fn void PeerPool.set_callbacks(&self,
 }
 
 <*
- Add single peer from any source (deduplicates by IP:port).
+ Add single peer from any source (deduplicates by address:port).
+ BEP 7: Supports both IPv4 and IPv6 peers.
 
- @param ip : "IPv4 address"
- @param port : "Port number"
+ @param addr : "Peer address (IPv4 or IPv6)"
  @param source : "Peer discovery source"
  @param pex_flags : "PEX flags (optional, only used for PEX peers)"
 *>
-fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, common::PeerSource source, char pex_flags = 0) @public
+fn void PeerPool.add_peer(&self, common::SocketAddress* addr, common::PeerSource source, char pex_flags = 0) @public
 {
     // Check if peer already exists
-    isz idx = find_peer_index(self, ip, port);
+    isz idx = find_peer_index(self, addr);
     if (idx >= 0)
     {
         // Already exists, prioritize TRACKER source over others
@@ -743,8 +780,7 @@ fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, common::PeerS
 
     // Create new peer
     TorrentPeer* peer = mem::new(TorrentPeer);
-    peer.ip = ip;
-    peer.port = port;
+    peer.addr = *addr;
     peer.connection = null;
     peer.state = PeerState.DISCOVERED;
     peer.prev_amount_download = 0;
@@ -802,14 +838,14 @@ fn void PeerPool.add_peer(&self, common::Ipv4Addr ip, ushort port, common::PeerS
  @param peers : "Peers to add"
  @param source : "Peer discovery source"
 *>
-fn void PeerPool.add_peers(&self, common::Peer[] peers, common::PeerSource source) @public
+fn void PeerPool.add_peers(&self, common::SocketAddress[] peers, common::PeerSource source) @public
 {
     for (usz i = 0; i < peers.len; i++)
     {
         // Skip peers with invalid port 0
         if (peers[i].port == 0) continue;
 
-        self.add_peer(peers[i].ip, peers[i].port, source);
+        self.add_peer(&peers[i], source);
     }
 
     // Update candidate cache after batch add
@@ -819,10 +855,11 @@ fn void PeerPool.add_peers(&self, common::Peer[] peers, common::PeerSource sourc
 <*
  Batch add peers from tracker response.
  Convenience wrapper for add_peers() with TRACKER source.
+ BEP 7: Supports both IPv4 and IPv6 peers.
 
  @param peers : "Peers from tracker"
 *>
-fn void PeerPool.add_peers_from_tracker(&self, common::Peer[] peers) @public
+fn void PeerPool.add_peers_from_tracker(&self, common::SocketAddress[] peers) @public
 {
     self.add_peers(peers, common::PeerSource.TRACKER);
 }
@@ -833,21 +870,20 @@ fn void PeerPool.add_peers_from_tracker(&self, common::Peer[] peers) @public
 
  @param peers : "Peers from DHT"
 *>
-fn void PeerPool.add_peers_from_dht(&self, common::Peer[] peers) @public
+fn void PeerPool.add_peers_from_dht(&self, common::SocketAddress[] peers) @public
 {
     self.add_peers(peers, common::PeerSource.DHT);
 }
 
 <*
- Find peer by IP:port.
+ Find peer by address:port (BEP 7: dual-stack).
 
- @param ip : "IPv4 address"
- @param port : "Port number"
+ @param addr : "Peer address (IPv4 or IPv6)"
  @return "Peer if found, fault if not found"
 *>
-fn TorrentPeer*? PeerPool.find_peer(&self, common::Ipv4Addr ip, ushort port) @public
+fn TorrentPeer*? PeerPool.find_peer(&self, common::SocketAddress* addr) @public
 {
-    isz idx = find_peer_index(self, ip, port);
+    isz idx = find_peer_index(self, addr);
     if (idx < 0)
     {
         return PEER_NOT_FOUND?;
@@ -865,7 +901,7 @@ fn void PeerPool.erase_peer(&self, TorrentPeer* peer) @public
     if (!peer) return;
 
     // Find peer index
-    isz idx = find_peer_index(self, peer.ip, peer.port);
+    isz idx = find_peer_index(self, &peer.addr);
     if (idx < 0)
     {
         return; // Not found
@@ -946,15 +982,14 @@ fn void PeerPool.get_stats(&self,
 // ===== Phase 3: Async Connection Management =====
 
 <*
- Disconnect a specific peer by IP:port (Phase 3).
+ Disconnect a specific peer by address:port (Phase 3, BEP 7: dual-stack).
 
- @param ip : "Peer IP address"
- @param port : "Peer port"
+ @param addr : "Peer address (IPv4 or IPv6)"
 *>
-fn void PeerPool.disconnect_peer(&self, common::Ipv4Addr ip, ushort port) @public
+fn void PeerPool.disconnect_peer(&self, common::SocketAddress* addr) @public
 {
     // Find peer
-    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    TorrentPeer*? peer_opt = self.find_peer(addr);
     if (catch err = peer_opt)
     {
         return; // Peer not found
@@ -979,7 +1014,7 @@ fn void PeerPool.disconnect_peer(&self, common::Ipv4Addr ip, ushort port) @publi
     // Call user callback
     if (self.on_disconnected)
     {
-        self.on_disconnected(ip, port, false, self.user_data);
+        self.on_disconnected(&peer.addr, false, self.user_data);
     }
 }
 
@@ -1066,13 +1101,9 @@ fn void PeerPool.connect_to_peers(&self) @public
 
         TorrentPeer* peer = best_opt;
 
-        // Format IP address for connection
+        // Format IP address for connection (BEP 7: dual-stack)
         DString ip_builder;
-        ip_builder.appendf("%d.%d.%d.%d",
-                          (int)peer.ip[0] & 0xFF,
-                          (int)peer.ip[1] & 0xFF,
-                          (int)peer.ip[2] & 0xFF,
-                          (int)peer.ip[3] & 0xFF);
+        ip_builder.appendf("%s", peer.addr.addr);
         String ip_str = ip_builder.copy_str(mem);
         defer std::core::mem::free(ip_str);
 
@@ -1081,7 +1112,7 @@ fn void PeerPool.connect_to_peers(&self) @public
         peer_connection::PeerConnection*? conn_opt = peer_connection::connect(
             self.loop,
             ip_str,
-            peer.port,
+            peer.addr.port,
             self.info_hash,
             self.our_peer_id,
             &on_peer_message_internal,  // Bridge: adds IP/port
@@ -1168,7 +1199,15 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
     if (added)
     {
         // Check if the added peer is a seed
-        TorrentPeer*? peer_opt = pool.find_peer(ip, port);
+        // Convert IPv4 to SocketAddress for lookup (BEP 7)
+        common::SocketAddress addr;
+        addr.addr.is_ipv6 = false;
+        addr.addr.ipv4.a = ip[0];
+        addr.addr.ipv4.b = ip[1];
+        addr.addr.ipv4.c = ip[2];
+        addr.addr.ipv4.d = ip[3];
+        addr.port = port;
+        TorrentPeer*? peer_opt = pool.find_peer(&addr);
         if (catch err = peer_opt)
         {
             // Peer not found, use default flags
@@ -1201,10 +1240,11 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
             continue;
         }
 
-        // Don't broadcast a peer to itself
-        if (peer.ip[0] == ip[0] && peer.ip[1] == ip[1] &&
-            peer.ip[2] == ip[2] && peer.ip[3] == ip[3] &&
-            peer.port == port)
+        // Don't broadcast a peer to itself (BEP 7: check IPv4 peers only, PEX is IPv4-only)
+        if (!peer.addr.addr.is_ipv6 &&
+            peer.addr.addr.ipv4.a == ip[0] && peer.addr.addr.ipv4.b == ip[1] &&
+            peer.addr.addr.ipv4.c == ip[2] && peer.addr.addr.ipv4.d == ip[3] &&
+            peer.addr.port == port)
         {
             continue;
         }
@@ -1297,15 +1337,24 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
             continue;
         }
 
+        // Convert PEX IPv4 peer to SocketAddress (BEP 7)
+        common::SocketAddress addr;
+        addr.addr.is_ipv6 = false;
+        addr.addr.ipv4.a = pex_peer.ip[0];
+        addr.addr.ipv4.b = pex_peer.ip[1];
+        addr.addr.ipv4.c = pex_peer.ip[2];
+        addr.addr.ipv4.d = pex_peer.ip[3];
+        addr.port = pex_peer.port;
+
         // Add peer to pool (will be deduplicated if already exists)
         // Use PeerSource.PEX and pass flags for seed detection
-        self.add_peer(pex_peer.ip, pex_peer.port, common::PeerSource.PEX, pex_peer.flags);
+        self.add_peer(&addr, common::PeerSource.PEX, pex_peer.flags);
         added_count++;
 
         // If the peer is marked as a seed, update our records
         if ((pex_peer.flags & (char)pex::PexFlags.SEED) != 0)
         {
-            TorrentPeer*? peer_opt = self.find_peer(pex_peer.ip, pex_peer.port);
+            TorrentPeer*? peer_opt = self.find_peer(&addr);
             if (catch err = peer_opt)
             {
                 // Peer not found (shouldn't happen since we just added it)
@@ -1342,21 +1391,20 @@ fn void update_peer_rank(PeerPool* pool, TorrentPeer* peer)
 }
 
 <*
- Update peer statistics after data transfer.
+ Update peer statistics after data transfer (BEP 7: dual-stack).
 
  Updates the download and upload byte counters for a peer and recalculates
  its rank. Should be called periodically during active transfers.
 
- @param ip : "Peer IP address"
- @param port : "Peer port"
+ @param addr : "Peer address (IPv4 or IPv6)"
  @param bytes_downloaded : "Bytes downloaded from this peer"
  @param bytes_uploaded : "Bytes uploaded to this peer"
  @return "Fault if peer not found"
 *>
-fn fault? PeerPool.update_peer_stats(&self, common::Ipv4Addr ip, ushort port,
+fn fault? PeerPool.update_peer_stats(&self, common::SocketAddress* addr,
                                       ulong bytes_downloaded, ulong bytes_uploaded) @public
 {
-    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    TorrentPeer*? peer_opt = self.find_peer(addr);
     if (catch err = peer_opt)
     {
         return err?;
@@ -1383,13 +1431,12 @@ fn fault? PeerPool.update_peer_stats(&self, common::Ipv4Addr ip, ushort port,
  Increments the hash failure counter and penalizes the peer's rank.
  Multiple hash failures will significantly reduce peer priority.
 
- @param ip : "Peer IP address"
- @param port : "Peer port"
+ @param addr : "Peer address (IPv4 or IPv6)"
  @return "Fault if peer not found"
 *>
-fn fault? PeerPool.mark_hash_failure(&self, common::Ipv4Addr ip, ushort port) @public
+fn fault? PeerPool.mark_hash_failure(&self, common::SocketAddress* addr) @public
 {
-    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    TorrentPeer*? peer_opt = self.find_peer(addr);
     if (catch err = peer_opt)
     {
         return err?;
@@ -1419,13 +1466,12 @@ fn fault? PeerPool.mark_hash_failure(&self, common::Ipv4Addr ip, ushort port) @p
  Sets the seed flag and boosts the peer's rank. Seed peers are prioritized
  for connections as they can provide any piece we need.
 
- @param ip : "Peer IP address"
- @param port : "Peer port"
+ @param addr : "Peer address (IPv4 or IPv6)"
  @return "Fault if peer not found"
 *>
-fn fault? PeerPool.mark_peer_seed(&self, common::Ipv4Addr ip, ushort port) @public
+fn fault? PeerPool.mark_peer_seed(&self, common::SocketAddress* addr) @public
 {
-    TorrentPeer*? peer_opt = self.find_peer(ip, port);
+    TorrentPeer*? peer_opt = self.find_peer(addr);
     if (catch err = peer_opt)
     {
         return err?;
@@ -1604,12 +1650,12 @@ fn PeerDisplayInfo build_display_info(TorrentPeer* peer)
 {
     PeerDisplayInfo info;
 
-    // Format IP address
+    // Format IP address (BEP 7: dual-stack IPv4/IPv6)
+    // InetAddress implements Printable, so we can use %s directly
     DString ip_str;
-    ip_str.appendf("%d.%d.%d.%d",
-                  peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3]);
+    ip_str.appendf("%s", peer.addr.addr);
     info.ip_address = ip_str.copy_str(mem);
-    info.port = peer.port;
+    info.port = peer.addr.port;
 
     // Parse client name from peer_id
     if (peer.peer_id[0] == '-' && peer.peer_id.len >= 8)

@@ -9,6 +9,19 @@ import std::io;
 
 // Test peer pool module - Phase 1: Core Storage & Discovery
 
+// Helper function to create IPv4 SocketAddress for tests
+fn common::SocketAddress make_ipv4_addr(char a, char b, char c, char d, ushort port)
+{
+    common::SocketAddress addr;
+    addr.addr.is_ipv6 = false;
+    addr.addr.ipv4.a = a;
+    addr.addr.ipv4.b = b;
+    addr.addr.ipv4.c = c;
+    addr.addr.ipv4.d = d;
+    addr.port = port;
+    return addr;
+}
+
 // Test create and free basic operations.
 fn void test_create_and_free() @test
 {
@@ -61,9 +74,8 @@ fn void test_add_single_peer() @test
     defer pool.free();
 
     // Add a peer
-    char[4] ip = { 192, 168, 1, 1 };
-    ushort port = 6881;
-    pool.add_peer(ip, port, common::PeerSource.TRACKER);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     // Verify peer was added
     usz total, candidates, connecting, connected;
@@ -71,18 +83,19 @@ fn void test_add_single_peer() @test
     assert(total == 1, "Should have 1 peer");
 
     // Verify peer can be found
-    peer_pool::TorrentPeer*? found_opt = pool.find_peer(ip, port);
+    peer_pool::TorrentPeer*? found_opt = pool.find_peer(&addr);
     if (catch err = found_opt)
     {
         assert(false, "Should find peer");
         return;
     }
     peer_pool::TorrentPeer* found = found_opt;
-    assert(found.port == port, "Port should match");
-    assert(found.ip[0] == 192, "IP byte 0 should match");
-    assert(found.ip[1] == 168, "IP byte 1 should match");
-    assert(found.ip[2] == 1, "IP byte 2 should match");
-    assert(found.ip[3] == 1, "IP byte 3 should match");
+    assert(found.addr.port == 6881, "Port should match");
+    assert(!found.addr.addr.is_ipv6, "Should be IPv4");
+    assert(found.addr.addr.ipv4.a == 192, "IP byte 0 should match");
+    assert(found.addr.addr.ipv4.b == 168, "IP byte 1 should match");
+    assert(found.addr.addr.ipv4.c == 1, "IP byte 2 should match");
+    assert(found.addr.addr.ipv4.d == 1, "IP byte 3 should match");
     assert(found.source == common::PeerSource.TRACKER, "Should be from tracker");
     assert(found.state == peer_pool::PeerState.DISCOVERED, "Should be DISCOVERED");
 }
@@ -101,11 +114,10 @@ fn void test_add_duplicate_peer() @test
     defer pool.free();
 
     // Add same peer twice
-    char[4] ip = { 10, 0, 0, 1 };
-    ushort port = 6881;
+    common::SocketAddress addr = make_ipv4_addr(10, 0, 0, 1, 6881);
 
-    pool.add_peer(ip, port, common::PeerSource.TRACKER);
-    pool.add_peer(ip, port, common::PeerSource.TRACKER);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     // Should only have 1 peer
     usz total, candidates, connecting, connected;
@@ -127,13 +139,10 @@ fn void test_add_peers_from_tracker() @test
     defer pool.free();
 
     // Create tracker peer list
-    common::Peer[] tracker_peers = mem::new_array(common::Peer, 3);
-    tracker_peers[0].ip = { 192, 168, 1, 1 };
-    tracker_peers[0].port = 6881;
-    tracker_peers[1].ip = { 192, 168, 1, 2 };
-    tracker_peers[1].port = 6882;
-    tracker_peers[2].ip = { 10, 0, 0, 1 };
-    tracker_peers[2].port = 51413;
+    common::SocketAddress[] tracker_peers = mem::new_array(common::SocketAddress, 3);
+    tracker_peers[0] = make_ipv4_addr(192, 168, 1, 1, 6881);
+    tracker_peers[1] = make_ipv4_addr(192, 168, 1, 2, 6882);
+    tracker_peers[2] = make_ipv4_addr(10, 0, 0, 1, 51413);
 
     // Add peers from tracker
     pool.add_peers_from_tracker(tracker_peers);
@@ -146,17 +155,20 @@ fn void test_add_peers_from_tracker() @test
     assert(total == 3, "Should have 3 peers");
 
     // Verify each peer can be found
-    if (catch err = pool.find_peer({ 192, 168, 1, 1 }, 6881))
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    if (catch err = pool.find_peer(&addr1))
     {
         assert(false, "Should find peer 1");
     }
 
-    if (catch err = pool.find_peer({ 192, 168, 1, 2 }, 6882))
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    if (catch err = pool.find_peer(&addr2))
     {
         assert(false, "Should find peer 2");
     }
 
-    if (catch err = pool.find_peer({ 10, 0, 0, 1 }, 51413))
+    common::SocketAddress addr3 = make_ipv4_addr(10, 0, 0, 1, 51413);
+    if (catch err = pool.find_peer(&addr3))
     {
         assert(false, "Should find peer 3");
     }
@@ -176,10 +188,12 @@ fn void test_find_nonexistent_peer() @test
     defer pool.free();
 
     // Add one peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
 
     // Try to find different peer
-    peer_pool::TorrentPeer*? found_opt = pool.find_peer({ 10, 0, 0, 1 }, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(10, 0, 0, 1, 6881);
+    peer_pool::TorrentPeer*? found_opt = pool.find_peer(&addr2);
     if (catch err = found_opt)
     {
         // Good - should not find non-existent peer
@@ -204,9 +218,12 @@ fn void test_erase_peer() @test
     defer pool.free();
 
     // Add three peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 10, 0, 0, 1 }, 51413, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(10, 0, 0, 1, 51413);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
     // Verify 3 peers
     usz total, candidates, connecting, connected;
@@ -214,7 +231,7 @@ fn void test_erase_peer() @test
     assert(total == 3, "Should have 3 peers");
 
     // Find and erase middle peer
-    peer_pool::TorrentPeer*? peer_opt = pool.find_peer({ 192, 168, 1, 2 }, 6882);
+    peer_pool::TorrentPeer*? peer_opt = pool.find_peer(&addr2);
     if (catch err = peer_opt)
     {
         assert(false, "Should find peer before erase");
@@ -228,7 +245,7 @@ fn void test_erase_peer() @test
     assert(total == 2, "Should have 2 peers after erase");
 
     // Verify erased peer is gone
-    if (catch err = pool.find_peer({ 192, 168, 1, 2 }, 6882))
+    if (catch err = pool.find_peer(&addr2))
     {
         // Good - erased peer should not be found
     }
@@ -238,12 +255,12 @@ fn void test_erase_peer() @test
     }
 
     // Verify other peers still exist
-    if (catch err = pool.find_peer({ 192, 168, 1, 1 }, 6881))
+    if (catch err = pool.find_peer(&addr1))
     {
         assert(false, "Peer 1 should still exist");
     }
 
-    if (catch err = pool.find_peer({ 10, 0, 0, 1 }, 51413))
+    if (catch err = pool.find_peer(&addr3))
     {
         assert(false, "Peer 3 should still exist");
     }
@@ -263,14 +280,15 @@ fn void test_erase_only_peer() @test
     defer pool.free();
 
     // Add one peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     usz total, candidates, connecting, connected;
     pool.get_stats(&total, &candidates, &connecting, &connected);
     assert(total == 1, "Should have 1 peer");
 
     // Erase it
-    peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
     pool.erase_peer(peer);
 
     // Verify empty
@@ -301,8 +319,8 @@ fn void test_peer_limit_enforcement() @test
     // Try to add 10 peers (limit is 5)
     for (int i = 0; i < 10; i++)
     {
-        char[4] ip = { 192, 168, 1, (char)i };
-        pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
+        common::SocketAddress addr = make_ipv4_addr(192, 168, 1, (char)i, 6881);
+        pool.add_peer(&addr, common::PeerSource.TRACKER);
     }
 
     // Should only have 5 peers (the limit)
@@ -325,9 +343,12 @@ fn void test_statistics() @test
     defer pool.free();
 
     // Add peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
     // Initially all should be DISCOVERED
     usz total, candidates, connecting, connected;
@@ -338,13 +359,13 @@ fn void test_statistics() @test
     assert(connected == 0, "Should have 0 connected");
 
     // Change states manually (Phase 2 will do this properly)
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.state = peer_pool::PeerState.CANDIDATE;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.state = peer_pool::PeerState.CONNECTING;
 
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.state = peer_pool::PeerState.CONNECTED;
 
     // Check stats again
@@ -369,20 +390,25 @@ fn void test_sorted_order() @test
     defer pool.free();
 
     // Add peers in non-sorted order
-    pool.add_peer({ 192, 168, 1, 5 }, 6885, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
-    pool.add_peer({ 10, 0, 0, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 5, 6885);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    common::SocketAddress addr4 = make_ipv4_addr(10, 0, 0, 1, 6881);
+    common::SocketAddress addr5 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
+    pool.add_peer(&addr4, common::PeerSource.TRACKER);
+    pool.add_peer(&addr5, common::PeerSource.TRACKER);
 
     // Verify they're stored in sorted order
     // 10.0.0.1:6881 < 192.168.1.1:6881 < 192.168.1.2:6882 < 192.168.1.3:6883 < 192.168.1.5:6885
 
-    assert(pool.peers[0].ip[0] == 10, "First peer should be 10.x.x.x");
-    assert(pool.peers[1].ip[3] == 1 && pool.peers[1].port == 6881, "Second peer should be 192.168.1.1:6881");
-    assert(pool.peers[2].ip[3] == 2 && pool.peers[2].port == 6882, "Third peer should be 192.168.1.2:6882");
-    assert(pool.peers[3].ip[3] == 3 && pool.peers[3].port == 6883, "Fourth peer should be 192.168.1.3:6883");
-    assert(pool.peers[4].ip[3] == 5 && pool.peers[4].port == 6885, "Fifth peer should be 192.168.1.5:6885");
+    assert(pool.peers[0].addr.addr.ipv4.a == 10, "First peer should be 10.x.x.x");
+    assert(pool.peers[1].addr.addr.ipv4.d == 1 && pool.peers[1].addr.port == 6881, "Second peer should be 192.168.1.1:6881");
+    assert(pool.peers[2].addr.addr.ipv4.d == 2 && pool.peers[2].addr.port == 6882, "Third peer should be 192.168.1.2:6882");
+    assert(pool.peers[3].addr.addr.ipv4.d == 3 && pool.peers[3].addr.port == 6883, "Fourth peer should be 192.168.1.3:6883");
+    assert(pool.peers[4].addr.addr.ipv4.d == 5 && pool.peers[4].addr.port == 6885, "Fifth peer should be 192.168.1.5:6885");
 }
 
 // ===== Phase 2 Tests: Peer Ranking & Candidate Selection =====
@@ -401,8 +427,9 @@ fn void test_peer_rank_calculation() @test
     defer pool.free();
 
     // Add peer and verify base rank (just IP-based randomness)
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
 
     // Base rank: IP-based randomness only (1 * 7 % 20 = 7)
     assert(peer.peer_rank == 7, "Base rank should be IP-based randomness");
@@ -410,25 +437,25 @@ fn void test_peer_rank_calculation() @test
     // Simulate download from peer (should boost rank by +100)
     peer.prev_amount_download = 1000;
     pool.update_candidate_cache();
-    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     assert(peer.peer_rank == 107, "Rank with download history should be 107");
 
     // Mark as seed (should boost rank by +50)
     peer.seed = true;
     pool.update_candidate_cache();
-    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     assert(peer.peer_rank == 157, "Rank with seed + download should be 157");
 
     // Add failure (should penalize by -20)
     peer.failcount = 1;
     pool.update_candidate_cache();
-    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     assert(peer.peer_rank == 137, "Rank with 1 failure should be 137");
 
     // Add hash failure (should penalize by -30)
     peer.hashfails = 1;
     pool.update_candidate_cache();
-    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     assert(peer.peer_rank == 107, "Rank with hash failure should be 107");
 }
 
@@ -447,16 +474,19 @@ fn void test_candidate_cache_sorting() @test
 
     // Add peers with different characteristics
     // Peer 1: Normal peer (rank = 1 * 7 % 20 = 7)
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
 
     // Peer 2: Seed (rank = 50 + 2 * 7 % 20 = 64)
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.seed = true;
 
     // Peer 3: Downloaded from before (rank = 100 + 3 * 7 % 20 = 101)
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.prev_amount_download = 5000;
 
     // Update cache
@@ -470,9 +500,9 @@ fn void test_candidate_cache_sorting() @test
            "Second candidate should have higher rank than third");
 
     // Verify order: peer3 (101) > peer2 (64) > peer1 (7)
-    assert(pool.candidate_cache[0].port == 6883, "Best candidate should be peer3");
-    assert(pool.candidate_cache[1].port == 6882, "Second candidate should be peer2");
-    assert(pool.candidate_cache[2].port == 6881, "Third candidate should be peer1");
+    assert(pool.candidate_cache[0].addr.port == 6883, "Best candidate should be peer3");
+    assert(pool.candidate_cache[1].addr.port == 6882, "Second candidate should be peer2");
+    assert(pool.candidate_cache[2].addr.port == 6881, "Third candidate should be peer1");
 }
 
 // Test pick_best_candidate returns highest-ranked peer.
@@ -499,18 +529,20 @@ fn void test_pick_best_candidate() @test
     }
 
     // Add peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
 
     // Mark one as seed
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.seed = true;
 
     pool.update_candidate_cache();
 
     // Pick best - should be the seed
     peer_pool::TorrentPeer* best = pool.pick_best_candidate()!!;
-    assert(best.port == 6882, "Best candidate should be the seed");
+    assert(best.addr.port == 6882, "Best candidate should be the seed");
     assert(best.seed == true, "Best candidate should be seed");
 }
 
@@ -528,17 +560,19 @@ fn void test_seed_priority() @test
     defer pool.free();
 
     // Add regular peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     int regular_rank = peer1.peer_rank;
 
     // Add seed peer
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.seed = true;
 
     pool.update_candidate_cache();
-    peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer2 = pool.find_peer(&addr2)!!;
     int seed_rank = peer2.peer_rank;
 
     // Seed should have higher rank
@@ -560,14 +594,15 @@ fn void test_failure_penalty() @test
     defer pool.free();
 
     // Add peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
     int initial_rank = peer.peer_rank;
 
     // Add connection failure
     peer.failcount = 1;
     pool.update_candidate_cache();
-    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     int rank_after_fail = peer.peer_rank;
 
     assert(rank_after_fail < initial_rank, "Rank should decrease after failure");
@@ -576,7 +611,7 @@ fn void test_failure_penalty() @test
     // Add hash failure
     peer.hashfails = 1;
     pool.update_candidate_cache();
-    peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     int rank_after_hash_fail = peer.peer_rank;
 
     assert(rank_after_hash_fail < rank_after_fail, "Rank should decrease after hash failure");
@@ -620,13 +655,14 @@ fn void test_disconnect_peer() @test
     defer pool.free();
 
     // Add a peer
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 1, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     // Disconnect peer (should not crash even without connection)
-    pool.disconnect_peer({ 192, 168, 1, 1 }, 6881);
+    pool.disconnect_peer(&addr);
 
     // Verify peer still exists but state changed
-    peer_pool::TorrentPeer* peer = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
     assert(peer.state == peer_pool::PeerState.DISCONNECTED,
            "Disconnected peer should be in DISCONNECTED state");
 }
@@ -645,9 +681,12 @@ fn void test_disconnect_all() @test
     defer pool.free();
 
     // Add multiple peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
     // Disconnect all (peers without connections remain unchanged)
     pool.disconnect_all();
@@ -656,9 +695,9 @@ fn void test_disconnect_all() @test
     assert(pool.num_active_connections == 0, "Should have 0 active connections");
 
     // Verify peers still exist (just checking disconnect_all doesn't crash)
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
 
     // Peers without connections stay in their original state (DISCOVERED)
     assert(peer1.state == peer_pool::PeerState.DISCOVERED, "Peer 1 should still be DISCOVERED");
@@ -689,8 +728,8 @@ fn void test_connection_limit() @test
     // Add 10 peers
     for (int i = 0; i < 10; i++)
     {
-        char[4] ip = { 192, 168, 1, (char)i };
-        pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
+        common::SocketAddress addr = make_ipv4_addr(192, 168, 1, (char)i, 6881);
+        pool.add_peer(&addr, common::PeerSource.TRACKER);
     }
 
     // Try to connect to peers
@@ -724,18 +763,18 @@ fn void test_update_peer_stats() @test
     defer pool.free();
 
     // Add a peer
-    char[4] ip = { 192, 168, 1, 100 };
-    pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     // Get initial rank
-    TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
     int initial_rank = peer.peer_rank;
 
     // Update stats with download data
-    pool.update_peer_stats(ip, 6881, 1024000, 512000)!!;
+    pool.update_peer_stats(&addr, 1024000, 512000)!!;
 
     // Get updated rank
-    peer = pool.find_peer(ip, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
 
     // Verify stats were updated
     assert(peer.prev_amount_download == 1024000, "Download count should be updated");
@@ -761,18 +800,18 @@ fn void test_mark_hash_failure() @test
     defer pool.free();
 
     // Add a peer
-    char[4] ip = { 192, 168, 1, 100 };
-    pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     // Get initial rank
-    TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
     int initial_rank = peer.peer_rank;
 
     // Mark hash failure
-    pool.mark_hash_failure(ip, 6881)!!;
+    pool.mark_hash_failure(&addr)!!;
 
     // Verify counter incremented
-    peer = pool.find_peer(ip, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     assert(peer.hashfails == 1, "Hash failure count should be 1");
 
     // Verify rank decreased (penalty is -30 per failure)
@@ -780,8 +819,8 @@ fn void test_mark_hash_failure() @test
     assert(peer.peer_rank <= initial_rank - 30, "Should get -30 penalty for hash failure");
 
     // Mark another failure
-    pool.mark_hash_failure(ip, 6881)!!;
-    peer = pool.find_peer(ip, 6881)!!;
+    pool.mark_hash_failure(&addr)!!;
+    peer = pool.find_peer(&addr)!!;
     assert(peer.hashfails == 2, "Hash failure count should be 2");
     assert(peer.peer_rank <= initial_rank - 60, "Should get -60 penalty for 2 hash failures");
 }
@@ -801,19 +840,19 @@ fn void test_mark_peer_seed() @test
     defer pool.free();
 
     // Add a peer
-    char[4] ip = { 192, 168, 1, 100 };
-    pool.add_peer(ip, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     // Get initial rank
-    TorrentPeer* peer = pool.find_peer(ip, 6881)!!;
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
     int initial_rank = peer.peer_rank;
     assert(!peer.seed, "Peer should not be marked as seed initially");
 
     // Mark as seed
-    pool.mark_peer_seed(ip, 6881)!!;
+    pool.mark_peer_seed(&addr)!!;
 
     // Verify seed flag set
-    peer = pool.find_peer(ip, 6881)!!;
+    peer = pool.find_peer(&addr)!!;
     assert(peer.seed, "Peer should be marked as seed");
 
     // Verify rank increased (seed boost is +50)
@@ -835,10 +874,10 @@ fn void test_stats_peer_not_found() @test
                                                     &info_hash, &peer_id, false);
     defer pool.free();
 
-    char[4] ip = { 192, 168, 1, 100 };
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
 
     // Try to update stats for non-existent peer
-    if (catch excuse = pool.update_peer_stats(ip, 6881, 1000, 500))
+    if (catch excuse = pool.update_peer_stats(&addr, 1000, 500))
     {
         // Expected - peer doesn't exist
     }
@@ -848,7 +887,7 @@ fn void test_stats_peer_not_found() @test
     }
 
     // Try to mark hash failure for non-existent peer
-    if (catch excuse = pool.mark_hash_failure(ip, 6881))
+    if (catch excuse = pool.mark_hash_failure(&addr))
     {
         // Expected - peer doesn't exist
     }
@@ -858,7 +897,7 @@ fn void test_stats_peer_not_found() @test
     }
 
     // Try to mark as seed for non-existent peer
-    if (catch excuse = pool.mark_peer_seed(ip, 6881))
+    if (catch excuse = pool.mark_peer_seed(&addr))
     {
         // Expected - peer doesn't exist
     }
@@ -883,41 +922,41 @@ fn void test_stats_update_candidate_cache() @test
     defer pool.free();
 
     // Add two peers
-    char[4] ip1 = { 192, 168, 1, 100 };
-    char[4] ip2 = { 192, 168, 1, 101 };
-    pool.add_peer(ip1, 6881, common::PeerSource.TRACKER);
-    pool.add_peer(ip2, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 100, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 101, 6881);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
 
     // Update candidate cache to make peers available
     pool.update_candidate_cache();
 
     // Initially both have similar ranks, check who is first
-    TorrentPeer* initial_best = pool.pick_best_candidate()!!;
+    peer_pool::TorrentPeer* initial_best = pool.pick_best_candidate()!!;
 
-    // Mark ip2 as seed (should boost its rank significantly)
-    pool.mark_peer_seed(ip2, 6881)!!;
+    // Mark addr2 as seed (should boost its rank significantly)
+    pool.mark_peer_seed(&addr2)!!;
 
-    // Now ip2 should be the best candidate
-    TorrentPeer* new_best = pool.pick_best_candidate()!!;
+    // Now addr2 should be the best candidate
+    peer_pool::TorrentPeer* new_best = pool.pick_best_candidate()!!;
 
-    // Verify ip2 is now best
-    assert(new_best.ip[0] == ip2[0] && new_best.ip[1] == ip2[1] &&
-           new_best.ip[2] == ip2[2] && new_best.ip[3] == ip2[3] &&
-           new_best.port == 6881,
+    // Verify addr2 is now best
+    assert(new_best.addr.addr.ipv4.a == 192 && new_best.addr.addr.ipv4.b == 168 &&
+           new_best.addr.addr.ipv4.c == 1 && new_best.addr.addr.ipv4.d == 101 &&
+           new_best.addr.port == 6881,
            "Seed peer should be ranked highest");
 
-    // Mark ip2 with hash failure multiple times (should tank its rank)
-    pool.mark_hash_failure(ip2, 6881)!!;
-    pool.mark_hash_failure(ip2, 6881)!!;
-    pool.mark_hash_failure(ip2, 6881)!!;
+    // Mark addr2 with hash failure multiple times (should tank its rank)
+    pool.mark_hash_failure(&addr2)!!;
+    pool.mark_hash_failure(&addr2)!!;
+    pool.mark_hash_failure(&addr2)!!;
 
-    // Now ip1 should be better
+    // Now addr1 should be better
     new_best = pool.pick_best_candidate()!!;
 
-    // Verify ip1 is now best (ip2 has too many hash failures)
-    assert(new_best.ip[0] == ip1[0] && new_best.ip[1] == ip1[1] &&
-           new_best.ip[2] == ip1[2] && new_best.ip[3] == ip1[3] &&
-           new_best.port == 6881,
+    // Verify addr1 is now best (addr2 has too many hash failures)
+    assert(new_best.addr.addr.ipv4.a == 192 && new_best.addr.addr.ipv4.b == 168 &&
+           new_best.addr.addr.ipv4.c == 1 && new_best.addr.addr.ipv4.d == 100 &&
+           new_best.addr.port == 6881,
            "Peer with hash failures should be ranked lower");
 }
 
@@ -941,15 +980,12 @@ fn void test_add_peers_from_dht() @test
     defer pool.free();
 
     // Create DHT peer list
-    common::Peer[] dht_peers = mem::new_array(common::Peer, 3);
+    common::SocketAddress[] dht_peers = mem::new_array(common::SocketAddress, 3);
     defer free(dht_peers);
 
-    dht_peers[0].ip = { 10, 20, 30, 40 };
-    dht_peers[0].port = 51413;
-    dht_peers[1].ip = { 172, 16, 0, 1 };
-    dht_peers[1].port = 6881;
-    dht_peers[2].ip = { 192, 168, 100, 1 };
-    dht_peers[2].port = 6882;
+    dht_peers[0] = make_ipv4_addr(10, 20, 30, 40, 51413);
+    dht_peers[1] = make_ipv4_addr(172, 16, 0, 1, 6881);
+    dht_peers[2] = make_ipv4_addr(192, 168, 100, 1, 6882);
 
     // Add peers from DHT
     pool.add_peers_from_dht(dht_peers);
@@ -960,17 +996,20 @@ fn void test_add_peers_from_dht() @test
     assert(total == 3, "Should have 3 peers from DHT");
 
     // Verify each peer can be found
-    if (catch err = pool.find_peer({ 10, 20, 30, 40 }, 51413))
+    common::SocketAddress addr1 = make_ipv4_addr(10, 20, 30, 40, 51413);
+    if (catch err = pool.find_peer(&addr1))
     {
         assert(false, "Should find DHT peer 1");
     }
 
-    if (catch err = pool.find_peer({ 172, 16, 0, 1 }, 6881))
+    common::SocketAddress addr2 = make_ipv4_addr(172, 16, 0, 1, 6881);
+    if (catch err = pool.find_peer(&addr2))
     {
         assert(false, "Should find DHT peer 2");
     }
 
-    if (catch err = pool.find_peer({ 192, 168, 100, 1 }, 6882))
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 100, 1, 6882);
+    if (catch err = pool.find_peer(&addr3))
     {
         assert(false, "Should find DHT peer 3");
     }
@@ -994,16 +1033,16 @@ fn void test_dht_peers_not_from_tracker() @test
     defer pool.free();
 
     // Add DHT peer
-    common::Peer[] dht_peers = mem::new_array(common::Peer, 1);
+    common::SocketAddress[] dht_peers = mem::new_array(common::SocketAddress, 1);
     defer free(dht_peers);
 
-    dht_peers[0].ip = { 10, 20, 30, 40 };
-    dht_peers[0].port = 51413;
+    dht_peers[0] = make_ipv4_addr(10, 20, 30, 40, 51413);
 
     pool.add_peers_from_dht(dht_peers);
 
     // Verify peer is marked as NOT from tracker
-    peer_pool::TorrentPeer* peer = pool.find_peer({ 10, 20, 30, 40 }, 51413)!!;
+    common::SocketAddress addr = make_ipv4_addr(10, 20, 30, 40, 51413);
+    peer_pool::TorrentPeer* peer = pool.find_peer(&addr)!!;
     assert(peer.source != common::PeerSource.TRACKER, "DHT peer should not be marked as from_tracker");
     assert(peer.state == peer_pool::PeerState.DISCOVERED, "DHT peer should be DISCOVERED");
 
@@ -1026,21 +1065,19 @@ fn void test_dht_tracker_deduplication() @test
                                                     &info_hash, &peer_id, false);
     defer pool.free();
 
-    common::Ipv4Addr shared_ip = { 192, 168, 1, 100 };
-    ushort shared_port = 6881;
+    common::SocketAddress shared_addr = make_ipv4_addr(192, 168, 1, 100, 6881);
 
     // Add peer from tracker first
-    pool.add_peer(shared_ip, shared_port, common::PeerSource.TRACKER);
+    pool.add_peer(&shared_addr, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer = pool.find_peer(shared_ip, shared_port)!!;
+    peer_pool::TorrentPeer* peer = pool.find_peer(&shared_addr)!!;
     assert(peer.source == common::PeerSource.TRACKER, "Peer from tracker should be marked");
 
     // Now add same peer from DHT
-    common::Peer[] dht_peers = mem::new_array(common::Peer, 1);
+    common::SocketAddress[] dht_peers = mem::new_array(common::SocketAddress, 1);
     defer free(dht_peers);
 
-    dht_peers[0].ip = shared_ip;
-    dht_peers[0].port = shared_port;
+    dht_peers[0] = shared_addr;
 
     pool.add_peers_from_dht(dht_peers);
 
@@ -1050,7 +1087,7 @@ fn void test_dht_tracker_deduplication() @test
     assert(total == 1, "Should not create duplicate peer");
 
     // Verify from_tracker flag remains true
-    peer = pool.find_peer(shared_ip, shared_port)!!;
+    peer = pool.find_peer(&shared_addr)!!;
     assert(peer.source == common::PeerSource.TRACKER, "source == common::PeerSource.TRACKER flag should remain true");
 
     io::printn("✓ DHT/tracker deduplication");
@@ -1076,15 +1113,18 @@ fn void test_filter_default() @test
     defer pool.free();
 
     // Add peers in different states
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
     // Change states
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.state = peer_pool::PeerState.CONNECTED;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.state = peer_pool::PeerState.CONNECTING;
 
     // Use default filter
@@ -1120,14 +1160,17 @@ fn void test_filter_single_state() @test
     defer pool.free();
 
     // Add peers in different states
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.state = peer_pool::PeerState.CONNECTED;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.state = peer_pool::PeerState.CONNECTING;
 
     // Filter for CONNECTED only
@@ -1166,18 +1209,22 @@ fn void test_filter_combined_states() @test
     defer pool.free();
 
     // Add peers in different states
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 4 }, 6884, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    common::SocketAddress addr4 = make_ipv4_addr(192, 168, 1, 4, 6884);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
+    pool.add_peer(&addr4, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.state = peer_pool::PeerState.CONNECTED;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.state = peer_pool::PeerState.CONNECTING;
 
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.state = peer_pool::PeerState.DISCONNECTED;
 
     // Filter for CONNECTED | CONNECTING
@@ -1215,14 +1262,17 @@ fn void test_filter_exclude_states() @test
     defer pool.free();
 
     // Add peers in different states
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.state = peer_pool::PeerState.CONNECTED;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.state = peer_pool::PeerState.BANNED;
 
     // Filter for ALL except BANNED
@@ -1268,14 +1318,17 @@ fn void test_filter_seeds_only() @test
     defer pool.free();
 
     // Add peers - some seeds, some leechers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.seed = true;
 
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.seed = true;
 
     // Filter for seeds only
@@ -1313,11 +1366,14 @@ fn void test_filter_leechers_only() @test
     defer pool.free();
 
     // Add peers - some seeds, some leechers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.seed = true;
 
     // Filter for leechers only
@@ -1355,9 +1411,12 @@ fn void test_filter_by_source() @test
     defer pool.free();
 
     // Add peers from different sources
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.DHT);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.PEX);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.DHT);
+    pool.add_peer(&addr3, common::PeerSource.PEX);
 
     // Filter for TRACKER only
     peer_pool::PeerFilter filter = peer_pool::create_default_filter();
@@ -1396,8 +1455,10 @@ fn void test_filter_empty_result() @test
     defer pool.free();
 
     // Add peers all in DISCOVERED state
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
 
     // Filter for CONNECTED only (but no peers are connected)
     peer_pool::PeerFilter filter = peer_pool::create_default_filter();
@@ -1434,17 +1495,20 @@ fn void test_sort_by_state() @test
     defer pool.free();
 
     // Add peers in different states
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.state = peer_pool::PeerState.DISCOVERED;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.state = peer_pool::PeerState.CONNECTED;
 
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.state = peer_pool::PeerState.CONNECTING;
 
     // Sort by state
@@ -1483,17 +1547,20 @@ fn void test_sort_by_downloaded() @test
     defer pool.free();
 
     // Add peers with different download amounts
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.prev_amount_download = 1000;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.prev_amount_download = 5000;
 
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.prev_amount_download = 3000;
 
     // Sort by downloaded (highest first)
@@ -1532,16 +1599,19 @@ fn void test_sort_by_rank() @test
     defer pool.free();
 
     // Add peers with different characteristics
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
     // Mark one as seed (boosts rank)
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.seed = true;
 
     // Mark one with download history (boosts rank)
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.prev_amount_download = 10000;
 
     // Update ranks
@@ -1582,19 +1652,22 @@ fn void test_sort_by_reliability() @test
     defer pool.free();
 
     // Add peers with different failure counts
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.TRACKER);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
 
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.failcount = 5;
     peer1.hashfails = 2;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.failcount = 1;
     peer2.hashfails = 0;
 
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.failcount = 0;
     peer3.hashfails = 0;
 
@@ -1667,24 +1740,28 @@ fn void test_filter_complex() @test
     defer pool.free();
 
     // Add various peers
-    pool.add_peer({ 192, 168, 1, 1 }, 6881, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 2 }, 6882, common::PeerSource.DHT);
-    pool.add_peer({ 192, 168, 1, 3 }, 6883, common::PeerSource.TRACKER);
-    pool.add_peer({ 192, 168, 1, 4 }, 6884, common::PeerSource.TRACKER);
+    common::SocketAddress addr1 = make_ipv4_addr(192, 168, 1, 1, 6881);
+    common::SocketAddress addr2 = make_ipv4_addr(192, 168, 1, 2, 6882);
+    common::SocketAddress addr3 = make_ipv4_addr(192, 168, 1, 3, 6883);
+    common::SocketAddress addr4 = make_ipv4_addr(192, 168, 1, 4, 6884);
+    pool.add_peer(&addr1, common::PeerSource.TRACKER);
+    pool.add_peer(&addr2, common::PeerSource.DHT);
+    pool.add_peer(&addr3, common::PeerSource.TRACKER);
+    pool.add_peer(&addr4, common::PeerSource.TRACKER);
 
     // Set characteristics
-    peer_pool::TorrentPeer* peer1 = pool.find_peer({ 192, 168, 1, 1 }, 6881)!!;
+    peer_pool::TorrentPeer* peer1 = pool.find_peer(&addr1)!!;
     peer1.state = peer_pool::PeerState.CONNECTED;
     peer1.seed = true;
 
-    peer_pool::TorrentPeer* peer2 = pool.find_peer({ 192, 168, 1, 2 }, 6882)!!;
+    peer_pool::TorrentPeer* peer2 = pool.find_peer(&addr2)!!;
     peer2.state = peer_pool::PeerState.CONNECTED;
     peer2.seed = true;
 
-    peer_pool::TorrentPeer* peer3 = pool.find_peer({ 192, 168, 1, 3 }, 6883)!!;
+    peer_pool::TorrentPeer* peer3 = pool.find_peer(&addr3)!!;
     peer3.state = peer_pool::PeerState.CONNECTING;
 
-    peer_pool::TorrentPeer* peer4 = pool.find_peer({ 192, 168, 1, 4 }, 6884)!!;
+    peer_pool::TorrentPeer* peer4 = pool.find_peer(&addr4)!!;
     peer4.state = peer_pool::PeerState.CONNECTED;
     peer4.seed = false;
 
@@ -1784,7 +1861,8 @@ fn void test_pex_disabled_for_private_pool() @test
     assert(pool.is_private == true, "Pool should be marked as private");
 
     // Add a peer to the pool (would normally trigger PEX if not private)
-    pool.add_peer({ 1, 2, 3, 4 }, 6881, common::PeerSource.TRACKER);
+    common::SocketAddress addr = make_ipv4_addr(1, 2, 3, 4, 6881);
+    pool.add_peer(&addr, common::PeerSource.TRACKER);
 
     // Call send_pex_updates - should not crash for private torrents
     // The internal broadcast_pex_update will return early (peer_pool.c3:1145-1149)

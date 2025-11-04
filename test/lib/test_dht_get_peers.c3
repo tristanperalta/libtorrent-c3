@@ -32,7 +32,20 @@ fn common::NodeId create_test_node_id(char seed)
     return id;
 }
 
-// Helper function to create a test IP address
+// Helper function to create a test socket address
+fn common::SocketAddress make_ipv4_addr(char a, char b, char c, char d, ushort port)
+{
+    common::SocketAddress addr;
+    addr.addr.is_ipv6 = false;
+    addr.addr.ipv4.a = a;
+    addr.addr.ipv4.b = b;
+    addr.addr.ipv4.c = c;
+    addr.addr.ipv4.d = d;
+    addr.port = port;
+    return addr;
+}
+
+// Helper function to create a test IP address (for DHT nodes)
 fn common::Ipv4Addr create_test_ip(char a, char b, char c, char d)
 {
     common::Ipv4Addr ip;
@@ -78,8 +91,8 @@ fn void test_add_peer() @test
     dht_get_peers::GetPeersSearch* search = dht_get_peers::create_search(info_hash);
     defer search.free();
 
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    bool added = search.add_peer( ip, 6881);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
+    bool added = search.add_peer(addr);
 
     assert(added, "Should add peer");
     assert(search.peer_count == 1, "Should have 1 peer");
@@ -94,14 +107,14 @@ fn void test_add_duplicate_peer() @test
     dht_get_peers::GetPeersSearch* search = dht_get_peers::create_search(info_hash);
     defer search.free();
 
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
 
     // Add peer first time
-    bool added1 = search.add_peer( ip, 6881);
+    bool added1 = search.add_peer(addr);
     assert(added1, "Should add peer first time");
 
     // Try to add same peer again
-    bool added2 = search.add_peer( ip, 6881);
+    bool added2 = search.add_peer(addr);
     assert(!added2, "Should not add duplicate peer");
     assert(search.peer_count == 1, "Should still have only 1 peer");
 
@@ -117,8 +130,8 @@ fn void test_add_multiple_peers() @test
     // Add 5 different peers
     for (int i = 0; i < 5; i++)
     {
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        bool added = search.add_peer( ip, (ushort)(6881 + i));
+        common::SocketAddress addr = make_ipv4_addr(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        bool added = search.add_peer(addr);
         assert(added, "Should add peer");
     }
 
@@ -155,12 +168,12 @@ fn void test_get_peers() @test
     // Add peers
     for (int i = 0; i < 3; i++)
     {
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        search.add_peer( ip, 6881);
+        common::SocketAddress addr = make_ipv4_addr(192, 168, 1, (char)(100 + i), 6881);
+        search.add_peer(addr);
     }
 
     // Get peers
-    common::Peer[] peers = search.get_peers();
+    common::SocketAddress[] peers = search.get_peers();
     defer free(peers);
 
     assert(peers.len == 3, "Should return 3 peers");
@@ -278,13 +291,18 @@ fn void test_get_stats() @test
     assert(queries == 0, "Should have 0 queries initially");
 
     // Add some peers and tokens
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    search.add_peer( ip, 6881);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
+    search.add_peer(addr);
 
     common::NodeId node_id = create_test_node_id(0x22);
-    common::Ipv4Addr node_ip = create_test_ip(192, 168, 1, 50);
+    common::SocketAddress node_addr = make_ipv4_addr(192, 168, 1, 50, 6881);
+    common::Ipv4Addr node_ip;
+    node_ip[0] = node_addr.addr.ipv4.a;
+    node_ip[1] = node_addr.addr.ipv4.b;
+    node_ip[2] = node_addr.addr.ipv4.c;
+    node_ip[3] = node_addr.addr.ipv4.d;
     char[4] token = { 0x01, 0x02, 0x03, 0x04 };
-    search.add_token( node_id, node_ip, 6881, token[..]);
+    search.add_token(node_id, node_ip, 6881, token[..]);
 
     search.get_stats( &peers, &tokens, &queries);
     assert(peers == 1, "Should have 1 peer");
@@ -304,8 +322,8 @@ fn void test_found_peers() @test
     assert(!found, "Should not have found peers initially");
 
     // Add a peer
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    search.add_peer( ip, 6881);
+    common::SocketAddress addr = make_ipv4_addr(192, 168, 1, 100, 6881);
+    search.add_peer(addr);
 
     // Should now have found peers
     found = dht_get_peers::found_peers(search);

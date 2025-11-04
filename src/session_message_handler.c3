@@ -25,23 +25,22 @@ import torrent_client::download_session;
  *
  * @param peer : "Peer connection that sent the message"
  * @param msg : "Decoded message"
- * @param ip : "Peer IP address"
- * @param port : "Peer port"
+ * @param addr : "Peer address (IPv4 or IPv6)"
  * @param user_data : "DownloadContext pointer"
  */
 fn void handle_peer_message(peer_connection::PeerConnection* peer,
                              peer_wire::Message* msg,
-                             common::Ipv4Addr ip, ushort port,
+                             common::SocketAddress* addr,
                              void* user_data) @public
 {
     download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
 
     // Get peer from pool
-    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(ip, port);
+    peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(addr);
     if (catch err = peer_opt)
     {
-        io::eprintfn("  [ERROR] Message from unknown peer %d.%d.%d.%d:%d",
-                     ip[0], ip[1], ip[2], ip[3], port);
+        // Message from unknown peer (BEP 7: dual-stack)
+        io::eprintfn("  [ERROR] Message from unknown peer %s", addr);
         return;
     }
     peer_pool::TorrentPeer* peer_info = peer_opt;
@@ -80,8 +79,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 }
                 peer_info.pieces = bitfield::from_bytes(msg.payload, num_pieces);
 
-                io::printfn("  Peer %d.%d.%d.%d:%d sent bitfield",
-                            ip[0], ip[1], ip[2], ip[3], port);
+                io::printfn("  Peer %s sent bitfield", addr);
 
                 // Count how many pieces the peer has
                 int peer_piece_count = 0;
@@ -116,7 +114,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 // Check if peer is a seed
                 if (peer_piece_count == (int)num_pieces)
                 {
-                    ctx.peer_pool.mark_peer_seed(ip, port)!!;
+                    ctx.peer_pool.mark_peer_seed(addr)!!;
                 }
             }
 
@@ -145,8 +143,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             peer_info.pieces = bitfield::create(num_pieces);
             peer_info.pieces.set_all();
 
-            io::printfn("  Peer %d.%d.%d.%d:%d sent HAVE_ALL (seed)",
-                        ip[0], ip[1], ip[2], ip[3], port);
+            io::printfn("  Peer %s sent HAVE_ALL (seed)", addr);
 
             // Start piece downloads
             int pieces_started = 0;
@@ -168,7 +165,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             free(has_all_pieces);
 
             // Mark peer as seed
-            ctx.peer_pool.mark_peer_seed(ip, port)!!;
+            ctx.peer_pool.mark_peer_seed(addr)!!;
 
         case peer_wire::MessageType.HAVE_NONE:
             // BEP 6: Peer has no pieces (replaces empty BITFIELD for new leechers)
@@ -184,8 +181,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             }
             peer_info.pieces = bitfield::create(num_pieces_none);
 
-            io::printfn("  Peer %d.%d.%d.%d:%d sent HAVE_NONE (new leecher)",
-                        ip[0], ip[1], ip[2], ip[3], port);
+            io::printfn("  Peer %s sent HAVE_NONE (new leecher)", addr);
 
             // No pieces to download from this peer yet (wait for HAVE messages)
 
@@ -223,7 +219,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             }
 
             // Track download statistics
-            ctx.peer_pool.update_peer_stats(ip, port, (ulong)piece_msg.block.len, 0)!!;
+            ctx.peer_pool.update_peer_stats(addr, (ulong)piece_msg.block.len, 0)!!;
 
             // Check if piece is complete
             usz total_blocks, received_blocks;
@@ -241,8 +237,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             request_blocks_from_peers(ctx);
 
         case peer_wire::MessageType.UNCHOKE:
-            io::printfn("  Peer %d.%d.%d.%d:%d unchoked us",
-                        ip[0], ip[1], ip[2], ip[3], port);
+            io::printfn("  Peer %s unchoked us", addr);
 
             // If we haven't received BITFIELD yet, assume peer has all pieces
             if (!peer_info.received_bitfield)
@@ -291,7 +286,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 peer_info.received_bitfield = true;  // Mark as handled
 
                 // Mark as seed if has all pieces
-                ctx.peer_pool.mark_peer_seed(ip, port)!!;
+                ctx.peer_pool.mark_peer_seed(addr)!!;
             }
 
             // Try to start new pieces if we have available slots
@@ -337,8 +332,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             peer_wire::RequestMsg? req_opt = peer_wire::decode_request(msg.payload);
             if (catch err = req_opt)
             {
-                io::printfn("  Invalid REQUEST message from peer %d.%d.%d.%d:%d",
-                            ip[0], ip[1], ip[2], ip[3], port);
+                io::printfn("  Invalid REQUEST message from peer %s", addr);
                 return;
             }
 
@@ -355,13 +349,11 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             // Send REJECT_REQUEST for all requests (leecher mode)
             if (catch excuse = peer.send_reject_request(req.index, req.begin, req.length))
             {
-                io::printfn("  Failed to send REJECT_REQUEST to peer %d.%d.%d.%d:%d: %s",
-                            ip[0], ip[1], ip[2], ip[3], port, excuse);
+                io::printfn("  Failed to send REJECT_REQUEST to peer %s: %s", addr, excuse);
             }
 
         case peer_wire::MessageType.CHOKE:
-            io::printfn("  Peer %d.%d.%d.%d:%d choked us",
-                        ip[0], ip[1], ip[2], ip[3], port);
+            io::printfn("  Peer %s choked us", addr);
 
         default:
             // Ignore other message types for now

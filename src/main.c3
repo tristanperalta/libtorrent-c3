@@ -507,9 +507,7 @@ fn void display_tracker_response(tracker::TrackerResponse* response)
     {
         foreach (idx, peer : response.peers)
         {
-            String ip = format_ip_address(peer.ip);
-            defer free(ip);
-            io::printfn("  [%d] %s:%d", idx + 1, ip, peer.port);
+            io::printfn("  [%d] %s", idx + 1, peer);
         }
     }
 }
@@ -822,7 +820,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
 
     io::printfn("Tracker returned %d peers", ctx.total_peers);
 
-    // Add all peers to peer pool (Phase 1 integration)
+    // Add all peers to peer pool (already SocketAddress[] from tracker)
     ctx.peer_pool.add_peers_from_tracker(response.peers);
 
     // Show peer pool stats
@@ -843,15 +841,11 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
 
     for (int i = 0; i < max_connections; i++)
     {
-        common::Peer peer = response.peers[i];
+        common::SocketAddress peer = response.peers[i];
 
-        // Format IP address
+        // Format IP address (just the IP part, not including port)
         DString ip_buf;
-        ip_buf.appendf("%d.%d.%d.%d",
-                       (int)peer.ip[0] & 0xFF,
-                       (int)peer.ip[1] & 0xFF,
-                       (int)peer.ip[2] & 0xFF,
-                       (int)peer.ip[3] & 0xFF);
+        ip_buf.appendf("%s", peer.addr);  // InetAddress has built-in formatting
         ctx.peer_infos[i].ip_str = ip_buf.copy_str(mem);
         ctx.peer_infos[i].port = peer.port;
         ctx.peer_infos[i].state = peer_connection::PeerState.CONNECTING;
