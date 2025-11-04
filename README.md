@@ -104,8 +104,6 @@ Blocks torrents trying to write outside the download folder:
 
 ## Testing
 
-492+ tests cover all modules with 84 real torrent files for validation.
-
 ### Run all tests
 
 ```bash
