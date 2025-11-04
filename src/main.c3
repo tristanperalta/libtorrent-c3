@@ -1375,15 +1375,11 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.dm = null;
     ctx.sm = null;
     ctx.tracker_completed = false;
-    ctx.announce_timer = null;
-    ctx.retry_timer = null;
+    ctx.tracker_coord = null;  // Will be initialized during session setup
     ctx.pex_timer = null;
     ctx.keepalive_timer = null;
     ctx.flush_timer = null;
     ctx.block_timeout_timer = null;
-    ctx.announce_retry_count = 0;
-    ctx.announce_backoff_ms = 0;
-    ctx.initial_announce_done = false;
     ctx.peer_pool = null;
     ctx.dht_client = null;
     ctx.dht_search = null;
@@ -1457,6 +1453,13 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         raylib_gui::update_tracker_list(ui, null,
                                          ctx.current_tracker_url, "Idle", -1);
     }
+
+    // Initialize tracker coordinator
+    ctx.tracker_coord = session_tracker_coordinator::create(
+        loop, torrent, ctx.tracker_mgr, ctx.current_tracker_url
+    );
+    ctx.tracker_coord.set_peers_received_callback(&download_session::on_tracker_peers_received, &ctx);
+    ctx.tracker_coord.set_failed_callback(&download_session::on_tracker_failed, &ctx);
 
     // Build storage path (for multi-file torrents, append torrent name)
     String storage_path = save_path;
@@ -1576,15 +1579,9 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
 
     // Stop and close timers (prevents callbacks from firing during cleanup)
     io::printfn("Stopping timers...");
-    if (ctx.announce_timer)
+    if (ctx.tracker_coord)
     {
-        ctx.announce_timer.stop();
-        ctx.announce_timer.close();
-    }
-    if (ctx.retry_timer)
-    {
-        ctx.retry_timer.stop();
-        ctx.retry_timer.close();
+        ctx.tracker_coord.stop();
     }
     if (ctx.pex_timer)
     {
@@ -1731,15 +1728,11 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.sm = null;
     ctx.tracker_completed = false;
     ctx.tracker_response = null;
-    ctx.announce_timer = null;
-    ctx.retry_timer = null;
+    ctx.tracker_coord = null;  // Will be initialized during session setup
     ctx.pex_timer = null;
     ctx.keepalive_timer = null;
     ctx.flush_timer = null;
     ctx.block_timeout_timer = null;
-    ctx.announce_retry_count = 0;
-    ctx.announce_backoff_ms = 0;
-    ctx.initial_announce_done = false;
     ctx.peer_pool = null;
     ctx.download_complete = false;
     ctx.exit_code = 0;
