@@ -3,6 +3,7 @@ module libtorrent::metadata_download::test;
 import libtorrent::metadata_download;
 import libtorrent::metadata_exchange;
 import libtorrent::common;
+import libtorrent::logger;
 import std::hash::sha1;
 
 /**
@@ -35,6 +36,8 @@ fn void test_metadata_download_create() @test
  */
 fn void test_metadata_download_set_size() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash info_hash;
     for (usz i = 0; i < 20; i++)
     {
@@ -56,6 +59,8 @@ fn void test_metadata_download_set_size() @test
  */
 fn void test_metadata_download_request_pieces() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash info_hash;
     for (usz i = 0; i < 20; i++)
     {
@@ -89,6 +94,8 @@ fn void test_metadata_download_request_pieces() @test
  */
 fn void test_metadata_download_max_requests() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash info_hash;
     for (usz i = 0; i < 20; i++)
     {
@@ -119,6 +126,8 @@ fn void test_metadata_download_max_requests() @test
  */
 fn void test_metadata_download_handle_data() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash info_hash;
     for (usz i = 0; i < 20; i++)
     {
@@ -151,6 +160,8 @@ fn void test_metadata_download_handle_data() @test
  */
 fn void test_metadata_download_handle_reject() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash info_hash;
     for (usz i = 0; i < 20; i++)
     {
@@ -193,6 +204,7 @@ fn void test_metadata_download_complete() @test
 
     metadata_download::MetadataDownload* md = metadata_download::create(info_hash);
     defer md.free();
+    defer logger::free_logger();  // Clean up logger to prevent memory leak
 
     // Set size
     md.set_metadata_size((uint)metadata.len);
@@ -223,6 +235,8 @@ fn void test_metadata_download_complete() @test
  */
 fn void test_metadata_download_hash_mismatch() @test
 {
+    defer logger::free_logger();
+
     // Create wrong info_hash
     common::InfoHash wrong_hash;
     for (usz i = 0; i < 20; i++)
@@ -253,6 +267,8 @@ fn void test_metadata_download_hash_mismatch() @test
  */
 fn void test_metadata_download_multi_piece() @test
 {
+    defer logger::free_logger();
+
     // Create metadata that spans 2 pieces
     char[32768] metadata;  // Exactly 2 * 16KB
     for (usz i = 0; i < 32768; i++)
@@ -302,6 +318,8 @@ fn void test_metadata_download_multi_piece() @test
  */
 fn void test_metadata_download_get_before_complete() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash info_hash;
     for (usz i = 0; i < 20; i++)
     {
@@ -330,6 +348,8 @@ fn void test_metadata_download_get_before_complete() @test
  */
 fn void test_metadata_download_duplicate_piece() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash info_hash;
     for (usz i = 0; i < 20; i++)
     {
@@ -360,6 +380,8 @@ fn void test_metadata_download_duplicate_piece() @test
  */
 fn void test_metadata_download_out_of_order() @test
 {
+    defer logger::free_logger();
+
     // Create metadata that spans 3 pieces
     char[49152] metadata;  // 3 * 16KB
     for (usz i = 0; i < 49152; i++)

@@ -76,12 +76,18 @@ fn void test_handshake_encode() @test
     }
 
     // Verify reserved bytes - byte 25 (index 5) should have extension bit set (BEP 10)
+    // and byte 27 (index 7) should have Fast Extension bit set (BEP 6)
     for (usz i = 20; i < 28; i++)
     {
         if (i == 25)
         {
             // Byte 5 should have extension protocol bit (0x10) set
             assert(handshake[i] == 0x10, "Reserved byte 5 should have extension bit set");
+        }
+        else if (i == 27)
+        {
+            // Byte 7 should have Fast Extension bit (0x04) set
+            assert(handshake[i] == 0x04, "Reserved byte 7 should have Fast Extension bit set");
         }
         else
         {
@@ -119,11 +125,16 @@ fn void test_handshake_decode() @test
     peer_wire::HandshakeMsg msg = msg_opt!!;
 
     // Verify reserved bytes - byte 5 should have extension bit (0x10) set
+    // and byte 7 should have Fast Extension bit (0x04) set
     for (usz i = 0; i < 8; i++)
     {
         if (i == 5)
         {
             assert(msg.reserved[i] == 0x10, "Reserved byte 5 should have extension bit");
+        }
+        else if (i == 7)
+        {
+            assert(msg.reserved[i] == 0x04, "Reserved byte 7 should have Fast Extension bit");
         }
         else
         {
@@ -133,6 +144,7 @@ fn void test_handshake_decode() @test
 
     // Verify extension support is detected
     assert(peer_wire::handshake_supports_extensions(&msg), "Should support extensions");
+    assert(peer_wire::handshake_supports_fast(&msg), "Should support Fast Extension");
 
     // Verify info hash
     for (usz i = 0; i < 20; i++)
@@ -483,10 +495,9 @@ fn void test_extension_handshake_with_metadata() @test
     assert(encoded[4] == (char)peer_wire::MessageType.EXTENDED, "Should be EXTENDED message");
     assert(encoded[5] == peer_wire::EXTENSION_HANDSHAKE_ID, "Should be handshake");
 
-    // Decode the extension message
-    peer_wire::ExtensionMessage? ext_msg = peer_wire::decode_extension_message(encoded);
-    ext_msg!!;
-    defer ext_msg.free();
+    // Decode the extension message (skip length prefix and message type)
+    peer_wire::ExtensionMessage ext_msg = peer_wire::decode_extension_message(encoded[5..])!!;
+    defer if (ext_msg.payload.len > 0) free(ext_msg.payload);
 
     // Decode the handshake
     peer_wire::ExtensionHandshake decoded = peer_wire::decode_extension_handshake(ext_msg.payload)!!;
@@ -518,9 +529,9 @@ fn void test_extension_handshake_metadata_only() @test
     char[] encoded = peer_wire::encode_extension_handshake(&handshake);
     defer free(encoded);
 
-    // Decode
-    peer_wire::ExtensionMessage ext_msg = peer_wire::decode_extension_message(encoded)!!;
-    defer ext_msg.free();
+    // Decode (skip length prefix and message type)
+    peer_wire::ExtensionMessage ext_msg = peer_wire::decode_extension_message(encoded[5..])!!;
+    defer if (ext_msg.payload.len > 0) free(ext_msg.payload);
 
     peer_wire::ExtensionHandshake decoded = peer_wire::decode_extension_handshake(ext_msg.payload)!!;
 
@@ -530,4 +541,152 @@ fn void test_extension_handshake_metadata_only() @test
     assert(decoded.metadata_size == 16384, "metadata_size should match");
 
     io::printn("Extension handshake with ut_metadata only works correctly ✓");
+}
+
+// ============================================================================
+// BEP 6: Fast Extension Tests
+// ============================================================================
+
+fn void test_handshake_supports_fast() @test
+{
+    // Create handshake with Fast Extension enabled
+    char[20] info_hash;
+    char[20] peer_id;
+    for (usz i = 0; i < 20; i++)
+    {
+        info_hash[i] = (char)(i + 1);
+        peer_id[i] = (char)(i + 100);
+    }
+
+    // Encode handshake (should have Fast Extension bit set)
+    char[] encoded = peer_wire::encode_handshake(info_hash, peer_id);
+    defer free(encoded);
+
+    // Verify Fast Extension bit is set (byte 27, bit 0x04)
+    assert(encoded.len == 68, "Handshake should be 68 bytes");
+    assert((encoded[27] & 0x04) != 0, "Fast Extension bit should be set");
+
+    // Decode and check
+    peer_wire::HandshakeMsg handshake = peer_wire::decode_handshake(encoded)!!;
+    assert(peer_wire::handshake_supports_fast(&handshake), "Should support Fast Extension");
+
+    io::printn("Fast Extension handshake support detection works ✓");
+}
+
+fn void test_encode_decode_suggest_piece() @test
+{
+    uint piece_index = 42;
+
+    // Encode
+    char[] encoded = peer_wire::encode_suggest_piece(piece_index);
+    defer free(encoded);
+
+    // Verify format: <len=5><op=13><index>
+    assert(encoded.len == 9, "SUGGEST_PIECE should be 9 bytes");
+    assert(encoded[4] == (char)peer_wire::MessageType.SUGGEST_PIECE, "Message type should be SUGGEST_PIECE");
+
+    // Decode message
+    peer_wire::Message msg = peer_wire::decode_message(encoded)!!;
+    defer if (msg.payload.len > 0) free(msg.payload);
+
+    assert(msg.type == peer_wire::MessageType.SUGGEST_PIECE, "Message type should match");
+    assert(msg.payload.len == 4, "Payload should be 4 bytes");
+
+    // Decode piece index
+    uint decoded_index = peer_wire::decode_fast_piece_index(msg.payload)!!;
+    assert(decoded_index == piece_index, "Piece index should match");
+
+    io::printn("SUGGEST_PIECE encoding/decoding works ✓");
+}
+
+fn void test_encode_decode_have_all() @test
+{
+    // Encode
+    char[] encoded = peer_wire::encode_have_all();
+    defer free(encoded);
+
+    // Verify format: <len=1><op=14>
+    assert(encoded.len == 5, "HAVE_ALL should be 5 bytes");
+    assert(encoded[4] == (char)peer_wire::MessageType.HAVE_ALL, "Message type should be HAVE_ALL");
+
+    // Decode
+    peer_wire::Message msg = peer_wire::decode_message(encoded)!!;
+    assert(msg.type == peer_wire::MessageType.HAVE_ALL, "Message type should match");
+    assert(msg.payload.len == 0, "HAVE_ALL should have no payload");
+
+    io::printn("HAVE_ALL encoding/decoding works ✓");
+}
+
+fn void test_encode_decode_have_none() @test
+{
+    // Encode
+    char[] encoded = peer_wire::encode_have_none();
+    defer free(encoded);
+
+    // Verify format: <len=1><op=15>
+    assert(encoded.len == 5, "HAVE_NONE should be 5 bytes");
+    assert(encoded[4] == (char)peer_wire::MessageType.HAVE_NONE, "Message type should be HAVE_NONE");
+
+    // Decode
+    peer_wire::Message msg = peer_wire::decode_message(encoded)!!;
+    assert(msg.type == peer_wire::MessageType.HAVE_NONE, "Message type should match");
+    assert(msg.payload.len == 0, "HAVE_NONE should have no payload");
+
+    io::printn("HAVE_NONE encoding/decoding works ✓");
+}
+
+fn void test_encode_decode_reject_request() @test
+{
+    uint index = 123;
+    uint begin = 16384;
+    uint length = 16384;
+
+    // Encode
+    char[] encoded = peer_wire::encode_reject_request(index, begin, length);
+    defer free(encoded);
+
+    // Verify format: <len=13><op=16><index><begin><length>
+    assert(encoded.len == 17, "REJECT_REQUEST should be 17 bytes");
+    assert(encoded[4] == (char)peer_wire::MessageType.REJECT_REQUEST, "Message type should be REJECT_REQUEST");
+
+    // Decode message
+    peer_wire::Message msg = peer_wire::decode_message(encoded)!!;
+    defer if (msg.payload.len > 0) free(msg.payload);
+
+    assert(msg.type == peer_wire::MessageType.REJECT_REQUEST, "Message type should match");
+    assert(msg.payload.len == 12, "Payload should be 12 bytes");
+
+    // Decode request (same format as REQUEST/CANCEL)
+    peer_wire::RequestMsg req = peer_wire::decode_reject_request(msg.payload)!!;
+    assert(req.index == index, "Index should match");
+    assert(req.begin == begin, "Begin should match");
+    assert(req.length == length, "Length should match");
+
+    io::printn("REJECT_REQUEST encoding/decoding works ✓");
+}
+
+fn void test_encode_decode_allowed_fast() @test
+{
+    uint piece_index = 999;
+
+    // Encode
+    char[] encoded = peer_wire::encode_allowed_fast(piece_index);
+    defer free(encoded);
+
+    // Verify format: <len=5><op=17><index>
+    assert(encoded.len == 9, "ALLOWED_FAST should be 9 bytes");
+    assert(encoded[4] == (char)peer_wire::MessageType.ALLOWED_FAST, "Message type should be ALLOWED_FAST");
+
+    // Decode message
+    peer_wire::Message msg = peer_wire::decode_message(encoded)!!;
+    defer if (msg.payload.len > 0) free(msg.payload);
+
+    assert(msg.type == peer_wire::MessageType.ALLOWED_FAST, "Message type should match");
+    assert(msg.payload.len == 4, "Payload should be 4 bytes");
+
+    // Decode piece index
+    uint decoded_index = peer_wire::decode_fast_piece_index(msg.payload)!!;
+    assert(decoded_index == piece_index, "Piece index should match");
+
+    io::printn("ALLOWED_FAST encoding/decoding works ✓");
 }

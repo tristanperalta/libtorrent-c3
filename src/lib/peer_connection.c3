@@ -10,6 +10,7 @@ import libtorrent::bencode;
 import libtorrent::common;
 import std::io;
 import std::time;
+import std::collections::list;
 import libtorrent::logger;
 
 <*
@@ -30,6 +31,7 @@ import libtorrent::logger;
 faultdef PEER_HANDSHAKE_FAILED;
 faultdef PEER_MESSAGE_SEND_FAILED;
 faultdef PEER_INVALID_STATE;
+faultdef PEER_NO_FAST_EXTENSION;
 
 <*
  Connection state for a peer.
@@ -128,6 +130,12 @@ struct PeerConnection
     char our_metadata_msg_id;    // Our message ID for ut_metadata (fixed at 2)
     uint peer_metadata_size;     // Size of metadata the peer has (0 = unknown/not sharing)
 
+    // Fast Extension (BEP 6) - for improved bootstrapping
+    bool supports_fast;                  // Peer supports Fast Extension
+    List{uint} allowed_fast_set;         // Pieces peer allows us to download when choked
+    List{uint} peer_allowed_fast;        // Pieces we allow peer to download when choked
+    List{uint} suggested_pieces;         // Pieces peer has suggested we download
+
     // Message buffering
     DString recv_buffer;     // Accumulates TCP chunks
 
@@ -198,6 +206,12 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.our_metadata_msg_id = 2;  // Fixed message ID for ut_metadata
     peer.peer_metadata_size = 0;
 
+    // Initialize Fast Extension state (BEP 6)
+    peer.supports_fast = false;
+    peer.allowed_fast_set.init(mem);
+    peer.peer_allowed_fast.init(mem);
+    peer.suggested_pieces.init(mem);
+
     // Initialize callbacks
     peer.msg_cb = msg_cb;
     peer.state_cb = state_cb;
@@ -243,6 +257,11 @@ fn void PeerConnection.close(&self) @public
     // Free PEX arrays
     if (self.added_peers.len > 0) free(self.added_peers);
     if (self.dropped_peers.len > 0) free(self.dropped_peers);
+
+    // Free Fast Extension lists
+    self.allowed_fast_set.free();
+    self.peer_allowed_fast.free();
+    self.suggested_pieces.free();
 
     free(self);
 }
@@ -454,6 +473,9 @@ fn void process_handshake(PeerConnection* peer)
     // Check if peer supports extension protocol (BEP 10)
     peer.supports_extensions = peer_wire::handshake_supports_extensions(&handshake);
 
+    // Check if peer supports Fast Extension (BEP 6)
+    peer.supports_fast = peer_wire::handshake_supports_fast(&handshake);
+
     // Remove handshake from buffer
     peer.recv_buffer.delete(0, 68);
 
@@ -530,6 +552,40 @@ fn void process_messages(PeerConnection* peer)
     }
 }
 
+// ============================================================================
+// BEP 6: Fast Extension Helper Functions
+// ============================================================================
+
+<*
+ Add a piece to the allowed_fast set (if not already present).
+*>
+fn void add_to_allowed_fast_set(PeerConnection* peer, uint piece_index)
+{
+    // Check if already in set
+    foreach (existing_piece : peer.allowed_fast_set)
+    {
+        if (existing_piece == piece_index) return;  // Already added
+    }
+
+    // Add new piece
+    peer.allowed_fast_set.push(piece_index);
+}
+
+<*
+ Add a piece to the suggested pieces list (if not already suggested).
+*>
+fn void add_suggested_piece(PeerConnection* peer, uint piece_index)
+{
+    // Check if already suggested
+    foreach (existing_piece : peer.suggested_pieces)
+    {
+        if (existing_piece == piece_index) return;  // Already suggested
+    }
+
+    // Add new piece
+    peer.suggested_pieces.push(piece_index);
+}
+
 <*
  Handle messages that change peer state.
 *>
@@ -548,6 +604,20 @@ fn void handle_state_message(PeerConnection* peer, peer_wire::Message* msg)
         case peer_wire::MessageType.EXTENDED:
             // Handle extension protocol messages (BEP 10)
             handle_extension_message(peer, msg.payload);
+        case peer_wire::MessageType.SUGGEST_PIECE:
+            // BEP 6: Add suggested piece to array
+            if (peer.supports_fast)
+            {
+                uint piece_index = peer_wire::decode_fast_piece_index(msg.payload)!!;
+                add_suggested_piece(peer, piece_index);
+            }
+        case peer_wire::MessageType.ALLOWED_FAST:
+            // BEP 6: Add piece to allowed fast set
+            if (peer.supports_fast)
+            {
+                uint piece_index = peer_wire::decode_fast_piece_index(msg.payload)!!;
+                add_to_allowed_fast_set(peer, piece_index);
+            }
         default:
             // Other messages don't change state
     }
@@ -665,6 +735,82 @@ fn fault? PeerConnection.send_bitfield(&self, bitfield::Bitfield* bf) @public
 {
     char[] bytes = bf.to_bytes();
     char[] msg = peer_wire::encode_bitfield(bytes);
+    defer free(msg);
+    return send_message(self, msg);
+}
+
+// ============================================================================
+// BEP 6: Fast Extension Message Sending
+// ============================================================================
+
+<*
+ Send HAVE_ALL message to peer (BEP 6).
+
+ This replaces sending a full bitfield when we have all pieces.
+*>
+fn fault? PeerConnection.send_have_all(&self) @public
+{
+    if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
+
+    char[] msg = peer_wire::encode_have_all();
+    defer free(msg);
+    return send_message(self, msg);
+}
+
+<*
+ Send HAVE_NONE message to peer (BEP 6).
+
+ This replaces sending an empty bitfield when we have no pieces.
+*>
+fn fault? PeerConnection.send_have_none(&self) @public
+{
+    if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
+
+    char[] msg = peer_wire::encode_have_none();
+    defer free(msg);
+    return send_message(self, msg);
+}
+
+<*
+ Send SUGGEST_PIECE message to peer (BEP 6).
+
+ @param piece_index : "Suggested piece index"
+*>
+fn fault? PeerConnection.send_suggest_piece(&self, uint piece_index) @public
+{
+    if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
+
+    char[] msg = peer_wire::encode_suggest_piece(piece_index);
+    defer free(msg);
+    return send_message(self, msg);
+}
+
+<*
+ Send REJECT_REQUEST message to peer (BEP 6).
+
+ @param index : "Piece index"
+ @param begin : "Byte offset within piece"
+ @param length : "Block length"
+*>
+fn fault? PeerConnection.send_reject_request(&self, uint index, uint begin, uint length) @public
+{
+    if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
+
+    char[] msg = peer_wire::encode_reject_request(index, begin, length);
+    defer free(msg);
+    return send_message(self, msg);
+}
+
+<*
+ Send ALLOWED_FAST message to peer (BEP 6).
+
+ @param piece_index : "Piece index to allow fast download"
+*>
+fn fault? PeerConnection.send_allowed_fast(&self, uint piece_index) @public
+{
+    if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
+
+    char[] msg = peer_wire::encode_allowed_fast(piece_index);
     defer free(msg);
     return send_message(self, msg);
 }

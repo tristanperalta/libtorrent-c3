@@ -27,6 +27,7 @@ import libtorrent::event_types;
 import libtorrent::speed_tracker;
 import libtorrent::metadata_download;
 import libtorrent::metadata_exchange;
+import libtorrent::fast_extension;
 import torrent_client::magnet_download_session;
 import raylib_gui;
 
@@ -553,6 +554,75 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
                 }
             }
 
+        case peer_wire::MessageType.HAVE_ALL:
+            // BEP 6: Peer has all pieces (replaces BITFIELD for seeds)
+            peer_info.received_bitfield = true;
+
+            usz num_pieces = (usz)((ctx.torrent.info.length + ctx.torrent.info.piece_length - 1) /
+                                   ctx.torrent.info.piece_length);
+
+            // Create array with all pieces available
+            bool[] has_all_pieces = mem::new_array(bool, num_pieces);
+            for (usz i = 0; i < num_pieces; i++)
+            {
+                has_all_pieces[i] = true;
+            }
+
+            // Update download manager
+            ctx.dm.update_peer_bitfield(has_all_pieces)!!;
+
+            // Store bitfield in peer struct (all pieces set)
+            if (peer_info.pieces.data.len > 0)
+            {
+                peer_info.pieces.free();
+            }
+            peer_info.pieces = bitfield::create(num_pieces);
+            peer_info.pieces.set_all();
+
+            io::printfn("  Peer %d.%d.%d.%d:%d sent HAVE_ALL (seed)",
+                        ip[0], ip[1], ip[2], ip[3], port);
+
+            // Start piece downloads
+            int pieces_started = 0;
+            for (int i = 0; i < ctx.max_concurrent_pieces; i++)
+            {
+                if (catch excuse = ctx.dm.start_piece_download(has_all_pieces))
+                {
+                    break;
+                }
+                pieces_started++;
+            }
+
+            if (pieces_started > 0)
+            {
+                io::printfn("    Started downloading %d piece%s",
+                           pieces_started, pieces_started == 1 ? "" : "s");
+            }
+
+            free(has_all_pieces);
+
+            // Mark peer as seed
+            ctx.peer_pool.mark_peer_seed(ip, port)!!;
+
+        case peer_wire::MessageType.HAVE_NONE:
+            // BEP 6: Peer has no pieces (replaces empty BITFIELD for new leechers)
+            peer_info.received_bitfield = true;
+
+            usz num_pieces_none = (usz)((ctx.torrent.info.length + ctx.torrent.info.piece_length - 1) /
+                                        ctx.torrent.info.piece_length);
+
+            // Create empty bitfield
+            if (peer_info.pieces.data.len > 0)
+            {
+                peer_info.pieces.free();
+            }
+            peer_info.pieces = bitfield::create(num_pieces_none);
+
+            io::printfn("  Peer %d.%d.%d.%d:%d sent HAVE_NONE (new leecher)",
+                        ip[0], ip[1], ip[2], ip[3], port);
+
+            // No pieces to download from this peer yet (wait for HAVE messages)
+
         case peer_wire::MessageType.HAVE:
             // Peer has a new piece
             if (msg.payload.len >= 4)
@@ -695,6 +765,34 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
             io::printfn("    Starting block requests...");
             request_blocks_from_peers(ctx);
 
+        case peer_wire::MessageType.REQUEST:
+            // BEP 6: Handle incoming block request from peer
+            // Every REQUEST must get exactly ONE response: PIECE or REJECT_REQUEST
+            peer_wire::RequestMsg? req_opt = peer_wire::decode_request(msg.payload);
+            if (catch err = req_opt)
+            {
+                io::printfn("  Invalid REQUEST message from peer %d.%d.%d.%d:%d",
+                            ip[0], ip[1], ip[2], ip[3], port);
+                return;
+            }
+
+            peer_wire::RequestMsg req = req_opt;
+
+            // For now, reject all requests (upload/seeding not yet implemented)
+            // TODO: When upload is implemented, check:
+            // 1. Do we have the piece? (ctx.dm.have_piece(req.index))
+            // 2. Are we choking the peer? (peer.am_choking)
+            // 3. If choking, is piece in peer_allowed_fast set?
+            // 4. If yes to all: Read block from storage and send PIECE
+            // 5. If no: Send REJECT_REQUEST
+
+            // Send REJECT_REQUEST for all requests (leecher mode)
+            if (catch excuse = peer.send_reject_request(req.index, req.begin, req.length))
+            {
+                io::printfn("  Failed to send REJECT_REQUEST to peer %d.%d.%d.%d:%d: %s",
+                            ip[0], ip[1], ip[2], ip[3], port, excuse);
+            }
+
         case peer_wire::MessageType.CHOKE:
             io::printfn("  Peer %d.%d.%d.%d:%d choked us",
                         ip[0], ip[1], ip[2], ip[3], port);
@@ -747,6 +845,31 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
             {
                 valid_peer_count++;
 
+                // BEP 6: Check if peer is choking us
+                // We can only request if:
+                // 1. Peer is not choking us, OR
+                // 2. Peer is choking but piece is in allowed_fast set
+                if (peer_info.connection.peer_choking)
+                {
+                    // Check if piece is in allowed_fast set
+                    bool is_allowed = false;
+                    foreach (allowed_piece : peer_info.connection.allowed_fast_set)
+                    {
+                        if (allowed_piece == req.piece_index)
+                        {
+                            is_allowed = true;
+                            break;
+                        }
+                    }
+
+                    if (!is_allowed)
+                    {
+                        // Skip this peer - choked and piece not in allowed_fast set
+                        continue;
+                    }
+                    // else: proceed to request (choked but piece IS in allowed_fast set)
+                }
+
                 // Send REQUEST message
                 peer_info.connection.send_request(req.piece_index, req.offset, req.length)!!;
 
@@ -794,6 +917,37 @@ fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
     peer_pool::TorrentPeer* peer_info = peer_opt;
     peer_info.handshake_ok = true;
     peer_info.state = peer_pool::PeerState.CONNECTED;
+
+    // BEP 6: Generate and send allowed_fast set if peer supports Fast Extension
+    if (peer_info.connection.supports_fast)
+    {
+        usz num_pieces = (usz)((ctx.torrent.info.length + ctx.torrent.info.piece_length - 1) /
+                               ctx.torrent.info.piece_length);
+
+        uint[] allowed_fast = fast_extension::generate_default_allowed_fast_set(
+            ip, ctx.torrent.info_hash, (uint)num_pieces);
+        defer free(allowed_fast);
+
+        // Send ALLOWED_FAST message for each piece
+        foreach (piece_index : allowed_fast)
+        {
+            if (catch excuse = peer.send_allowed_fast(piece_index))
+            {
+                // Failed to send, but continue with others
+            }
+        }
+
+        // Store the allowed_fast set we sent to this peer
+        peer_info.connection.peer_allowed_fast.free();
+        peer_info.connection.peer_allowed_fast.init(mem);
+        foreach (piece_index : allowed_fast)
+        {
+            peer_info.connection.peer_allowed_fast.push(piece_index);
+        }
+
+        io::printfn("  Sent %d ALLOWED_FAST pieces to peer %d.%d.%d.%d:%d",
+                    allowed_fast.len, ip[0], ip[1], ip[2], ip[3], port);
+    }
 
     // Send INTERESTED message to the peer
     peer.send_interested()!!;

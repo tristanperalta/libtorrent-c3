@@ -40,8 +40,13 @@ enum MessageType : const char
     REQUEST = 6,
     PIECE = 7,
     CANCEL = 8,
-    PORT = 9,      // DHT extension
-    EXTENDED = 20  // Extension protocol (BEP 10)
+    PORT = 9,           // DHT extension (BEP 5)
+    SUGGEST_PIECE = 13, // BEP 6: Fast Extension
+    HAVE_ALL = 14,      // BEP 6: Fast Extension
+    HAVE_NONE = 15,     // BEP 6: Fast Extension
+    REJECT_REQUEST = 16,// BEP 6: Fast Extension
+    ALLOWED_FAST = 17,  // BEP 6: Fast Extension
+    EXTENDED = 20       // Extension protocol (BEP 10)
 }
 
 <*
@@ -144,10 +149,12 @@ fn char[] encode_handshake(char[20] info_hash, char[20] peer_id) @public
     String pstr = "BitTorrent protocol";
     foreach (i, c : pstr) msg[i + 1] = c;
 
-    // Reserved bytes - set extension protocol support bit (BEP 10)
-    // Byte 5, bit 0x10 (bit 20 from right) indicates extension protocol support
+    // Reserved bytes - set extension protocol support bits
+    // Byte 5 (offset 25), bit 0x10: extension protocol (BEP 10)
+    // Byte 7 (offset 27), bit 0x04: Fast Extension (BEP 6)
     for (usz i = 20; i < 28; i++) msg[i] = 0;
     msg[25] |= 0x10;  // Enable extension protocol (BEP 10)
+    msg[27] |= 0x04;  // Enable Fast Extension (BEP 6)
 
     // Info hash
     foreach (i, b : info_hash) msg[i + 28] = b;
@@ -212,6 +219,18 @@ fn bool handshake_supports_extensions(HandshakeMsg* handshake) @public
 {
     // Check bit 20 (byte 5, bit 0x10)
     return (handshake.reserved[5] & 0x10) != 0;
+}
+
+<*
+ Check if a handshake indicates Fast Extension support (BEP 6).
+
+ @param handshake : "Decoded handshake message"
+ @return "True if peer supports Fast Extension"
+*>
+fn bool handshake_supports_fast(HandshakeMsg* handshake) @public
+{
+    // Check bit 2 (byte 7, bit 0x04)
+    return (handshake.reserved[7] & 0x04) != 0;
 }
 
 // ============================================================================
@@ -768,6 +787,127 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
 
     return handshake;
 }
+
+// ============================================================================
+// Fast Extension (BEP 6) - Message Encoding
+// ============================================================================
+
+<*
+ Encode a SUGGEST_PIECE message (BEP 6).
+ Format: <len=0x0005><op=0x0D><index>
+
+ @param piece_index : "Piece index to suggest"
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_suggest_piece(uint piece_index) @public
+{
+    char[] msg = mem::new_array(char, 9);
+    write_u32_be(msg, 0, 5);  // Length: 1 byte opcode + 4 bytes index
+    msg[4] = (char)MessageType.SUGGEST_PIECE;
+    write_u32_be(msg, 5, piece_index);
+    return msg;
+}
+
+<*
+ Encode a HAVE_ALL message (BEP 6).
+ Format: <len=0x0001><op=0x0E>
+
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_have_all() @public
+{
+    char[] msg = mem::new_array(char, 5);
+    write_u32_be(msg, 0, 1);  // Length: 1 byte opcode
+    msg[4] = (char)MessageType.HAVE_ALL;
+    return msg;
+}
+
+<*
+ Encode a HAVE_NONE message (BEP 6).
+ Format: <len=0x0001><op=0x0F>
+
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_have_none() @public
+{
+    char[] msg = mem::new_array(char, 5);
+    write_u32_be(msg, 0, 1);  // Length: 1 byte opcode
+    msg[4] = (char)MessageType.HAVE_NONE;
+    return msg;
+}
+
+<*
+ Encode a REJECT_REQUEST message (BEP 6).
+ Format: <len=0x000D><op=0x10><index><begin><length>
+
+ @param index : "Piece index"
+ @param begin : "Byte offset within piece"
+ @param length : "Block length"
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_reject_request(uint index, uint begin, uint length) @public
+{
+    char[] msg = mem::new_array(char, 17);
+    write_u32_be(msg, 0, 13);  // Length: 1 byte opcode + 12 bytes payload
+    msg[4] = (char)MessageType.REJECT_REQUEST;
+    write_u32_be(msg, 5, index);
+    write_u32_be(msg, 9, begin);
+    write_u32_be(msg, 13, length);
+    return msg;
+}
+
+<*
+ Encode an ALLOWED_FAST message (BEP 6).
+ Format: <len=0x0005><op=0x11><index>
+
+ @param piece_index : "Piece index in allowed fast set"
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_allowed_fast(uint piece_index) @public
+{
+    char[] msg = mem::new_array(char, 9);
+    write_u32_be(msg, 0, 5);  // Length: 1 byte opcode + 4 bytes index
+    msg[4] = (char)MessageType.ALLOWED_FAST;
+    write_u32_be(msg, 5, piece_index);
+    return msg;
+}
+
+// ============================================================================
+// Fast Extension (BEP 6) - Message Decoding
+// ============================================================================
+
+<*
+ Decode a SUGGEST_PIECE or ALLOWED_FAST message payload (BEP 6).
+ Both messages have the same format: a single 4-byte piece index.
+
+ @param payload : "Message payload (must be 4 bytes)"
+ @return "Piece index or fault if invalid"
+*>
+fn uint? decode_fast_piece_index(char[] payload) @public
+{
+    if (payload.len != 4)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+    return read_u32_be(payload, 0);
+}
+
+<*
+ Decode a REJECT_REQUEST message payload (BEP 6).
+ Format is identical to REQUEST/CANCEL: <index><begin><length>
+
+ @param payload : "Message payload (must be 12 bytes)"
+ @return "Decoded reject request or fault if invalid"
+*>
+fn RequestMsg? decode_reject_request(char[] payload) @public
+{
+    // REJECT_REQUEST has the same format as REQUEST/CANCEL
+    return decode_request(payload);
+}
+
+// ============================================================================
+// Message Size Helper
+// ============================================================================
 
 <*
  Get the total size of a message from its length prefix.
