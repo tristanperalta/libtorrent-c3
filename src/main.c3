@@ -1581,7 +1581,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     io::printfn("Stopping timers...");
     if (ctx.tracker_coord)
     {
-        ctx.tracker_coord.stop();
+        ctx.tracker_coord.free();
+        ctx.tracker_coord = null;
     }
     if (ctx.pex_timer)
     {
