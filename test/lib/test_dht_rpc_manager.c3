@@ -60,7 +60,7 @@ fn krpc::KrpcMessage create_dummy_response(char[2] tid)
 
 fn void test_create_rpc_manager() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     // Verify initial state
@@ -78,7 +78,7 @@ fn void test_create_rpc_manager() @test
 
 fn void test_create_single_transaction() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x10);
@@ -111,7 +111,7 @@ fn void test_create_single_transaction() @test
 
 fn void test_create_multiple_transactions() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     // Create 5 transactions
@@ -143,7 +143,7 @@ fn void test_create_multiple_transactions() @test
 
 fn void test_unique_transaction_ids() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x20);
@@ -182,7 +182,7 @@ fn void test_unique_transaction_ids() @test
 
 fn void test_handle_response() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x30);
@@ -228,7 +228,7 @@ fn void test_handle_response() @test
 
 fn void test_handle_response_unknown_tid() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     // Reset callback flag
@@ -252,7 +252,7 @@ fn void test_handle_response_unknown_tid() @test
 
 fn void test_process_timeouts_no_timeout() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x40);
@@ -284,7 +284,7 @@ fn void test_process_timeouts_no_timeout() @test
 
 fn void test_timeout_exactly_5_seconds() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x41);
@@ -326,7 +326,7 @@ fn void test_timeout_exactly_5_seconds() @test
 
 fn void test_timeout_callback_receives_null() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x42);
@@ -364,7 +364,7 @@ fn void test_timeout_callback_receives_null() @test
 
 fn void test_timeout_removes_transaction() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x43);
@@ -406,7 +406,7 @@ fn void test_timeout_removes_transaction() @test
 
 fn void test_multiple_transactions_timeout() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x44);
@@ -446,7 +446,7 @@ fn void test_multiple_transactions_timeout() @test
 
 fn void test_timeout_boundary_4999ms() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x45);
@@ -487,7 +487,7 @@ fn void test_timeout_boundary_4999ms() @test
 
 fn void test_cancel_transaction() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x50);
@@ -520,7 +520,7 @@ fn void test_cancel_transaction() @test
 
 fn void test_cancel_unknown_transaction() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     // Try to cancel unknown transaction
@@ -537,7 +537,7 @@ fn void test_cancel_unknown_transaction() @test
 
 fn void test_get_stats() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x60);
@@ -577,7 +577,7 @@ fn void test_get_stats() @test
 
 fn void test_transaction_table_full() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x70);
@@ -632,7 +632,7 @@ fn void test_transaction_table_full() @test
 
 fn void test_tid_wraparound() @test
 {
-    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager();
+    dht_rpc_manager::RpcManager* mgr = dht_rpc_manager::create_rpc_manager(mem);
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x80);

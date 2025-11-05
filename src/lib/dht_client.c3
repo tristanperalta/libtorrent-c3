@@ -114,10 +114,6 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
         client.our_id[i] = our_id[i];
     }
 
-    // Create routing table and RPC manager
-    client.routing_table = dht_routing_table::create_routing_table(our_id);
-    client.rpc_manager = dht_rpc_manager::create_rpc_manager();
-
     client.state = DhtState.UNINITIALIZED;
     client.last_refresh_time = 0;
     client.bootstrap_node_count = 0;
@@ -125,8 +121,13 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
     client.current_response_root = null;
     client.event_bus = event_bus;
 
-    // Initialize arena allocator for RPC contexts (4KB pages, grows as needed)
+    // Initialize arena allocator for routing table, RPC manager, and RPC contexts
+    // 4KB pages grow as needed (typical: ~200KB for routing table + RPC manager)
     client.arena.init(mem, 4096);
+
+    // Create routing table and RPC manager (allocated from arena)
+    client.routing_table = dht_routing_table::create_routing_table(our_id, &client.arena);
+    client.rpc_manager = dht_rpc_manager::create_rpc_manager(&client.arena);
 
     // Create UDP socket (only if event loop is provided)
     if (loop != null)
@@ -179,21 +180,19 @@ fn void DhtClient.free(&self) @public
         self.socket.close();
     }
 
-    // Cancel all pending transactions (contexts freed by arena)
+    // Cancel all pending transactions (userdata freed by arena)
     if (self.rpc_manager)
     {
         self.rpc_manager.cancel_all_transactions(null);
-        self.rpc_manager.free();
     }
 
-    if (self.routing_table)
-    {
-        self.routing_table.free();
-    }
+    // NOTE: Do NOT call routing_table.free() or rpc_manager.free() here!
+    // They are allocated from the arena and will be freed with arena.free().
+    // Calling free() on arena-allocated memory would cause double-free.
 
-    // Free arena (frees all RPC contexts at once)
     self.arena.free();
 
+    // Free DhtClient struct itself (allocated from heap in create_dht_client())
     free(self);
 }
 
