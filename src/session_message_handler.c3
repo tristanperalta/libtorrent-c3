@@ -77,7 +77,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 {
                     peer_info.pieces.free();
                 }
-                peer_info.pieces = bitfield::from_bytes(msg.payload, num_pieces);
+                peer_info.pieces = bitfield::from_bytes(&ctx.peer_pool.arena, msg.payload, num_pieces);
 
                 io::printfn("  Peer %s sent bitfield", addr);
 
@@ -140,7 +140,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             {
                 peer_info.pieces.free();
             }
-            peer_info.pieces = bitfield::create(num_pieces);
+            peer_info.pieces = bitfield::create(&ctx.peer_pool.arena, num_pieces);
             peer_info.pieces.set_all();
 
             io::printfn("  Peer %s sent HAVE_ALL (seed)", addr);
@@ -179,7 +179,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             {
                 peer_info.pieces.free();
             }
-            peer_info.pieces = bitfield::create(num_pieces_none);
+            peer_info.pieces = bitfield::create(&ctx.peer_pool.arena, num_pieces_none);
 
             io::printfn("  Peer %s sent HAVE_NONE (new leecher)", addr);
 
@@ -197,7 +197,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 {
                     usz num_pieces = (usz)((ctx.torrent.info.length + ctx.torrent.info.piece_length - 1) /
                                            ctx.torrent.info.piece_length);
-                    peer_info.pieces = bitfield::create(num_pieces);
+                    peer_info.pieces = bitfield::create(&ctx.peer_pool.arena, num_pieces);
                 }
 
                 // Update peer's bitfield
@@ -262,7 +262,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 {
                     peer_info.pieces.free();
                 }
-                peer_info.pieces = bitfield::create(num_pieces);
+                peer_info.pieces = bitfield::create(&ctx.peer_pool.arena, num_pieces);
                 peer_info.pieces.set_all();
 
                 // Start piece downloads

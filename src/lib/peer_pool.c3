@@ -13,6 +13,7 @@ import std::io;
 import std::time;
 import std::sort;
 import std::collections::map;
+import std::core::mem::allocator;
 
 <*
  Peer Pool - Async Peer Management
@@ -214,6 +215,9 @@ struct PeerPool
     event_loop::EventLoop* loop;  // Event loop for async operations
     PeerPoolConfig config;        // Configuration
 
+    // Memory management
+    DynamicArenaAllocator arena;  // Arena allocator for pool-lifetime allocations
+
     // Storage
     // HashMap provides O(1) deduplication, insertion, lookup, and deletion
     HashMap{common::SocketAddress, TorrentPeer*} peers;  // Main peer storage (deduplicated)
@@ -325,8 +329,13 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     pool.our_peer_id[..] = (*our_peer_id)[..];
     pool.is_private = is_private;
 
-    // Initialize HashMap for O(1) peer operations
-    pool.peers.init(mem);
+    // Initialize arena allocator with 64KB pages
+    // Will automatically grow as needed for peer storage
+    pool.arena.init(mem, 64 * 1024);
+
+    // Initialize HashMap with arena allocator for O(1) peer operations
+    // All HashMap internal allocations (buckets, entries) use arena
+    pool.peers.init(&pool.arena);
 
     // Initialize empty candidate cache (Phase 2)
     pool.candidate_cache = {};
@@ -347,6 +356,9 @@ fn PeerPool* create(event_loop::EventLoop* loop,
 
 <*
  Free peer pool and all associated resources.
+
+ Uses arena allocator for instant bulk cleanup - all peer data, bitfields,
+ HashMap entries, and candidate cache freed in one operation.
 *>
 fn void PeerPool.free(&self) @public
 {
@@ -358,31 +370,14 @@ fn void PeerPool.free(&self) @public
     self.on_message = null;
     self.on_disconnected = null;
 
-    // Disconnect all active connections (Phase 3)
+    // Disconnect all active connections (external resources not in arena)
     self.disconnect_all();
 
-    // Free all peer structures from HashMap
-    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
-    {
-        // Free bitfield if allocated
-        if (peer.pieces.data.len > 0)
-        {
-            peer.pieces.free();
-        }
-        std::core::mem::free(peer);
-    };
-
-    // Free HashMap itself
     self.peers.free();
 
-    // Free candidate cache (Phase 2)
-    // Note: candidate_cache contains pointers to same peers, so don't free the peers again
-    if (self.candidate_cache.len > 0)
-    {
-        std::core::mem::free(self.candidate_cache);
-    }
+    self.arena.free();
 
-    // Free pool itself
+    // Free pool structure itself (allocated from global heap in create())
     std::core::mem::free(self);
 }
 
@@ -395,16 +390,11 @@ fn void PeerPool.free(&self) @public
  3. Sorting by rank (highest first)
 
  Called after adding new peers or when peer states/statistics change.
+
+ Uses arena allocator - no manual free needed, memory automatically reclaimed.
 *>
 fn void PeerPool.update_candidate_cache(&self) @public
 {
-    // Free old cache
-    if (self.candidate_cache.len > 0)
-    {
-        std::core::mem::free(self.candidate_cache);
-        self.candidate_cache = {};
-    }
-
     // Count eligible candidates using HashMap iteration
     usz eligible_count = 0;
     self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
@@ -420,11 +410,12 @@ fn void PeerPool.update_candidate_cache(&self) @public
 
     if (eligible_count == 0)
     {
+        self.candidate_cache = {};
         return; // No candidates
     }
 
-    // Allocate candidate cache
-    self.candidate_cache = mem::new_array(TorrentPeer*, eligible_count);
+    // Allocate candidate cache from arena (bump pointer, ~5 cycles)
+    self.candidate_cache = allocator::new_array(&self.arena, TorrentPeer*, eligible_count);
 
     // Populate cache with eligible peers and update ranks
     usz cache_index = 0;
@@ -692,8 +683,8 @@ fn void PeerPool.add_peer(&self, common::SocketAddress* addr, common::PeerSource
             return;
         }
 
-        // Create new peer
-        TorrentPeer* peer = mem::new(TorrentPeer);
+        // Create new peer using arena allocator (bump pointer, ~5 cycles)
+        TorrentPeer* peer = allocator::new(&self.arena, TorrentPeer);
         peer.addr = *addr;
         peer.connection = null;
         peer.state = PeerState.DISCOVERED;
@@ -717,7 +708,7 @@ fn void PeerPool.add_peer(&self, common::SocketAddress* addr, common::PeerSource
         // Calculate initial rank (Phase 2)
         peer.peer_rank = calculate_peer_rank(self, peer);
 
-        // O(1) HashMap insertion (no array allocation or copying needed!)
+        // O(1) HashMap insertion (HashMap entries also use arena allocator)
         self.peers.set(*addr, peer);
     }
     else
@@ -794,25 +785,18 @@ fn TorrentPeer*? PeerPool.find_peer(&self, common::SocketAddress* addr) @public
 <*
  Remove peer from pool.
 
+ Uses tombstone pattern: Removes peer from HashMap but doesn't free memory
+ (arena allocator handles bulk deallocation at shutdown).
+
  @param peer : "Peer to remove"
 *>
 fn void PeerPool.erase_peer(&self, TorrentPeer* peer) @public
 {
     if (!peer) return;
 
-    // Save address before freeing (needed for HashMap removal)
+    // Save address for HashMap removal
     common::SocketAddress addr = peer.addr;
 
-    // Free bitfield if allocated
-    if (peer.pieces.data.len > 0)
-    {
-        peer.pieces.free();
-    }
-
-    // Free the peer structure
-    std::core::mem::free(peer);
-
-    // O(1) HashMap removal (no array allocation or copying needed!)
     self.peers.remove(addr);
 }
 

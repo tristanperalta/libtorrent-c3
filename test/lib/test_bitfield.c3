@@ -9,7 +9,7 @@ import std::io;
 
 fn void test_create_bitfield() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     assert(bf.num_pieces == 100, "Should track 100 pieces");
@@ -18,7 +18,7 @@ fn void test_create_bitfield() @test
 
 fn void test_create_exact_byte_boundary() @test
 {
-    bitfield::Bitfield bf = bitfield::create(8);
+    bitfield::Bitfield bf = bitfield::create(mem, 8);
     defer bf.free();
 
     assert(bf.num_pieces == 8, "Should track 8 pieces");
@@ -27,7 +27,7 @@ fn void test_create_exact_byte_boundary() @test
 
 fn void test_create_empty() @test
 {
-    bitfield::Bitfield bf = bitfield::create(0);
+    bitfield::Bitfield bf = bitfield::create(mem, 0);
     defer bf.free();
 
     assert(bf.num_pieces == 0, "Should track 0 pieces");
@@ -40,7 +40,7 @@ fn void test_create_empty() @test
 
 fn void test_set_and_has_piece() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     // Initially should not have any pieces
@@ -70,7 +70,7 @@ fn void test_set_and_has_piece() @test
 
 fn void test_set_out_of_bounds() @test
 {
-    bitfield::Bitfield bf = bitfield::create(10);
+    bitfield::Bitfield bf = bitfield::create(mem, 10);
     defer bf.free();
 
     // Should not crash when setting out of bounds
@@ -83,7 +83,7 @@ fn void test_set_out_of_bounds() @test
 
 fn void test_has_out_of_bounds() @test
 {
-    bitfield::Bitfield bf = bitfield::create(10);
+    bitfield::Bitfield bf = bitfield::create(mem, 10);
     defer bf.free();
 
     // Out of bounds should return false
@@ -97,7 +97,7 @@ fn void test_has_out_of_bounds() @test
 
 fn void test_clear_piece() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     // Set a piece then clear it
@@ -110,7 +110,7 @@ fn void test_clear_piece() @test
 
 fn void test_clear_multiple_pieces() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     // Set several pieces
@@ -136,7 +136,7 @@ fn void test_clear_multiple_pieces() @test
 
 fn void test_to_bytes() @test
 {
-    bitfield::Bitfield bf = bitfield::create(8);
+    bitfield::Bitfield bf = bitfield::create(mem, 8);
     defer bf.free();
 
     // Set pieces 0, 2, 7 (bits: 10100001)
@@ -155,7 +155,7 @@ fn void test_from_bytes() @test
     data[0] = (char)0xFF;  // All 8 pieces in first byte
     data[1] = (char)0x80;  // Only first piece in second byte
 
-    bitfield::Bitfield bf = bitfield::from_bytes(data[..], 16);
+    bitfield::Bitfield bf = bitfield::from_bytes(mem, data[..], 16);
     defer bf.free();
 
     // Check first byte pieces (0-7)
@@ -178,7 +178,7 @@ fn void test_from_bytes_short_data() @test
     data[0] = (char)0xFF;
 
     // Request more pieces than data provides
-    bitfield::Bitfield bf = bitfield::from_bytes(data[..], 16);
+    bitfield::Bitfield bf = bitfield::from_bytes(mem, data[..], 16);
     defer bf.free();
 
     // First 8 should be set
@@ -200,7 +200,7 @@ fn void test_from_bytes_short_data() @test
 
 fn void test_count_pieces_empty() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     assert(bf.count_pieces() == 0, "Empty bitfield should have 0 pieces");
@@ -208,7 +208,7 @@ fn void test_count_pieces_empty() @test
 
 fn void test_count_pieces() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     bf.set_piece(0);
@@ -220,7 +220,7 @@ fn void test_count_pieces() @test
 
 fn void test_count_pieces_full() @test
 {
-    bitfield::Bitfield bf = bitfield::create(10);
+    bitfield::Bitfield bf = bitfield::create(mem, 10);
     defer bf.free();
 
     for (usz i = 0; i < 10; i++)
@@ -237,7 +237,7 @@ fn void test_count_pieces_full() @test
 
 fn void test_set_all() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     bf.set_all();
@@ -254,7 +254,7 @@ fn void test_set_all() @test
 
 fn void test_set_all_non_byte_boundary() @test
 {
-    bitfield::Bitfield bf = bitfield::create(10);  // 10 pieces = 2 bytes, but only 2 bits in second byte
+    bitfield::Bitfield bf = bitfield::create(mem, 10);  // 10 pieces = 2 bytes, but only 2 bits in second byte
     defer bf.free();
 
     bf.set_all();
@@ -275,7 +275,7 @@ fn void test_set_all_non_byte_boundary() @test
 
 fn void test_clear_all() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     // Set some pieces then clear all
@@ -301,7 +301,7 @@ fn void test_clear_all() @test
 
 fn void test_is_empty_initially() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     assert(bf.is_empty(), "New bitfield should be empty");
@@ -309,7 +309,7 @@ fn void test_is_empty_initially() @test
 
 fn void test_is_empty_after_set() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     bf.set_piece(50);
@@ -318,7 +318,7 @@ fn void test_is_empty_after_set() @test
 
 fn void test_is_full_after_set_all() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     bf.set_all();
@@ -327,7 +327,7 @@ fn void test_is_full_after_set_all() @test
 
 fn void test_is_not_full() @test
 {
-    bitfield::Bitfield bf = bitfield::create(100);
+    bitfield::Bitfield bf = bitfield::create(mem, 100);
     defer bf.free();
 
     // Set all but one piece
@@ -345,7 +345,7 @@ fn void test_is_not_full() @test
 
 fn void test_single_piece() @test
 {
-    bitfield::Bitfield bf = bitfield::create(1);
+    bitfield::Bitfield bf = bitfield::create(mem, 1);
     defer bf.free();
 
     assert(!bf.has_piece(0), "Should not have piece initially");
@@ -360,7 +360,7 @@ fn void test_single_piece() @test
 
 fn void test_many_pieces() @test
 {
-    bitfield::Bitfield bf = bitfield::create(10000);
+    bitfield::Bitfield bf = bitfield::create(mem, 10000);
     defer bf.free();
 
     assert(bf.data.len == 1250, "Should allocate correct bytes for 10000 pieces");
@@ -378,7 +378,7 @@ fn void test_many_pieces() @test
 
 fn void test_all_bits_in_byte() @test
 {
-    bitfield::Bitfield bf = bitfield::create(8);
+    bitfield::Bitfield bf = bitfield::create(mem, 8);
     defer bf.free();
 
     // Set each bit one by one
@@ -394,7 +394,7 @@ fn void test_all_bits_in_byte() @test
 
 fn void test_roundtrip_conversion() @test
 {
-    bitfield::Bitfield bf1 = bitfield::create(100);
+    bitfield::Bitfield bf1 = bitfield::create(mem, 100);
     defer bf1.free();
 
     // Set various pieces
@@ -408,7 +408,7 @@ fn void test_roundtrip_conversion() @test
     char[] bytes = bf1.to_bytes();
 
     // Create new bitfield from bytes
-    bitfield::Bitfield bf2 = bitfield::from_bytes(bytes, 100);
+    bitfield::Bitfield bf2 = bitfield::from_bytes(mem, bytes, 100);
     defer bf2.free();
 
     // Should have same pieces
