@@ -269,30 +269,28 @@ fn void on_metadata_complete(download_session::DownloadContext* ctx) @private
     bencode::BencodeValue* info_dict = info_dict_opt;
     defer info_dict.free();
 
-    // Parse into TorrentInfo struct
-    metainfo::TorrentInfo* info = mem::new(metainfo::TorrentInfo);
-    fault? parse_err = metainfo::parse_info(info, info_dict);
+    // Create real TorrentFile (replacing fake one used for tracker announces)
+    metainfo::TorrentFile* real_torrent = mem::new(metainfo::TorrentFile);
+    real_torrent.announce = ctx.torrent.announce;
+    real_torrent.announce_list = ctx.torrent.announce_list;
+    real_torrent.info_hash[..] = ctx.metadata_dl.info_hash[..];
+
+    // Initialize arena for info dictionary allocations
+    real_torrent.arena.init(mem, 64 * 1024);
+
+    // Parse into TorrentInfo struct (uses arena for allocations)
+    fault? parse_err = metainfo::parse_info(&real_torrent.arena, &real_torrent.info, info_dict);
     if (catch err = parse_err)
     {
         io::eprintfn("[Metadata] ERROR: Failed to parse info dictionary: %s", err);
-        free(info);
+        real_torrent.free();
         ctx.download_complete = true;
         ctx.exit_code = 1;
         return;
     }
 
     io::printfn("[Metadata] Successfully parsed! Name: %s, Size: %s",
-                info.name, download_session::format_size(info.length));
-
-    // Create real TorrentFile (replacing fake one used for tracker announces)
-    metainfo::TorrentFile* real_torrent = mem::new(metainfo::TorrentFile);
-    real_torrent.announce = ctx.torrent.announce;
-    real_torrent.announce_list = ctx.torrent.announce_list;
-    real_torrent.info = *info;  // Copy the struct
-    real_torrent.info_hash[..] = ctx.metadata_dl.info_hash[..];
-
-    // Free the temporary info struct (contents are now copied to real_torrent)
-    free(info);
+                real_torrent.info.name, download_session::format_size(real_torrent.info.length));
 
     // Free fake torrent and replace with real one
     free(ctx.torrent);
