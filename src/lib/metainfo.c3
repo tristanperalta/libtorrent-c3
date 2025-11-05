@@ -6,6 +6,7 @@ import std::encoding::hex;
 import std::net::url;
 import std::collections::list;
 import std::collections::set;
+import std::core::mem::allocator;
 import libtorrent::bencode;
 import libtorrent::path_sanitize;
 import libtorrent::common;
@@ -88,6 +89,9 @@ struct TorrentFile
     String[] httpseeds;     // Optional: HTTP seeds (BEP 17)
     TorrentInfo info;       // File metadata
     char[20] info_hash;     // SHA1 hash of bencoded info dict
+
+    // Memory management
+    DynamicArenaAllocator arena;  // Arena allocator for torrent-lifetime allocations
 }
 
 /**
@@ -122,12 +126,16 @@ fn TorrentFile*? parse(String data) @public => @pool()
     // Allocate result
     TorrentFile* torrent = mem::new(TorrentFile);
 
+    // Initialize arena allocator with 64KB pages
+    // Will automatically grow as needed for torrent metadata
+    torrent.arena.init(mem, 64 * 1024);
+
     // Extract 'announce' (optional - may be missing in some torrents)
     BencodeValue* announce_val = root.dict_get("announce");
     if (announce_val && announce_val.type == bencode::BencodeType.STRING)
     {
         // Trim whitespace from announce URL
-        torrent.announce = trim_whitespace((String)announce_val.string);
+        torrent.announce = trim_whitespace(&torrent.arena, (String)announce_val.string);
     }
 
     // Extract 'announce-list' (optional - BEP 12 multi-tracker)
@@ -137,8 +145,8 @@ fn TorrentFile*? parse(String data) @public => @pool()
         usz num_tiers = announce_list_val.list.size;
         if (num_tiers > 0)
         {
-            // Allocate array of tiers
-            torrent.announce_list = mem::new_array(String[], num_tiers);
+            // Allocate array of tiers from arena
+            torrent.announce_list = allocator::new_array(&torrent.arena, String[], num_tiers);
 
             for (usz i = 0; i < num_tiers; i++)
             {
@@ -148,16 +156,16 @@ fn TorrentFile*? parse(String data) @public => @pool()
                     usz num_trackers = tier.list.size;
                     if (num_trackers > 0)
                     {
-                        // Allocate array of tracker URLs for this tier
-                        torrent.announce_list[i] = mem::new_array(String, num_trackers);
+                        // Allocate array of tracker URLs for this tier from arena
+                        torrent.announce_list[i] = allocator::new_array(&torrent.arena, String, num_trackers);
 
                         for (usz j = 0; j < num_trackers; j++)
                         {
                             BencodeValue* tracker = tier.list.get(j);
                             if (tracker.type == bencode::BencodeType.STRING)
                             {
-                                // Trim whitespace from tracker URLs
-                                torrent.announce_list[i][j] = trim_whitespace((String)tracker.string);
+                                // Trim whitespace from tracker URLs (uses arena)
+                                torrent.announce_list[i][j] = trim_whitespace(&torrent.arena, (String)tracker.string);
                             }
                         }
                     }
@@ -173,7 +181,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
         usz num_nodes = nodes_val.list.size;
         if (num_nodes > 0)
         {
-            torrent.nodes = mem::new_array(DhtNode, num_nodes);
+            torrent.nodes = allocator::new_array(&torrent.arena, DhtNode, num_nodes);
 
             for (usz i = 0; i < num_nodes; i++)
             {
@@ -187,7 +195,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
                     if (host.type == bencode::BencodeType.STRING &&
                         port.type == bencode::BencodeType.INTEGER)
                     {
-                        torrent.nodes[i].host = copy_string(host.string);
+                        torrent.nodes[i].host = copy_string(&torrent.arena, host.string);
                         torrent.nodes[i].port = (ushort)port.integer;
                     }
                 }
@@ -203,13 +211,13 @@ fn TorrentFile*? parse(String data) @public => @pool()
         usz count = collections_val.list.size;
         if (count > 0)
         {
-            torrent.collections = mem::new_array(String, count);
+            torrent.collections = allocator::new_array(&torrent.arena, String, count);
             for (usz i = 0; i < count; i++)
             {
                 BencodeValue* collection = collections_val.list.get(i);
                 if (collection.type == bencode::BencodeType.STRING)
                 {
-                    torrent.collections[i] = copy_string(collection.string);
+                    torrent.collections[i] = copy_string(&torrent.arena, collection.string);
                 }
             }
         }
@@ -224,7 +232,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
         if (count > 0)
         {
             torrent.similar_count = count;
-            torrent.similar = mem::new_array(char, count * common::SHA1_HASH_SIZE);
+            torrent.similar = allocator::new_array(&torrent.arena, char, count * common::SHA1_HASH_SIZE);
             for (usz i = 0; i < count; i++)
             {
                 BencodeValue* info_hash = similar_val.list.get(i);
@@ -246,7 +254,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* created_by_val = root.dict_get("created by");
     if (created_by_val && created_by_val.type == bencode::BencodeType.STRING)
     {
-        torrent.created_by = copy_string(created_by_val.string);
+        torrent.created_by = copy_string(&torrent.arena, created_by_val.string);
     }
 
     // Extract 'creation date' (optional)
@@ -260,7 +268,7 @@ fn TorrentFile*? parse(String data) @public => @pool()
     BencodeValue* encoding_val = root.dict_get("encoding");
     if (encoding_val && encoding_val.type == bencode::BencodeType.STRING)
     {
-        torrent.encoding = copy_string(encoding_val.string);
+        torrent.encoding = copy_string(&torrent.arena, encoding_val.string);
     }
 
     // Extract 'url-list' (optional - BEP 19)
@@ -288,25 +296,29 @@ fn TorrentFile*? parse(String data) @public => @pool()
                     // Skip empty strings
                     if (url_str.len == 0) continue;
 
-                    // Percent-encode spaces for BEP 19 compliance
+                    // Percent-encode spaces for BEP 19 compliance (heap allocated by url::encode)
                     String encoded_url = percent_encode_url(url_str);
-                    bool keep = false;
-                    defer if (!keep) free(encoded_url);
+                    defer free(encoded_url);  // Always free the heap copy
 
                     // Only add if not already seen and not empty
                     if (encoded_url.len > 0 && !seen_urls.contains(encoded_url))
                     {
-                        seen_urls.add(encoded_url);
-                        urls.push(encoded_url);
-                        keep = true;  // Ownership transferred to collection
+                        // Copy to arena for permanent storage
+                        String arena_url = copy_string(&torrent.arena, encoded_url);
+                        seen_urls.add(arena_url);
+                        urls.push(arena_url);
                     }
                 }
             }
 
-            // Convert List to array (to_array copies, so we still need to free List)
+            // Copy List to arena-allocated array
             if (urls.size > 0)
             {
-                torrent.url_list = urls.to_array(mem);
+                torrent.url_list = allocator::new_array(&torrent.arena, String, urls.size);
+                for (usz i = 0; i < urls.size; i++)
+                {
+                    torrent.url_list[i] = urls.get(i);  // String pointers already in arena
+                }
             }
         }
         else if (url_list_val.type == bencode::BencodeType.STRING)
@@ -315,15 +327,15 @@ fn TorrentFile*? parse(String data) @public => @pool()
             String url_str = (String)url_list_val.string;
             if (url_str.len > 0)
             {
+                // Percent-encode (heap allocated by url::encode)
                 String encoded_url = percent_encode_url(url_str);
-                bool keep = false;
-                defer if (!keep) free(encoded_url);
+                defer free(encoded_url);  // Always free the heap copy
 
                 if (encoded_url.len > 0)
                 {
-                    torrent.url_list = mem::new_array(String, 1);
-                    torrent.url_list[0] = encoded_url;
-                    keep = true;  // Ownership transferred to array
+                    // Allocate array from arena and copy encoded URL
+                    torrent.url_list = allocator::new_array(&torrent.arena, String, 1);
+                    torrent.url_list[0] = copy_string(&torrent.arena, encoded_url);
                 }
             }
         }
@@ -357,25 +369,29 @@ fn TorrentFile*? parse(String data) @public => @pool()
                 // Skip empty strings
                 if (seed_str.len == 0) continue;
 
-                // Percent-encode spaces for BEP 17 compliance
+                // Percent-encode spaces for BEP 17 compliance (heap allocated by url::encode)
                 String encoded_seed = percent_encode_url(seed_str);
-                bool keep = false;
-                defer if (!keep) free(encoded_seed);
+                defer free(encoded_seed);  // Always free the heap copy
 
                 // Only add if not already seen and not empty
                 if (encoded_seed.len > 0 && !seen_seeds.contains(encoded_seed))
                 {
-                    seen_seeds.add(encoded_seed);
-                    seeds.push(encoded_seed);
-                    keep = true;  // Ownership transferred to collection
+                    // Copy to arena for permanent storage
+                    String arena_seed = copy_string(&torrent.arena, encoded_seed);
+                    seen_seeds.add(arena_seed);
+                    seeds.push(arena_seed);
                 }
             }
         }
 
-        // Convert List to array (to_array copies, so we still need to free List)
+        // Copy List to arena-allocated array
         if (seeds.size > 0)
         {
-            torrent.httpseeds = seeds.to_array(mem);
+            torrent.httpseeds = allocator::new_array(&torrent.arena, String, seeds.size);
+            for (usz i = 0; i < seeds.size; i++)
+            {
+                torrent.httpseeds[i] = seeds.get(i);  // String pointers already in arena
+            }
         }
     }
 
@@ -387,8 +403,8 @@ fn TorrentFile*? parse(String data) @public => @pool()
         return TORRENT_MISSING_FIELD?;
     }
 
-    // Parse info dictionary
-    if (catch err = parse_info(&torrent.info, info_val))
+    // Parse info dictionary (pass arena for allocations)
+    if (catch err = parse_info(&torrent.arena, &torrent.info, info_val))
     {
         torrent.free();
         return err?;
@@ -408,13 +424,10 @@ fn TorrentFile*? parse(String data) @public => @pool()
     if (is_invalid)
     {
         // Replace with info-hash hex using stdlib hex::tencode()
-        // Must copy to heap with malloc() because @pool() memory gets freed when function returns
-        // First free the old name (which was allocated when sanitization failed)
-        free(torrent.info.name);
+        // Note: Old name was in arena (no need to free individually)
         String temp_hex = hex::tencode(torrent.info_hash[..]);
-        char* hex_persistent = (char*)malloc(temp_hex.len);
-        foreach (i, c : temp_hex) hex_persistent[i] = c;
-        torrent.info.name = (String)hex_persistent[:temp_hex.len];
+        // Copy temp hex to arena for permanent storage
+        torrent.info.name = copy_string(&torrent.arena, temp_hex);
     }
 
     return torrent;
@@ -423,11 +436,12 @@ fn TorrentFile*? parse(String data) @public => @pool()
 /**
  * Parse the 'info' dictionary from a torrent.
  *
+ * @param arena Arena allocator for persistent allocations
  * @param info Pointer to TorrentInfo to fill
  * @param info_val The 'info' BencodeValue dictionary
  * @return Fault if parsing fails
  */
-fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
+fn fault? parse_info(Allocator arena, TorrentInfo* info, BencodeValue* info_val)
 {
     // Extract 'name' (required)
     BencodeValue* name_val = bencode::dict_get_required(bencode::BencodeType.STRING, info_val, "name", TORRENT_MISSING_FIELD)!;
@@ -438,21 +452,18 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
         return TORRENT_INVALID_PATH?;
     }
 
-    // Sanitize the torrent name for filesystem safety
+    // Sanitize the torrent name for filesystem safety (returns heap-allocated string)
     String? sanitized_name_opt = path_sanitize::sanitize_torrent_path((String)name_val.string);
     if (catch err = sanitized_name_opt)
     {
-        // Sanitization failed (e.g., name is "." or "..") - copy to heap using malloc, will be replaced with hash later
-        // Must use explicit heap allocation (not pool) so memory persists after parse() returns
-        char* raw = (char*)malloc(name_val.string.len);
-        foreach (i, c : name_val.string) raw[i] = c;
-        info.name = (String)raw[:name_val.string.len];
+        // Sanitization failed (e.g., name is "." or "..") - copy to arena, will be replaced with hash later
+        info.name = copy_string(arena, (char[])name_val.string);
     }
     else
     {
-        // Use sanitized string directly (it's heap-allocated)
-        // After the catch check, sanitized_name_opt is automatically unwrapped to String
-        info.name = sanitized_name_opt;
+        // Copy sanitized string to arena (sanitize_torrent_path returns heap allocation)
+        info.name = copy_string(arena, sanitized_name_opt);
+        free(sanitized_name_opt);  // Free the heap copy from sanitize_torrent_path
     }
 
     // Check for single-file vs multi-file mode
@@ -476,8 +487,8 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
         // Multi-file mode
         info.is_multi_file = true;
 
-        // Parse files list
-        if (catch err = parse_files_list(info, files_val))
+        // Parse files list (pass arena for allocations)
+        if (catch err = parse_files_list(arena, info, files_val))
         {
             return err?;
         }
@@ -507,7 +518,7 @@ fn fault? parse_info(TorrentInfo* info, BencodeValue* info_val)
         return TORRENT_INVALID_INFO?;
     }
 
-    info.pieces = copy_bytes(pieces_val.string);
+    info.pieces = copy_bytes(arena, pieces_val.string);
 
     // Extract 'private' (optional - BEP 27)
     // If private=1, DHT and PEX must be disabled
@@ -579,11 +590,12 @@ fn fault? validate_symlink_path(String[] components)
 /**
  * Parse the 'files' list from a multi-file torrent.
  *
+ * @param arena Arena allocator for persistent allocations
  * @param info Pointer to TorrentInfo to fill
  * @param files_val The 'files' BencodeValue list
  * @return Fault if parsing fails
  */
-fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
+fn fault? parse_files_list(Allocator arena, TorrentInfo* info, BencodeValue* files_val)
 {
     usz num_files = files_val.list.size;
 
@@ -593,8 +605,8 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         return TORRENT_INVALID_INFO?;
     }
 
-    // Allocate files array
-    info.files = mem::new_array(FileEntry, num_files);
+    // Allocate files array from arena
+    info.files = allocator::new_array(arena, FileEntry, num_files);
     info.length = 0;  // Will accumulate total length
 
     // Parse each file
@@ -632,8 +644,8 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
             return TORRENT_INVALID_INFO?;
         }
 
-        // Allocate path array
-        file.path = mem::new_array(String, path.list.size);
+        // Allocate path array from arena
+        file.path = allocator::new_array(arena, String, path.list.size);
 
         // Copy path components
         foreach (j, component : path.list)
@@ -649,19 +661,18 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
                 return TORRENT_INVALID_PATH?;
             }
 
-            // Sanitize each path component
+            // Sanitize each path component (returns heap allocation)
             String? sanitized_component = path_sanitize::sanitize_torrent_path((String)component.string);
             if (catch err = sanitized_component)
             {
-                // Sanitization failed - copy to heap using malloc to avoid pool allocation issues
-                char* raw = (char*)malloc(component.string.len);
-                foreach (k, c : component.string) raw[k] = c;
-                file.path[j] = (String)raw[:component.string.len];
+                // Sanitization failed - copy to arena
+                file.path[j] = copy_string(arena, (char[])component.string);
             }
             else
             {
-                // Use sanitized string directly (it's heap-allocated)
-                file.path[j] = sanitized_component;
+                // Copy sanitized string to arena, then free heap copy
+                file.path[j] = copy_string(arena, sanitized_component);
+                free(sanitized_component);
             }
         }
 
@@ -669,10 +680,8 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
         BencodeValue* attr_val = file_dict.dict_get("attr");
         if (attr_val && attr_val.type == bencode::BencodeType.STRING)
         {
-            // Copy attr string to heap
-            char* attr_copy = (char*)malloc(attr_val.string.len);
-            foreach (k, c : attr_val.string) attr_copy[k] = c;
-            file.attr = (String)attr_copy[:attr_val.string.len];
+            // Copy attr string to arena
+            file.attr = copy_string(arena, (char[])attr_val.string);
 
             // BEP 47: If symlink attribute present, parse symlink path
             bool has_symlink = false;
@@ -694,8 +703,8 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
                     return TORRENT_INVALID_SYMLINK?;
                 }
 
-                // Allocate symlink path array
-                file.symlink_path = mem::new_array(String, symlink_val.list.size);
+                // Allocate symlink path array from arena
+                file.symlink_path = allocator::new_array(arena, String, symlink_val.list.size);
 
                 // Parse and validate symlink path components
                 foreach (k, component : symlink_val.list)
@@ -705,10 +714,8 @@ fn fault? parse_files_list(TorrentInfo* info, BencodeValue* files_val)
                         return TORRENT_INVALID_SYMLINK?;  // All path components must be strings
                     }
 
-                    // Copy component to heap
-                    char* comp_copy = (char*)malloc(component.string.len);
-                    foreach (m, c : component.string) comp_copy[m] = c;
-                    file.symlink_path[k] = (String)comp_copy[:component.string.len];
+                    // Copy component to arena
+                    file.symlink_path[k] = copy_string(arena, (char[])component.string);
                 }
 
                 // Validate symlink path for security
@@ -747,9 +754,9 @@ fn String percent_encode_url(String url_str)
  * Helper: Trim leading and trailing whitespace from URLs.
  * This handles tabs, spaces, newlines, and carriage returns.
  */
-fn String trim_whitespace(String url)
+fn String trim_whitespace(Allocator allocator, String url)
 {
-    if (url.len == 0) return copy_string((char[])url);
+    if (url.len == 0) return copy_string(allocator, (char[])url);
 
     // Find first non-whitespace character
     usz start = 0;
@@ -766,7 +773,7 @@ fn String trim_whitespace(String url)
     // If all whitespace, return empty string
     if (start >= url.len)
     {
-        return (String)mem::new_array(char, 0);
+        return (String)allocator::new_array(allocator, char, 0);
     }
 
     // Find last non-whitespace character
@@ -783,7 +790,7 @@ fn String trim_whitespace(String url)
 
     // Calculate trimmed length
     usz trimmed_len = end - start + 1;
-    char[] trimmed = mem::new_array(char, trimmed_len);
+    char[] trimmed = allocator::new_array(allocator, char, trimmed_len);
 
     // Copy trimmed portion
     for (usz i = 0; i < trimmed_len; i++)
@@ -811,9 +818,9 @@ fn bool contains_null_bytes(String str)
 /**
  * Helper: Copy a string to persistent memory.
  */
-fn String copy_string(char[] source)
+fn String copy_string(Allocator allocator, char[] source)
 {
-    char[] copy = mem::new_array(char, source.len);
+    char[] copy = allocator::new_array(allocator, char, source.len);
     foreach (i, c : source)
     {
         copy[i] = c;
@@ -824,9 +831,9 @@ fn String copy_string(char[] source)
 /**
  * Helper: Copy bytes to persistent memory.
  */
-fn char[] copy_bytes(char[] source)
+fn char[] copy_bytes(Allocator allocator, char[] source)
 {
-    char[] copy = mem::new_array(char, source.len);
+    char[] copy = allocator::new_array(allocator, char, source.len);
     foreach (i, c : source)
     {
         copy[i] = c;
@@ -836,110 +843,13 @@ fn char[] copy_bytes(char[] source)
 
 /**
  * Free a TorrentFile and all its contents.
+ *
+ * Frees all torrent metadata in ONE operation using arena allocator.
+ * This replaces 100+ lines of nested cleanup with single bulk free.
  */
 fn void TorrentFile.free(&self) @public
 {
-    if (self.announce.len > 0) free(self.announce);
-
-    // Free announce-list (multi-tracker)
-    if (self.announce_list.len > 0)
-    {
-        foreach (tier : self.announce_list)
-        {
-            if (tier.len > 0)
-            {
-                // Free each tracker URL in this tier
-                foreach (url : tier)
-                {
-                    if (url.len > 0) free(url);
-                }
-                free(tier);
-            }
-        }
-        free(self.announce_list);
-    }
-
-    // Free DHT nodes
-    if (self.nodes.len > 0)
-    {
-        foreach (node : self.nodes)
-        {
-            if (node.host.len > 0) free(node.host);
-        }
-        free(self.nodes);
-    }
-
-    // Free collections (BEP 38)
-    if (self.collections.len > 0)
-    {
-        foreach (collection : self.collections)
-        {
-            if (collection.len > 0) free(collection);
-        }
-        free(self.collections);
-    }
-
-    // Free similar info-hashes (BEP 38)
-    if (self.similar.len > 0)
-    {
-        free(self.similar);
-    }
-
-    if (self.created_by.len > 0) free(self.created_by);
-    if (self.encoding.len > 0) free(self.encoding);
-
-    // Free web seeds
-    if (self.url_list.len > 0)
-    {
-        foreach (url : self.url_list)
-        {
-            if (url.len > 0) free(url);
-        }
-        free(self.url_list);
-    }
-
-    if (self.httpseeds.len > 0)
-    {
-        foreach (seed : self.httpseeds)
-        {
-            if (seed.len > 0) free(seed);
-        }
-        free(self.httpseeds);
-    }
-
-    if (self.info.name.len > 0) free(self.info.name);
-    if (self.info.pieces.len > 0) free(self.info.pieces);
-
-    // Free multi-file data
-    if (self.info.is_multi_file && self.info.files.len > 0)
-    {
-        foreach (file : self.info.files)
-        {
-            if (file.path.len > 0)
-            {
-                // Free each path component
-                foreach (path_component : file.path)
-                {
-                    if (path_component.len > 0) free(path_component);
-                }
-                free(file.path);
-            }
-
-            // BEP 47: Free extended file attributes
-            if (file.attr.len > 0) free(file.attr);
-
-            if (file.symlink_path.len > 0)
-            {
-                // Free each symlink path component
-                foreach (component : file.symlink_path)
-                {
-                    if (component.len > 0) free(component);
-                }
-                free(file.symlink_path);
-            }
-        }
-        free(self.info.files);
-    }
+    self.arena.free();
 
     free(self);
 }
