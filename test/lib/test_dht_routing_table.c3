@@ -39,7 +39,7 @@ fn common::Ipv4Addr create_test_ip(char a, char b, char c, char d)
 fn void test_create_routing_table() @test
 {
     common::NodeId our_id = create_test_node_id(0x10);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     // Verify our ID was copied correctly
@@ -115,7 +115,7 @@ fn void test_distance_exp_first_bit() @test
 fn void test_add_single_node() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
@@ -135,7 +135,7 @@ fn void test_add_single_node() @test
 fn void test_add_multiple_nodes() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     // Add 5 different nodes
@@ -157,7 +157,7 @@ fn void test_add_multiple_nodes() @test
 fn void test_add_duplicate_node() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
@@ -182,7 +182,7 @@ fn void test_add_duplicate_node() @test
 fn void test_add_our_own_id() @test
 {
     common::NodeId our_id = create_test_node_id(0x10);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     common::Ipv4Addr ip = create_test_ip(127, 0, 0, 1);
@@ -203,7 +203,7 @@ fn void test_bucket_full() @test
     common::NodeId our_id;
     for (usz i = 0; i < 20; i++) our_id[i] = 0;
 
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     // Add 8 nodes to same bucket (all have first byte = 0xFF, so they go in same bucket)
@@ -244,7 +244,7 @@ fn void test_bucket_full() @test
 fn void test_node_failed() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
@@ -268,7 +268,7 @@ fn void test_replace_failed_node() @test
     common::NodeId our_id;
     for (usz i = 0; i < 20; i++) our_id[i] = 0;
 
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     // Add 8 nodes to same bucket
@@ -315,7 +315,7 @@ fn void test_replace_failed_node() @test
 fn void test_find_closest_nodes_empty() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     common::NodeId target = create_test_node_id(0x50);
@@ -330,7 +330,7 @@ fn void test_find_closest_nodes_empty() @test
 fn void test_find_closest_nodes_single() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
@@ -349,7 +349,7 @@ fn void test_find_closest_nodes_single() @test
 fn void test_find_closest_nodes_multiple() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     // Add 10 nodes
@@ -372,7 +372,7 @@ fn void test_find_closest_nodes_multiple() @test
 fn void test_find_closest_nodes_fewer_than_requested() @test
 {
     common::NodeId our_id = create_test_node_id(0x00);
-    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id);
+    dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
     // Add only 3 nodes

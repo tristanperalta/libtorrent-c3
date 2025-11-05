@@ -3,6 +3,7 @@ module libtorrent::dht_rpc_manager;
 import std::io;
 import std::time;
 import std::collections::map;
+import std::core::mem::allocator;
 import libtorrent::common;
 import libtorrent::krpc;
 
@@ -102,11 +103,12 @@ struct RpcManager
 /**
  * Create a new RPC manager
  *
- * @return Initialized RPC manager (allocated on heap)
+ * @param allocator Allocator to use for RpcManager allocation (typically arena)
+ * @return Initialized RPC manager (allocated from allocator, caller manages lifetime)
  */
-fn RpcManager* create_rpc_manager() @public
+fn RpcManager* create_rpc_manager(Allocator allocator) @public
 {
-    RpcManager* mgr = mem::new(RpcManager);
+    RpcManager* mgr = allocator::new(allocator, RpcManager);
     mgr.transaction_count = 0;
     mgr.next_tid = 1;  // Start at 1 (0 is reserved for errors)
     return mgr;
@@ -133,6 +135,10 @@ fn void RpcManager.cancel_all_transactions(&self, UserdataCleanup free_userdata)
 
 /**
  * Free an RPC manager
+ *
+ * NOTE: When allocated from arena (as in DhtClient), do not call this.
+ * The arena cleanup will handle it. This method is for tests and other
+ * code that allocates from heap.
  */
 fn void RpcManager.free(&self) @public
 {

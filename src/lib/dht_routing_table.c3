@@ -2,6 +2,7 @@ module libtorrent::dht_routing_table;
 
 import std::io;
 import std::time;
+import std::core::mem::allocator;
 import libtorrent::common;
 
 /**
@@ -168,11 +169,12 @@ fn int find_node_in_bucket(KBucket* bucket, common::NodeId id)
  * Create a new routing table
  *
  * @param our_id Our node ID (20 random bytes)
- * @return Initialized routing table (allocated on heap, caller must free)
+ * @param allocator Allocator to use for RoutingTable allocation (typically arena)
+ * @return Initialized routing table (allocated from allocator, caller manages lifetime)
  */
-fn RoutingTable* create_routing_table(common::NodeId our_id) @public
+fn RoutingTable* create_routing_table(common::NodeId our_id, Allocator allocator) @public
 {
-    RoutingTable* table = mem::new(RoutingTable);
+    RoutingTable* table = allocator::new(allocator, RoutingTable);
 
     // Copy our ID
     for (int i = 0; i < 20; i++)
@@ -194,6 +196,10 @@ fn RoutingTable* create_routing_table(common::NodeId our_id) @public
 
 /**
  * Free a routing table
+ *
+ * NOTE: When allocated from arena (as in DhtClient), do not call this.
+ * The arena cleanup will handle it. This method is for tests and other
+ * code that allocates from heap.
  *
  * @param table Routing table to free
  */
