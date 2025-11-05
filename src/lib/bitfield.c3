@@ -30,17 +30,18 @@ struct Bitfield
 <*
  Create a new bitfield for tracking pieces.
 
+ @param allocator : "Allocator to use for bitfield data"
  @param num_pieces : "Number of pieces to track"
  @return "Initialized bitfield (caller must free)"
 *>
-fn Bitfield create(usz num_pieces) @public
+fn Bitfield create(Allocator allocator, usz num_pieces) @public
 {
     // Calculate how many bytes we need
     // Add 7 before dividing to round up
     usz num_bytes = (num_pieces + 7) / 8;
 
     Bitfield bf;
-    bf.data = mem::new_array(char, num_bytes);
+    bf.data = allocator::new_array(allocator, char, num_bytes);
     bf.num_pieces = num_pieces;
 
     // Initialize all bits to 0 (no pieces)
@@ -125,11 +126,12 @@ fn char[] Bitfield.to_bytes(&self) @public
 <*
  Create a bitfield from received bytes (BITFIELD message).
 
+ @param allocator : "Allocator to use for bitfield data"
  @param data : "Byte array from BITFIELD message"
  @param num_pieces : "Total number of pieces in torrent"
  @return "Initialized bitfield (caller must free)"
 *>
-fn Bitfield from_bytes(char[] data, usz num_pieces) @public
+fn Bitfield from_bytes(Allocator allocator, char[] data, usz num_pieces) @public
 {
     Bitfield bf;
     bf.num_pieces = num_pieces;
@@ -138,7 +140,7 @@ fn Bitfield from_bytes(char[] data, usz num_pieces) @public
     usz expected_bytes = (num_pieces + 7) / 8;
 
     // Allocate buffer
-    bf.data = mem::new_array(char, expected_bytes);
+    bf.data = allocator::new_array(allocator, char, expected_bytes);
 
     // Copy available data
     usz copy_len = data.len < expected_bytes ? data.len : expected_bytes;
