@@ -30,6 +30,8 @@ import std::core::mem::allocator;
 
  Implementation Details:
  - Uses HashMap{SocketAddress, TorrentPeer*} for O(1) peer operations
+ - HashMap uses heap allocation (must support resize/free of buckets)
+ - TorrentPeer structs and their data use arena allocation (bulk cleanup)
  - Automatic deduplication via SocketAddress.hash() and equals()
  - Candidate cache maintains sorted array for connection prioritization
  - All iterations use HashMap @each macro for safe enumeration
@@ -220,6 +222,7 @@ struct PeerPool
 
     // Storage
     // HashMap provides O(1) deduplication, insertion, lookup, and deletion
+    // Uses heap allocator (not arena) because HashMap needs to resize/free buckets
     HashMap{common::SocketAddress, TorrentPeer*} peers;  // Main peer storage (deduplicated)
 
     // Phase 2: Candidate selection (sorted by rank, highest first)
@@ -333,9 +336,10 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     // Will automatically grow as needed for peer storage
     pool.arena.init(mem, 64 * 1024);
 
-    // Initialize HashMap with arena allocator for O(1) peer operations
-    // All HashMap internal allocations (buckets, entries) use arena
-    pool.peers.init(&pool.arena);
+    // Initialize HashMap with heap allocator (NOT arena!)
+    // HashMap needs to free/reallocate buckets during resize, which is incompatible with arena.
+    // Only TorrentPeer structs and their data use arena.
+    pool.peers.init(mem);
 
     // Initialize empty candidate cache (Phase 2)
     pool.candidate_cache = {};
@@ -357,8 +361,10 @@ fn PeerPool* create(event_loop::EventLoop* loop,
 <*
  Free peer pool and all associated resources.
 
- Uses arena allocator for instant bulk cleanup - all peer data, bitfields,
- HashMap entries, and candidate cache freed in one operation.
+ Cleanup order:
+ 1. Disconnect all connections
+ 2. Free HashMap (heap-allocated, needs manual free)
+ 3. Free arena (bulk free for all TorrentPeer structs, bitfields, candidate cache)
 *>
 fn void PeerPool.free(&self) @public
 {
@@ -373,8 +379,10 @@ fn void PeerPool.free(&self) @public
     // Disconnect all active connections (external resources not in arena)
     self.disconnect_all();
 
+    // Free HashMap (heap-allocated buckets and entries)
     self.peers.free();
 
+    // Free arena (all TorrentPeer structs, bitfields, candidate cache)
     self.arena.free();
 
     // Free pool structure itself (allocated from global heap in create())
@@ -503,16 +511,22 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
         if (peer.connection == conn)
         {
             peer_info = peer;
-            return; // Exit @each early
+            // Note: Don't use 'return' here - it exits the entire callback, not just @each!
         }
     };
 
-    if (!peer_info) return;
+    if (!peer_info)
+    {
+        return;
+    }
 
     switch (state)
     {
         case peer_connection::PeerState.READY:
-            // Peer handshake complete - notify user
+            // Peer handshake complete - transition from CONNECTING to CONNECTED
+            peer_info.state = PeerState.CONNECTED;
+
+            // Notify user
             if (pool.on_connected)
             {
                 pool.on_connected(conn, &peer_info.addr, pool.user_data);
@@ -603,7 +617,7 @@ fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
         if (peer.connection == conn)
         {
             peer_info = peer;
-            return; // Exit @each early
+            // Note: Don't use 'return' here - it exits the entire callback, not just @each!
         }
     };
 
@@ -1006,6 +1020,9 @@ fn void PeerPool.connect_to_peers(&self) @public
         peer.connection = conn_opt;
         peer.state = PeerState.CONNECTING;
         self.num_active_connections++;
+
+        io::printfn("[PEER_POOL] Peer %s: state → CONNECTING (conn=%p)",
+            peer.addr, conn_opt);
 
         // Note: on_connected callback will be called from bridge when peer reaches READY state
 

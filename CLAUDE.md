@@ -547,6 +547,46 @@ if (value.type == ValueType.INTEGER) {
 }
 ```
 
+### HashMap Iteration with @each
+
+**CRITICAL: `return` inside `@each` exits the entire enclosing function, not just the loop!**
+
+```c3
+// ❌ WRONG - Code after @each never executes!
+Item* found = null;
+pool.items.@each(; Key key, Item* item)
+{
+    if (item.connection == conn)
+    {
+        found = item;
+        return; // ❌ Exits entire function!
+    }
+};
+// This code never runs if item was found
+if (found) found.state = State.READY;
+
+// ✅ CORRECT - Remove the return
+Item* found = null;
+pool.items.@each(; Key key, Item* item)
+{
+    if (item.connection == conn)
+    {
+        found = item;
+        // Note: Don't use 'return' - it exits the entire callback, not just @each!
+    }
+};
+// This code now executes correctly
+if (found) found.state = State.READY;
+```
+
+**Why:** The `@each` macro uses a lambda, and `return` in a lambda exits the enclosing function, not the lambda itself.
+
+**Real bugs this caused:**
+- `peer_pool.c3`: Peers stuck in CONNECTING state (state transitions never executed)
+- `peer_pool.c3`: Messages not forwarded (callbacks never invoked)
+
+**Guideline:** Never use `return` inside `@each` unless you intend to exit the entire function.
+
 ## Multi-Target Configuration Notes
 
 The `project.json` configuration has important target-specific settings:

@@ -429,7 +429,10 @@ fn void process_handshake(PeerConnection* peer)
     String buffer = peer.recv_buffer.str_view();
 
     // Need at least 68 bytes for handshake
-    if (buffer.len < 68) return;
+    if (buffer.len < 68)
+    {
+        return;
+    }
 
     // Decode handshake
     peer_wire::HandshakeMsg? handshake_opt = peer_wire::decode_handshake((char[])buffer);
