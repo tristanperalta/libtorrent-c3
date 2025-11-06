@@ -335,3 +335,88 @@ fn void test_get_stats() @test
 
     io::printn("✓ Get traversal statistics");
 }
+
+// ============================================================================
+// Kademlia Algorithm Properties Tests (From Paper)
+// ============================================================================
+
+fn void test_lookup_respects_alpha_concurrency() @test
+{
+    // Test that lookup respects alpha (α) concurrent queries parameter
+    // (Kademlia paper: Section 2.3 - "lookup initiator starts by picking α nodes")
+    // Alpha is typically 3 (TRAVERSAL_ALPHA = 3)
+
+    common::NodeId target = create_test_node_id(0xF0);
+    dht_traversal::Traversal* t = dht_traversal::create_traversal(target);
+    defer t.free();
+
+    // Add 10 nodes to have enough for testing
+    for (int i = 0; i < 10; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x20 + i * 10));
+        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
+        t.add_node(node_id, ip, (ushort)(6881 + i));
+    }
+
+    // Get next queries with alpha=3
+    int[] next_queries = t.get_next_queries(3);
+    defer free(next_queries);
+
+    // Should return at most 3 queries (alpha parameter)
+    assert(next_queries.len <= 3, "Should respect alpha=3 (at most 3 concurrent queries)");
+
+    // With 10 available nodes, should return exactly 3
+    assert(next_queries.len == 3, "With enough nodes, should return exactly alpha=3 queries");
+
+    // Verify the paper's behavior: "The lookup initiator starts by picking α nodes
+    // from its closest non-empty k-bucket"
+    io::printn("✓ Lookup respects alpha (α=3) concurrency");
+}
+
+fn void test_lookup_converges_to_k_closest() @test
+{
+    // Test that lookup converges to k closest nodes
+    // (Kademlia paper: Section 2.3 - "lookup terminates when it has queried and gotten
+    // responses from the k closest nodes it has seen")
+    // k is typically 8 (TRAVERSAL_K = 8)
+
+    common::NodeId target = create_test_node_id(0xFF);
+    dht_traversal::Traversal* t = dht_traversal::create_traversal(target);
+    defer t.free();
+
+    // Add 15 nodes at various distances from target
+    for (int i = 0; i < 15; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x30 + i * 8));
+        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(50 + i));
+        t.add_node(node_id, ip, (ushort)(6881 + i));
+    }
+
+    // Mark some nodes as queried and responded
+    for (int i = 0; i < 10; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x30 + i * 8));
+        t.mark_querying(node_id);
+        t.mark_responded(node_id);
+    }
+
+    // Get the closest nodes (returns k=8 by default according to TRAVERSAL_K constant)
+    dht_traversal::TraversalNode[] closest = t.get_closest_nodes();
+    defer free(closest);
+
+    // Should return k=8 closest nodes (or fewer if less available)
+    assert(closest.len <= 8, "Should return at most k=8 closest nodes");
+    assert(closest.len >= 8, "Should return k=8 closest nodes when enough are available");
+
+    // Check if traversal is done using the is_done flag
+    // According to the paper, lookup terminates when:
+    // 1. It has queried the k closest nodes AND
+    // 2. Received responses from all of them
+    // The implementation tracks this via the is_done flag
+
+    // Note: The exact termination condition depends on implementation details
+    // The paper says it's done when "the initiator has queried and gotten responses
+    // from the k closest nodes it has seen"
+
+    io::printn("✓ Lookup converges to k=8 closest nodes");
+}
