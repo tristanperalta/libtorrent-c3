@@ -494,8 +494,9 @@ fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
     if (catch err = peer_opt) return;
 
     peer_pool::TorrentPeer* peer_info = peer_opt;
-    peer_info.handshake_ok = true;
-    peer_info.state = peer_pool::PeerState.CONNECTED;
+
+    // OWNERSHIP BOUNDARY: download_session is stateless
+    // peer_pool owns peer state - we only read and send messages
 
     // BEP 6: Generate and send allowed_fast set if peer supports Fast Extension
     if (peer_info.connection.supports_fast)
@@ -534,7 +535,11 @@ fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
     }
 
     // Send INTERESTED message to the peer
-    peer.send_interested()!!;
+    if (catch err = peer.send_interested())
+    {
+        io::eprintfn("Failed to send INTERESTED to peer %s: %s", addr, err);
+        return;
+    }
     io::printfn("  Sent INTERESTED to peer %s", addr);
 
     // DON'T start piece downloads yet - wait for BITFIELD first

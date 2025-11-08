@@ -225,10 +225,7 @@ struct PeerPool
     // Uses heap allocator (not arena) because HashMap needs to resize/free buckets
     HashMap{common::SocketAddress, TorrentPeer*} peers;  // Main peer storage (deduplicated)
 
-    // Phase 2: Candidate selection (sorted by rank, highest first)
-    TorrentPeer*[] candidate_cache;  // Ready-to-connect peers (sorted by rank descending)
-
-    // Phase 3: Connection management
+    // Phase 2: Connection management
     usz num_active_connections;     // Current number of active connections
     bool shutting_down;             // Flag to prevent reconnection during cleanup
 
@@ -341,10 +338,7 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     // Only TorrentPeer structs and their data use arena.
     pool.peers.init(mem);
 
-    // Initialize empty candidate cache (Phase 2)
-    pool.candidate_cache = {};
-
-    // Initialize connection count (Phase 3)
+    // Initialize connection count (Phase 2)
     pool.num_active_connections = 0;
     pool.shutting_down = false;
 
@@ -390,77 +384,43 @@ fn void PeerPool.free(&self) @public
 }
 
 <*
- Update candidate cache with all eligible peers sorted by rank (Phase 2).
+ Pick the best candidate peer to connect to.
 
- This rebuilds the candidate cache from scratch by:
- 1. Filtering peers that are eligible to connect (DISCOVERED or DISCONNECTED)
- 2. Calculating/updating their ranks
- 3. Sorting by rank (highest first)
+ Iterates through all peers in the pool and returns the highest-ranked eligible peer.
+ Only considers peers in DISCOVERED or DISCONNECTED states without active connections.
 
- Called after adding new peers or when peer states/statistics change.
-
- Uses arena allocator - no manual free needed, memory automatically reclaimed.
-*>
-fn void PeerPool.update_candidate_cache(&self) @public
-{
-    // Count eligible candidates using HashMap iteration
-    usz eligible_count = 0;
-    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
-    {
-        PeerState state = peer.state;
-        // Only DISCOVERED and DISCONNECTED peers are eligible for new connections
-        // (CONNECTING, CONNECTED, and BANNED are not)
-        if (state == PeerState.DISCOVERED || state == PeerState.DISCONNECTED)
-        {
-            eligible_count++;
-        }
-    };
-
-    if (eligible_count == 0)
-    {
-        self.candidate_cache = {};
-        return; // No candidates
-    }
-
-    // Allocate candidate cache from arena (bump pointer, ~5 cycles)
-    self.candidate_cache = allocator::new_array(&self.arena, TorrentPeer*, eligible_count);
-
-    // Populate cache with eligible peers and update ranks
-    usz cache_index = 0;
-    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
-    {
-        PeerState state = peer.state;
-        if (state == PeerState.DISCOVERED || state == PeerState.DISCONNECTED)
-        {
-            // Update peer rank
-            peer.peer_rank = calculate_peer_rank(self, peer);
-
-            // Add to cache
-            self.candidate_cache[cache_index] = peer;
-            cache_index++;
-        }
-    };
-
-    // Sort cache by rank (highest first) using quicksort (O(n log n))
-    sort::quicksort(self.candidate_cache, &compare_peers_by_rank);
-}
-
-<*
- Pick the best candidate peer to connect to (Phase 2).
-
- Returns the highest-ranked peer from the candidate cache, or fault if no candidates available.
+ Performance: O(N) where N is total peer count. For typical peer counts (50-200),
+ this is negligible (~200-800 comparisons, <1μs on modern CPUs).
 
  @return "Best peer to connect to, or PEER_NOT_FOUND fault"
 *>
 fn TorrentPeer*? PeerPool.pick_best_candidate(&self) @public
 {
-    if (self.candidate_cache.len == 0)
-    {
-        return PEER_NOT_FOUND?;
-    }
+    TorrentPeer* best = null;
+    int best_rank = -999999;
 
-    // Return first peer (highest rank due to sorting)
-    return self.candidate_cache[0];
+    // Direct iteration - O(N) but simple and correct
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
+    {
+        // Only consider eligible states (DISCOVERED or DISCONNECTED)
+        if (peer.state == PeerState.DISCOVERED ||
+            peer.state == PeerState.DISCONNECTED)
+        {
+            // Safety: Skip if already has connection (should never happen for eligible states)
+            if (peer.connection == null)
+            {
+                // Calculate rank and track best
+                int rank = calculate_peer_rank(self, peer);
+                if (rank > best_rank)
+                {
+                    best = peer;
+                    best_rank = rank;
+                }
+            }
+        }
+    };
+
+    return (best == null) ? PEER_NOT_FOUND? : best;
 }
 
 <*
@@ -524,7 +484,9 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
     {
         case peer_connection::PeerState.READY:
             // Peer handshake complete - transition from CONNECTING to CONNECTED
+            // OWNERSHIP BOUNDARY: peer_pool owns ALL peer state
             peer_info.state = PeerState.CONNECTED;
+            peer_info.handshake_ok = true;
 
             // Notify user
             if (pool.on_connected)
@@ -569,6 +531,11 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             }
 
             pool.num_active_connections--;
+
+            // OWNERSHIP BOUNDARY: Reset all session state for clean reconnect
+            peer_info.handshake_ok = false;
+            peer_info.received_bitfield = false;
+            peer_info.optimistically_unchoked = false;
 
             // Don't call close() from here - it causes recursion since close()
             // triggers this callback. The peer will be freed by disconnect_all()
@@ -751,9 +718,6 @@ fn void PeerPool.add_peers(&self, common::SocketAddress[] peers, common::PeerSou
 
         self.add_peer(&peers[i], source);
     }
-
-    // Update candidate cache after batch add
-    self.update_candidate_cache();
 }
 
 <*
@@ -879,9 +843,6 @@ fn void PeerPool.disconnect_peer(&self, common::SocketAddress* addr) @public
     // Update state
     peer.state = PeerState.DISCONNECTED;
 
-    // Update candidate cache
-    self.update_candidate_cache();
-
     // Call user callback
     if (self.on_disconnected)
     {
@@ -906,9 +867,6 @@ fn void PeerPool.disconnect_all(&self) @public
     };
 
     self.num_active_connections = 0;
-
-    // Update candidate cache
-    self.update_candidate_cache();
 }
 
 <*
@@ -945,9 +903,6 @@ fn void PeerPool.disconnect_all_gracefully(&self) @public
     };
 
     self.num_active_connections = 0;
-
-    // Update candidate cache
-    self.update_candidate_cache();
 }
 
 <*
@@ -1009,9 +964,6 @@ fn void PeerPool.connect_to_peers(&self) @public
                 peer.state = PeerState.DISCONNECTED;
             }
 
-            // Update candidate cache to exclude this peer
-            self.update_candidate_cache();
-
             // Continue trying other candidates
             continue;
         }
@@ -1025,9 +977,6 @@ fn void PeerPool.connect_to_peers(&self) @public
             peer.addr, conn_opt);
 
         // Note: on_connected callback will be called from bridge when peer reaches READY state
-
-        // Update candidate cache to remove this peer from candidates
-        self.update_candidate_cache();
     }
 }
 
@@ -1241,22 +1190,24 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
                      added_count, rejected_count);
     }
 
-    // After adding new peers, update candidate cache and try to connect
+    // After adding new peers, try to connect
     if (added_count > 0)
     {
-        self.update_candidate_cache();
         self.connect_to_peers();
     }
 }
 
 <*
- Helper function to recalculate and update a single peer's rank.
+ Recalculate and update a single peer's rank.
+
+ Useful for tests that directly modify peer fields and need to
+ trigger rank recalculation.
 
  @param peer : "Peer to update rank for"
 *>
-fn void update_peer_rank(PeerPool* pool, TorrentPeer* peer)
+fn void PeerPool.update_peer_rank(&self, TorrentPeer* peer) @public
 {
-    peer.peer_rank = calculate_peer_rank(pool, peer);
+    peer.peer_rank = calculate_peer_rank(self, peer);
 }
 
 <*
@@ -1286,10 +1237,7 @@ fn fault? PeerPool.update_peer_stats(&self, common::SocketAddress* addr,
     peer.prev_amount_upload = bytes_uploaded;
 
     // Recalculate rank based on new statistics
-    update_peer_rank((PeerPool*)self, peer);
-
-    // Update candidate cache to reflect new ranking
-    self.update_candidate_cache();
+    self.update_peer_rank(peer);
 
     return {};
 }
@@ -1321,10 +1269,7 @@ fn fault? PeerPool.mark_hash_failure(&self, common::SocketAddress* addr) @public
     //             peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port, peer.hashfails);
 
     // Recalculate rank with penalty (-30 per hash failure)
-    update_peer_rank((PeerPool*)self, peer);
-
-    // Update candidate cache to reflect new ranking
-    self.update_candidate_cache();
+    self.update_peer_rank(peer);
 
     return {};
 }
@@ -1356,10 +1301,7 @@ fn fault? PeerPool.mark_peer_seed(&self, common::SocketAddress* addr) @public
     //             peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.port);
 
     // Recalculate rank with seed boost (+50)
-    update_peer_rank((PeerPool*)self, peer);
-
-    // Update candidate cache to reflect new ranking
-    self.update_candidate_cache();
+    self.update_peer_rank(peer);
 
     return {};
 }
