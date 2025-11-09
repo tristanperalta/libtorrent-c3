@@ -29,6 +29,33 @@
     "torrent-client": {
       "type": "executable",
       "sources": ["src/main.c3", "src/ui/**", "src/log_outputs.c3"]
+    },
+    "libtorrent-prod": {
+      "type": "dynamic-lib",
+      "sources": ["src/lib/**"],
+      "reloc": "pic",
+      "output": "build/prod",
+      "build-dir": "build/prod/obj",
+      "opt": "O3",
+      "optlevel": "max",
+      "debug-info": "none",
+      "safe": false,
+      "fp-math": "fast",
+      "strip-unused": true,
+      "sanitize": "none"
+    },
+    "torrent-client-prod": {
+      "type": "executable",
+      "sources": ["src/main.c3", "src/ui/**", "src/log_outputs.c3"],
+      "output": "build/prod",
+      "build-dir": "build/prod/obj",
+      "opt": "O3",
+      "optlevel": "max",
+      "debug-info": "none",
+      "safe": false,
+      "fp-math": "fast",
+      "strip-unused": true,
+      "sanitize": "none"
     }
   },
   "cc": "cc",
@@ -43,6 +70,7 @@
   "reloc": "none",
   "trap-on-wrap": false,
   "safe": true,
+  "sanitize": "address",
   "single-module": true,
   "soft-float": false,
   "strip-unused": true,
