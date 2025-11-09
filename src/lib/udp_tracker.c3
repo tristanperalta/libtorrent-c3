@@ -504,6 +504,12 @@ fn void cleanup_and_callback(AnnounceContext* ctx)
         }
     }
 
+    // Free TrackerResponse peers array (heap-allocated by parse_compact_peers)
+    if (ctx.result.peers.len > 0)
+    {
+        free(ctx.result.peers);
+    }
+
     // Free context
     free(ctx);
 }
@@ -585,13 +591,14 @@ fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Soc
     }
 
     // Parse compact peer data into SocketAddress[]
-    if (catch err = tracker::parse_compact_peers(raw_peers))
+    common::SocketAddress[]? peers_opt = tracker::parse_compact_peers(raw_peers);
+    if (catch err = peers_opt)
     {
         ctx.result.peers = {};  // Empty array on parse error
     }
     else
     {
-        ctx.result.peers = tracker::parse_compact_peers(raw_peers)!!;
+        ctx.result.peers = peers_opt;  // Use the already-parsed result
     }
 
     // Success - convert to TrackerResponse

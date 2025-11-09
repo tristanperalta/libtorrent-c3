@@ -57,6 +57,12 @@ fn void cleanup_and_callback(AnnounceContext* ctx, bool success)
         }
     }
 
+    // Free TrackerResponse peers array (heap-allocated by parse_compact_peers)
+    if (ctx.result.peers.len > 0)
+    {
+        free(ctx.result.peers);
+    }
+
     // Free context
     free(ctx);
 }

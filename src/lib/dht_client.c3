@@ -174,11 +174,10 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
  */
 fn void DhtClient.free(&self) @public
 {
-    // Close UDP socket
-    if (self.socket)
-    {
-        self.socket.close();
-    }
+    // NOTE: UDP socket is closed in main.c3 shutdown sequence BEFORE close_all_handles()
+    // This .free() is called AFTER close_all_handles(), so socket is already freed
+    // DO NOT call socket.close() here - it's already been closed!
+    self.socket = null;
 
     // Cancel all pending transactions (userdata freed by arena)
     if (self.rpc_manager)

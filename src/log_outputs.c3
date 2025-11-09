@@ -76,7 +76,8 @@ fn void GuiLogOutput.write_log(GuiLogOutput* self, logger::LogLevel level, Strin
 
 fn void GuiLogOutput.close(GuiLogOutput* self) @dynamic
 {
-    // No cleanup needed for GUI
+    // Free the GUI output struct
+    free(self);
 }
 
 <*

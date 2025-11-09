@@ -395,6 +395,10 @@ fn void on_announce_complete_with_retry_internal(tracker::TrackerResponse* respo
         coord.on_peers_received(response, coord.user_data);
     }
 
+    // NOTE: Do NOT free response.peers here!
+    // The tracker cleanup functions (udp_tracker/http_tracker) free it after this callback returns.
+    // Freeing it here would cause a double-free.
+
     // Start periodic announces if not already running
     if (!coord.announce_timer && response.interval > 0)
     {

@@ -200,11 +200,12 @@ fn usz EventBus.get_subscriber_count_for(&self, String event_type) @public
  */
 fn void EventBus.free(&self) @public
 {
-    // Stop and close dispatch timer
+    // NOTE: dispatch_timer should be closed BEFORE close_all_handles() in main.c3
+    // This .free() is called AFTER close_all_handles(), so timer is already freed
+    // Just null out the pointer for safety
     if (self.dispatch_timer)
     {
-        self.dispatch_timer.stop();
-        self.dispatch_timer.close();
+        self.dispatch_timer = null;
     }
 
     // Free all queued events

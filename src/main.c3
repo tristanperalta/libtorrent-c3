@@ -2,6 +2,7 @@ module torrent_client;
 
 import std::io;
 import std::encoding::hex;
+import std::collections::list;
 import uv;
 import libtorrent;
 import libtorrent::common;
@@ -718,7 +719,7 @@ struct ConnectContext
     bool all_completed;
 
     // Peer connections
-    PeerConnectionInfo[] peer_infos;
+    List{PeerConnectionInfo} peer_infos;
 
     // Peer pool (Phase 1 - storage only)
     peer_pool::PeerPool* peer_pool;
@@ -734,23 +735,24 @@ fn void on_connect_peer_state(peer_connection::PeerConnection* peer,
     ConnectContext* ctx = (ConnectContext*)user_data;
 
     // Find which peer this is
-    for (usz i = 0; i < ctx.peer_infos.len; i++)
+    for (usz i = 0; i < ctx.peer_infos.len(); i++)
     {
-        if (ctx.peer_infos[i].conn == peer)
+        PeerConnectionInfo* info = &ctx.peer_infos[i];
+        if (info.conn == peer)
         {
-            ctx.peer_infos[i].state = state;
+            info.state = state;
 
             if (state == peer_connection::PeerState.READY)
             {
                 // Handshake succeeded
-                ctx.peer_infos[i].handshake_ok = true;
-                ctx.peer_infos[i].remote_peer_id = peer.remote_peer_id;
+                info.handshake_ok = true;
+                info.remote_peer_id = peer.remote_peer_id;
                 ctx.connections_succeeded++;
             }
             else if (state == peer_connection::PeerState.CLOSED)
             {
                 // Connection failed or closed
-                if (!ctx.peer_infos[i].handshake_ok)
+                if (!info.handshake_ok)
                 {
                     ctx.connections_failed++;
                 }
@@ -834,7 +836,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
     // Connect to first N peers (max 5)
     int max_connections = ctx.total_peers < 5 ? ctx.total_peers : 5;
     ctx.connections_attempted = max_connections;
-    ctx.peer_infos = mem::new_array(PeerConnectionInfo, max_connections);
+    ctx.peer_infos.init(mem);
 
     // Generate our peer ID
     common::PeerId our_peer_id = tracker::generate_peer_id();
@@ -843,18 +845,21 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
     {
         common::SocketAddress peer = response.peers[i];
 
+        // Create PeerConnectionInfo
+        PeerConnectionInfo info;
+
         // Format IP address (just the IP part, not including port)
         DString ip_buf;
         ip_buf.appendf("%s", peer.addr);  // InetAddress has built-in formatting
-        ctx.peer_infos[i].ip_str = ip_buf.copy_str(mem);
-        ctx.peer_infos[i].port = peer.port;
-        ctx.peer_infos[i].state = peer_connection::PeerState.CONNECTING;
-        ctx.peer_infos[i].handshake_ok = false;
+        info.ip_str = ip_buf.copy_str(mem);
+        info.port = peer.port;
+        info.state = peer_connection::PeerState.CONNECTING;
+        info.handshake_ok = false;
 
         // Initiate connection
         peer_connection::PeerConnection*? conn = peer_connection::connect(
             ctx.loop,
-            ctx.peer_infos[i].ip_str,
+            info.ip_str,
             peer.port,
             ctx.torrent.info_hash,
             our_peer_id,
@@ -869,15 +874,18 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
         if (catch err = conn)
         {
             io::printfn("[%d] %s:%d - Connection failed immediately",
-                        i + 1, ctx.peer_infos[i].ip_str, peer.port);
+                        i + 1, info.ip_str, peer.port);
             ctx.connections_failed++;
-            ctx.peer_infos[i].conn = null;
-            ctx.peer_infos[i].state = peer_connection::PeerState.CLOSED;
+            info.conn = null;
+            info.state = peer_connection::PeerState.CLOSED;
         }
         else
         {
-            ctx.peer_infos[i].conn = conn;
+            info.conn = conn;
         }
+
+        // Add to list
+        ctx.peer_infos.push(info);
     }
 
     // Check if all failed immediately
@@ -952,10 +960,10 @@ fn void display_connection_results(ConnectContext* ctx)
     io::printfn("Connected to %d/%d peers:", ctx.connections_succeeded, ctx.connections_attempted);
     io::printfn("");
 
-    for (usz i = 0; i < ctx.peer_infos.len; i++)
+    int index = 0;
+    foreach (info : ctx.peer_infos.array_view())
     {
-        PeerConnectionInfo* info = &ctx.peer_infos[i];
-
+        index++;
         if (info.handshake_ok)
         {
             // Convert peer ID to hex for display
@@ -963,7 +971,7 @@ fn void display_connection_results(ConnectContext* ctx)
             defer free(peer_id_hex);
 
             io::printfn("  [%d] %s:%d - SUCCESS (peer_id: %s...)",
-                        i + 1, info.ip_str, info.port, peer_id_hex[:20]);
+                        index, info.ip_str, info.port, peer_id_hex[:20]);
         }
         else
         {
@@ -981,7 +989,7 @@ fn void display_connection_results(ConnectContext* ctx)
                 status_str = "FAILED (unknown error)";
             }
 
-            io::printfn("  [%d] %s:%d - %s", i + 1, info.ip_str, info.port, status_str);
+            io::printfn("  [%d] %s:%d - %s", index, info.ip_str, info.port, status_str);
         }
     }
 }
@@ -1058,13 +1066,13 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
     }
 
     // Close peer connections
-    if (ctx.peer_infos.len > 0)
+    if (ctx.peer_infos.len() > 0)
     {
-        for (usz i = 0; i < ctx.peer_infos.len; i++)
+        foreach (info : ctx.peer_infos.array_view())
         {
-            if (ctx.peer_infos[i].conn)
+            if (info.conn)
             {
-                ctx.peer_infos[i].conn.close();
+                info.conn.close();
             }
         }
 
@@ -1075,15 +1083,24 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
             loop.run_once();
         }
 
-        // Now free the peer info structures
-        for (usz i = 0; i < ctx.peer_infos.len; i++)
+        // Free the PeerConnection structs (cmd_connect owns these connections)
+        foreach (info : ctx.peer_infos.array_view())
         {
-            if (ctx.peer_infos[i].ip_str.len > 0)
+            if (info.conn)
             {
-                free(ctx.peer_infos[i].ip_str);
+                free(info.conn);
             }
         }
-        free(ctx.peer_infos);
+
+        // Free the peer info structures (ip_str and List itself)
+        foreach (info : ctx.peer_infos.array_view())
+        {
+            if (info.ip_str.len > 0)
+            {
+                free(info.ip_str);
+            }
+        }
+        ctx.peer_infos.free();
     }
 
     // Free peer pool
@@ -1572,8 +1589,9 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Cleanup - stop all async operations first
     io::printfn("Cleaning up...");
 
-    // Stop and close timers (prevents callbacks from firing during cleanup)
-    io::printfn("Stopping timers...");
+    // Close timers properly (registers cleanup callbacks)
+    // This must be done BEFORE close_all_handles() which drains the callbacks
+    io::printfn("Closing timers...");
     if (ctx.tracker_coord)
     {
         ctx.tracker_coord.free();
@@ -1581,36 +1599,57 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     }
     if (ctx.pex_timer)
     {
-        ctx.pex_timer.stop();
         ctx.pex_timer.close();
+        ctx.pex_timer = null;
     }
     if (ctx.keepalive_timer)
     {
-        ctx.keepalive_timer.stop();
         ctx.keepalive_timer.close();
+        ctx.keepalive_timer = null;
     }
     if (ctx.flush_timer)
     {
-        ctx.flush_timer.stop();
         ctx.flush_timer.close();
+        ctx.flush_timer = null;
+    }
+    if (ctx.block_timeout_timer)
+    {
+        ctx.block_timeout_timer.close();
+        ctx.block_timeout_timer = null;
     }
 
-    // Stop and close DHT timers
-    io::printfn("Stopping DHT timers...");
+    // Close DHT timers
+    io::printfn("Closing DHT timers...");
     if (ctx.dht_timer)
     {
-        ctx.dht_timer.stop();
         ctx.dht_timer.close();
+        ctx.dht_timer = null;
     }
     if (ctx.dht_check_timer)
     {
-        ctx.dht_check_timer.stop();
         ctx.dht_check_timer.close();
+        ctx.dht_check_timer = null;
     }
     if (ctx.dht_tick_timer)
     {
-        ctx.dht_tick_timer.stop();
         ctx.dht_tick_timer.close();
+        ctx.dht_tick_timer = null;
+    }
+
+    // Close event bus timer
+    io::printfn("Closing event bus timer...");
+    if (ctx.event_bus && ctx.event_bus.dispatch_timer)
+    {
+        ctx.event_bus.dispatch_timer.close();
+        ctx.event_bus.dispatch_timer = null;
+    }
+
+    // Close DHT UDP socket
+    io::printfn("Closing DHT socket...");
+    if (ctx.dht_client && ctx.dht_client.socket)
+    {
+        ctx.dht_client.socket.close();
+        ctx.dht_client.socket = null;
     }
 
     // Disconnect all peers before freeing peer pool
@@ -1622,19 +1661,13 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.peer_pool.disconnect_all_gracefully();
     }
 
-    // Process pending cleanup events (let all close callbacks fire)
-    // We've already stopped timers and closed connections above,
-    // now just drain the event loop to process all close callbacks
-    io::printfn("Processing cleanup events...");
-    int cleanup_iterations = 0;
-    while (loop.is_alive() && cleanup_iterations < 100)
-    {
-        loop.run_nowait();
-        cleanup_iterations++;
-    }
-    io::printfn("Processed %d cleanup iterations", cleanup_iterations);
+    // Close all event loop handles FIRST (fires all async close callbacks)
+    // This ensures TCP/timer handles and PeerConnection structs are freed by callbacks
+    // BEFORE we try to free the peer pool data structures
+    io::printfn("Closing all event loop handles...");
+    loop.close_all_handles();
 
-    // Now safe to free resources
+    // Now safe to free resources (connections already freed by callbacks above)
     io::printfn("Freeing peer pool...");
     if (ctx.peer_pool)
     {
@@ -1659,14 +1692,12 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         free(ctx.dm);
     }
 
-    io::printfn("Freeing storage manager...");
     if (ctx.sm)
     {
         ctx.sm.free();
         free(ctx.sm);
     }
 
-    io::printfn("Freeing torrent...");
     if (ctx.torrent)
     {
         ctx.torrent.free();
@@ -1675,37 +1706,31 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Note: tracker_response is NOT freed here - it's stack-allocated by http_tracker
     // and automatically freed when AnnounceContext is freed
 
-    // Free tracker coordinator
     if (ctx.tracker_coord)
     {
         ctx.tracker_coord.free();
     }
 
-    // Free tracker manager
     if (ctx.tracker_mgr)
     {
         ctx.tracker_mgr.free();
     }
 
-    // Free upload manager
     if (ctx.upload_mgr)
     {
         ctx.upload_mgr.free();
     }
 
-    // Free web seed manager
     if (ctx.webseed_mgr)
     {
         ctx.webseed_mgr.free();
     }
 
-    // Free metadata download manager
     if (ctx.metadata_dl)
     {
         ctx.metadata_dl.free();
     }
 
-    // Free speed tracker
     if (ctx.speed_tracker)
     {
         ctx.speed_tracker.free();
@@ -1725,10 +1750,6 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Free GUI (this also closes the window)
     io::printfn("Freeing GUI...");
     raylib_gui::free(ui);
-
-    // Final cleanup: close any remaining handles that weren't explicitly closed
-    io::printfn("Closing any remaining event loop handles...");
-    loop.close_all_handles();
 
     io::printfn("Cleanup complete");
     return ctx.exit_code;
@@ -1841,9 +1862,12 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // The loop only exits when all handles are closed (user presses Ctrl+C)
     loop.run()!!;
 
-    // Cleanup - free allocated memory
-    // Note: Handles are closed individually during resource cleanup below,
-    // then we'll use close_all_handles() at the end to catch stragglers
+    // Cleanup - close all event loop handles FIRST (fires async close callbacks)
+    // This ensures TCP/timer handles and PeerConnection structs are freed by callbacks
+    // BEFORE we try to free the data structures
+    loop.close_all_handles();
+
+    // Now free allocated memory (connections already freed by callbacks above)
     if (ctx.dm)
     {
         ctx.dm.free();
@@ -1937,9 +1961,6 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // Free logger resources
     logger::free_logger();
-
-    // Final cleanup: close any remaining handles that weren't explicitly closed
-    loop.close_all_handles();
 
     return ctx.exit_code;
 }

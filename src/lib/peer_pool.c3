@@ -370,19 +370,37 @@ fn void PeerPool.free(&self) @public
     self.on_message = null;
     self.on_disconnected = null;
 
-    // Disconnect all active connections (external resources not in arena)
-    self.disconnect_all();
-
-    // Free all PeerConnection structs (they are NOT in the arena)
-    // Note: close() no longer frees the connection, so we must do it here
+    // Note: By the time free() is called, the shutdown sequence has already:
+    // 1. Called disconnect_all_gracefully() in main.c3 which called .close() on all PeerConnections
+    // 2. Called loop.close_all_handles() which drained all TCP close callbacks
+    // 3. TCP close callbacks freed the TcpConnection* wrappers (tcp.c3:366)
+    //
+    // However, PeerConnection* structs were NOT freed by the TCP close callback!
+    // The TCP callback only frees TcpConnection*, not PeerConnection*.
+    // So we must free PeerConnection structs here.
+    usz connection_count = 0;
     self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
         if (peer.connection)
         {
+            connection_count++;
+            // Call .close() if it wasn't already closed (e.g., connection was still in progress)
+            // This ensures Lists are freed even if disconnect_all_gracefully() missed this connection
+            if (!peer.connection.is_closed)
+            {
+                peer.connection.close();
+            }
+
+            // Now free the PeerConnection struct itself
             free(peer.connection);
             peer.connection = null;
         }
     };
+
+    if (connection_count > 0)
+    {
+        io::printfn("[PEER_POOL] Freed %d PeerConnection structs", connection_count);
+    }
 
     // Free HashMap (heap-allocated buckets and entries)
     self.peers.free();
@@ -551,7 +569,22 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             // Don't call close() from here - it causes recursion since close()
             // triggers this callback. The peer will be freed by disconnect_all()
             // or when the connection object is freed.
-            peer_info.connection = null;
+            // Free the PeerConnection struct during normal operation, but keep it during shutdown
+            if (peer_info.connection)
+            {
+                // Free the PeerConnection struct during normal operation
+                // Don't free during shutdown - peer_pool.free() will handle it
+                if (!pool.shutting_down)
+                {
+                    // Call close() first to free Lists and other resources
+                    if (!peer_info.connection.is_closed)
+                    {
+                        peer_info.connection.close();
+                    }
+                    free(peer_info.connection);
+                }
+                peer_info.connection = null;
+            }
 
             if (pool.on_disconnected)
             {
@@ -908,7 +941,9 @@ fn void PeerPool.disconnect_all_gracefully(&self) @public
         if (peer.connection)
         {
             peer.connection.graceful_close();
-            peer.connection = null;
+            // NOTE: Do NOT null out peer.connection here!
+            // The pointer is needed in peer_pool.free() to free the PeerConnection struct
+            // after close_all_handles() has drained the TCP close callbacks
             peer.state = PeerState.DISCONNECTED;
         }
     };

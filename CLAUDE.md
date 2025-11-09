@@ -587,6 +587,153 @@ if (found) found.state = State.READY;
 
 **Guideline:** Never use `return` inside `@each` unless you intend to exit the entire function.
 
+## Memory Management in Async Systems
+
+This project uses async I/O with libuv, which requires special attention to memory management. Here are critical patterns learned from fixing memory leaks (documented in SHUTDOWN_LEAKS.md).
+
+### 1. C3 Optional Pattern - Don't Call Twice!
+
+```c3
+// ❌ WRONG - Allocates TWICE, leaks first allocation!
+if (catch err = foo()) {
+    // Handle error
+} else {
+    result = foo()!!;  // ❌ Calls foo() again, leaks first allocation
+}
+
+// ✅ CORRECT - Allocate once, reuse result
+Type? result = foo();
+if (catch err = result) {
+    // Handle error
+} else {
+    // Use result - already allocated, no leak
+}
+```
+
+**Why**: `if (catch err = foo())` only captures the fault on failure. On success, the return value is **discarded** (not captured). Calling `foo()` again in the else branch creates a second allocation while the first one leaks.
+
+### 2. Async Resource Cleanup is Two-Phase
+
+```c3
+// ❌ WRONG - Timer* leaks because callback never runs
+timer.stop();
+free(timer);  // Wrapper freed, but libuv handle still active
+
+// ✅ CORRECT - Close registers cleanup callback
+timer.close();           // Queues close, registers cleanup callback
+loop.run_once();         // Drains event loop, callbacks execute
+// timer.free() not needed - callback already freed it
+```
+
+**Pattern**: `.close()` ≠ `.free()`
+- `.close()` is **async** - queues cleanup, registers callback
+- `.free()` is **sync** - frees memory immediately
+- For async resources: close → drain callbacks → callback frees
+
+**Applies to**: Timers, TCP/UDP sockets, DNS resolvers, all libuv handles
+
+### 3. Memory Ownership in Callback Chains
+
+```
+Caller:    allocate → invoke callback(data) → callback returns → free(data)
+Callback:  ❌ Don't free data!  ✅ Just use it
+```
+
+**Example**: TrackerResponse.peers
+```c3
+// udp_tracker.c3 (caller - owns memory):
+peers = parse_compact_peers(data);           // Allocate
+callback(&response, 0, user_data);           // Invoke with data
+// Callback returns
+free(response.peers);                        // Caller frees
+
+// session_tracker_coordinator.c3 (callback - doesn't own):
+fn void on_peers_received(TrackerResponse* response, ...) {
+    // Use response.peers
+    peer_pool.add_peers(response.peers);
+    // ❌ DON'T free(response.peers) - causes double-free!
+}
+```
+
+**Why**: Freeing in the wrong layer causes double-free crashes!
+
+### 4. Composite Structs Need .close() Before free()
+
+```c3
+struct PeerConnection {
+    TcpConnection* tcp;
+    List{int} allowed_fast_set;  // Internal resources
+    List{int} peer_allowed_fast;
+    // ... more Lists
+}
+
+// ❌ WRONG - Lists leak
+free(connection);
+
+// ✅ CORRECT - Free internals, then container
+connection.close();    // Frees Lists, buffers, internal state
+free(connection);      // Frees the struct itself
+```
+
+**Pattern**: `.close()` frees contained resources, `free()` frees the container.
+
+**Warning**: `.close()` is often NOT idempotent - check `is_closed` flag before calling.
+
+### 5. Shutdown vs Runtime Cleanup
+
+```c3
+if (peer.connection) {
+    peer.connection.close();
+
+    if (!pool.shutting_down) {
+        free(peer.connection);  // ✅ Free immediately during runtime
+    }
+    // ❌ Don't free during shutdown - centralized cleanup handles it
+}
+```
+
+**Why**:
+- **Runtime**: Free immediately to prevent leaks on reconnections
+- **Shutdown**: Keep pointers valid for centralized cleanup in `.free()` methods
+
+Use a `shutting_down` flag to coordinate cleanup phases.
+
+### 6. Layer Separation - Who Frees What?
+
+```
+TCP Layer (libuv):     Frees TcpConnection* (wrapper struct)
+                       ❌ Doesn't know about PeerConnection!
+
+Application Layer:     PeerConnection.close() frees Lists/buffers
+                       peer_pool.free() frees PeerConnection* structs
+```
+
+**Principle**: Lower layers don't clean up higher-level abstractions. Application code must free application structs.
+
+### 7. Test Code Needs Same Discipline
+
+Tests must explicitly close async resources before freeing:
+
+```c3
+// Test cleanup pattern:
+defer {
+    if (bus.dispatch_timer) bus.dispatch_timer.close();  // ✅ Close async resources
+    bus.free();                                            // Free wrapper
+    loop.run_once();                                       // Drain callbacks
+}
+```
+
+Don't assume `.free()` handles cleanup - it often just nulls pointers.
+
+### Common Pitfalls
+
+1. **Code duplication**: Fix in one place (UDP tracker), forget identical code elsewhere (HTTP tracker)
+2. **Early returns in @each**: Code after loop never executes if you use `return` inside
+3. **Nulling pointers too early**: Loses reference needed for cleanup later
+4. **Forgetting to close before close_all_handles()**: Generic callback won't clean up properly
+
+See SHUTDOWN_LEAKS.md for detailed analysis of 12 bugs and lessons learned.
+
 ## Multi-Target Configuration Notes
 
 The `project.json` configuration has important target-specific settings:

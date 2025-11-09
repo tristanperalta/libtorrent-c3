@@ -271,6 +271,9 @@ fn void PeerConnection.close(&self) @public
     // During shutdown, there may be pending async callbacks that still reference this connection.
     // The PeerConnection will be freed by peer_pool.free() after the event loop has drained.
     // This prevents use-after-free crashes during shutdown.
+
+    // WARNING: This method is NOT idempotent - calling it twice will cause double-free!
+    // Use self.is_closed flag to check if already closed before calling.
 }
 
 <*

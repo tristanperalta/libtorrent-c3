@@ -39,6 +39,7 @@ fn void test_subscribe_unsubscribe() @test
 
     event_bus::EventBus* bus = event_bus::create(&loop);
     defer {
+        if (bus.dispatch_timer) bus.dispatch_timer.close();
         bus.free();
         loop.run_once();  // Process pending timer close
     }
@@ -74,6 +75,7 @@ fn void test_multiple_subscribers() @test
 
     event_bus::EventBus* bus = event_bus::create(&loop);
     defer {
+        if (bus.dispatch_timer) bus.dispatch_timer.close();
         bus.free();
         loop.run_once();  // Process pending timer close
     }
@@ -104,6 +106,7 @@ fn void test_wildcard_subscription() @test
 
     event_bus::EventBus* bus = event_bus::create(&loop);
     defer {
+        if (bus.dispatch_timer) bus.dispatch_timer.close();
         bus.free();
         loop.run_once();  // Process pending timer close
     }
@@ -131,6 +134,7 @@ fn void test_publish_async_dispatch() @test
 
     event_bus::EventBus* bus = event_bus::create(&loop);
     defer {
+        if (bus.dispatch_timer) bus.dispatch_timer.close();
         bus.free();
         loop.run_once();  // Process pending timer close
     }
@@ -169,6 +173,7 @@ fn void test_event_batching() @test
 
     event_bus::EventBus* bus = event_bus::create(&loop);
     defer {
+        if (bus.dispatch_timer) bus.dispatch_timer.close();
         bus.free();
         loop.run_once();  // Process pending timer close
     }
@@ -210,6 +215,7 @@ fn void test_unsubscribe_one_of_many() @test
 
     event_bus::EventBus* bus = event_bus::create(&loop);
     defer {
+        if (bus.dispatch_timer) bus.dispatch_timer.close();
         bus.free();
         loop.run_once();  // Process pending timer close
     }
@@ -245,6 +251,7 @@ fn void test_different_event_types() @test
 
     event_bus::EventBus* bus = event_bus::create(&loop);
     defer {
+        if (bus.dispatch_timer) bus.dispatch_timer.close();
         bus.free();
         loop.run_once();  // Process pending timer close
     }
