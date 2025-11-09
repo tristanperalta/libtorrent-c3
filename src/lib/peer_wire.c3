@@ -89,7 +89,15 @@ struct PieceMsg
 {
     uint index;   // Piece index
     uint begin;   // Byte offset within piece
-    char[] block; // Block data
+    char[] block; // Block data (caller must free)
+}
+
+<*
+ * Free the block data allocated by decode_piece.
+ *>
+fn void PieceMsg.free(&self) @inline
+{
+    if (self.block.len > 0) free(self.block);
 }
 
 // ============================================================================

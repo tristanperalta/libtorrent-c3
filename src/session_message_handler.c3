@@ -199,6 +199,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             // Received a piece block!
             peer_wire::PieceMsg? piece_msg = peer_wire::decode_piece(msg.payload);
             if (catch err = piece_msg) return;
+            defer piece_msg.free();  // Free block after copied into assembler
 
             // Add block to download manager
             // Note: Piece may no longer be active if it completed while blocks were queued
@@ -326,6 +327,10 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
 
             peer_wire::RequestMsg req = req_opt;
 
+            // Log incoming REQUEST
+            io::printfn("  Received REQUEST from peer %s: piece=%d offset=%d length=%d",
+                       addr, req.index, req.begin, req.length);
+
             // Check if we have the requested piece
             bool have_piece = ctx.dm.have_piece(req.index);
 
@@ -348,15 +353,25 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 if (!added)
                 {
                     // Queue full - send REJECT_REQUEST
+                    io::printfn("  Upload queue full for peer %s, sending REJECT_REQUEST", addr);
                     if (catch excuse = peer.send_reject_request(req.index, req.begin, req.length))
                     {
                         io::printfn("  Failed to send REJECT_REQUEST to peer %s: %s", addr, excuse);
                     }
                 }
+                else
+                {
+                    // Successfully added to queue
+                    usz queue_size = ctx.upload_mgr.get_queue_size(addr);
+                    io::printfn("  Added upload request to queue for peer %s (queue size: %d/250)",
+                               addr, queue_size);
+                }
             }
             else
             {
                 // Send REJECT_REQUEST (don't have piece or peer is choked)
+                ZString reason = have_piece ? "peer is choked" : "don't have piece";
+                io::printfn("  Rejecting REQUEST from peer %s: %s", addr, reason);
                 if (catch excuse = peer.send_reject_request(req.index, req.begin, req.length))
                 {
                     io::printfn("  Failed to send REJECT_REQUEST to peer %s: %s", addr, excuse);

@@ -24,6 +24,7 @@ import libtorrent::logger;
 struct UploadContext
 {
     peer_connection::PeerConnection* peer;
+    common::SocketAddress peer_addr;
     uint piece_index;
     uint offset;
 }
@@ -49,8 +50,14 @@ fn void on_block_read(uint piece_index, uint offset, char[] block_data, int stat
     // Send PIECE message to peer using existing method
     if (catch excuse = ctx.peer.send_piece(piece_index, offset, block_data))
     {
-        logger::logf(logger::LogLevel.ERROR, "Failed to send PIECE message: piece=%d offset=%d",
-                    piece_index, offset);
+        logger::logf(logger::LogLevel.ERROR, "Failed to send PIECE message to peer %s: piece=%d offset=%d",
+                    ctx.peer_addr, piece_index, offset);
+    }
+    else
+    {
+        // Successfully sent PIECE message
+        logger::logf(logger::LogLevel.INFO, "Sent PIECE to peer %s: piece=%d offset=%d length=%d",
+                    ctx.peer_addr, piece_index, offset, block_data.len);
     }
 
     // Free block data (allocated by storage_manager)
@@ -67,11 +74,13 @@ fn void on_block_read(uint piece_index, uint offset, char[] block_data, int stat
  */
 fn void process_upload_request(storage_manager::StorageManager* storage,
                                 peer_connection::PeerConnection* peer,
+                                common::SocketAddress* peer_addr,
                                 upload_manager::UploadRequest req) @public
 {
     // Create context for callback
     UploadContext* ctx = mem::new(UploadContext);
     ctx.peer = peer;
+    ctx.peer_addr = *peer_addr;
     ctx.piece_index = req.piece_index;
     ctx.offset = req.offset;
 
@@ -114,12 +123,13 @@ fn void process_pending_uploads(upload_manager::UploadManager* upload_mgr,
         }
 
         // Process request
-        process_upload_request(storage, peer, req);
+        process_upload_request(storage, peer, peer_addr, req);
         processed++;
     }
 
     if (processed > 0)
     {
-        logger::logf(logger::LogLevel.DEBUG, "Processed %d upload requests for peer", processed);
+        logger::logf(logger::LogLevel.DEBUG, "Processed %d upload requests for peer %s",
+                    processed, peer_addr);
     }
 }
