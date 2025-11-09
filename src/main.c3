@@ -1544,9 +1544,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     raylib_gui::add_log(ui, "Initializing storage...");
     ctx.sm.initialize(&download_session::on_storage_initialized, &ctx);
 
-    // Main GUI loop - run until window closes or download completes
+    // Main GUI loop - run until window closes
+    // Continue running after download completes for seeding
     int frame_count = 0;
-    while (!ctx.download_complete && raylib_gui::run_frame(ui, loop))
+    while (raylib_gui::run_frame(ui, loop))
     {
         // Event loop and rendering handled in run_frame()
 
@@ -1616,6 +1617,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     io::printfn("Gracefully disconnecting peers...");
     if (ctx.peer_pool)
     {
+        // Set shutdown flag BEFORE disconnecting to prevent reconnection attempts
+        ctx.peer_pool.shutting_down = true;
         ctx.peer_pool.disconnect_all_gracefully();
     }
 
@@ -1668,8 +1671,50 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.torrent.free();
     }
 
-    // Note: tracker_response is managed by the tracker module and already freed
-    // Don't try to free it here
+    // Note: tracker_response is NOT freed here - it's stack-allocated by http_tracker
+    // and automatically freed when AnnounceContext is freed
+
+    // Free tracker coordinator
+    if (ctx.tracker_coord)
+    {
+        ctx.tracker_coord.free();
+    }
+
+    // Free tracker manager
+    if (ctx.tracker_mgr)
+    {
+        ctx.tracker_mgr.free();
+    }
+
+    // Free upload manager
+    if (ctx.upload_mgr)
+    {
+        ctx.upload_mgr.free();
+    }
+
+    // Free web seed manager
+    if (ctx.webseed_mgr)
+    {
+        ctx.webseed_mgr.free();
+    }
+
+    // Free metadata download manager
+    if (ctx.metadata_dl)
+    {
+        ctx.metadata_dl.free();
+    }
+
+    // Free speed tracker
+    if (ctx.speed_tracker)
+    {
+        ctx.speed_tracker.free();
+    }
+
+    // Free event bus
+    if (ctx.event_bus)
+    {
+        ctx.event_bus.free();
+    }
 
     // Cleanup logging
     io::printfn("Cleaning up logging...");
@@ -1786,8 +1831,9 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
                                          &download_session::on_download_load_complete, &ctx);
     }
 
-    // Run event loop - blocks until download completes or error
-    // The loop exits naturally when all handles are closed
+    // Run event loop - blocks until user interrupts (Ctrl+C) or error
+    // After download completes, continues running in seeding mode
+    // The loop only exits when all handles are closed (user presses Ctrl+C)
     loop.run()!!;
 
     // Cleanup - free allocated memory
@@ -1809,18 +1855,66 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         ctx.torrent.free();
     }
 
-    if (ctx.tracker_response)
+    // Note: tracker_response is NOT freed here - it's stack-allocated by http_tracker
+    // and automatically freed when AnnounceContext is freed
+
+    // Free tracker coordinator
+    if (ctx.tracker_coord)
     {
-        if (ctx.tracker_response.peers.len > 0)
-        {
-            free(ctx.tracker_response.peers);
-        }
+        ctx.tracker_coord.free();
+    }
+
+    // Free tracker manager
+    if (ctx.tracker_mgr)
+    {
+        ctx.tracker_mgr.free();
+    }
+
+    // Free upload manager
+    if (ctx.upload_mgr)
+    {
+        ctx.upload_mgr.free();
     }
 
     // Free peer pool
     if (ctx.peer_pool)
     {
         ctx.peer_pool.free();
+    }
+
+    // Free DHT resources
+    if (ctx.dht_search)
+    {
+        ctx.dht_search.free();
+    }
+
+    if (ctx.dht_client)
+    {
+        ctx.dht_client.free();
+    }
+
+    // Free web seed manager
+    if (ctx.webseed_mgr)
+    {
+        ctx.webseed_mgr.free();
+    }
+
+    // Free metadata download manager
+    if (ctx.metadata_dl)
+    {
+        ctx.metadata_dl.free();
+    }
+
+    // Free speed tracker
+    if (ctx.speed_tracker)
+    {
+        ctx.speed_tracker.free();
+    }
+
+    // Free event bus
+    if (ctx.event_bus)
+    {
+        ctx.event_bus.free();
     }
 
     // Stop and close log flush timer

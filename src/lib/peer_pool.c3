@@ -373,6 +373,17 @@ fn void PeerPool.free(&self) @public
     // Disconnect all active connections (external resources not in arena)
     self.disconnect_all();
 
+    // Free all PeerConnection structs (they are NOT in the arena)
+    // Note: close() no longer frees the connection, so we must do it here
+    self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
+    {
+        if (peer.connection)
+        {
+            free(peer.connection);
+            peer.connection = null;
+        }
+    };
+
     // Free HashMap (heap-allocated buckets and entries)
     self.peers.free();
 

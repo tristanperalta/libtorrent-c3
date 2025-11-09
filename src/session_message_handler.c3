@@ -326,18 +326,41 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
 
             peer_wire::RequestMsg req = req_opt;
 
-            // For now, reject all requests (upload/seeding not yet implemented)
-            // TODO: When upload is implemented, check:
-            // 1. Do we have the piece? (ctx.dm.have_piece(req.index))
-            // 2. Are we choking the peer? (peer.am_choking)
-            // 3. If choking, is piece in peer_allowed_fast set?
-            // 4. If yes to all: Read block from storage and send PIECE
-            // 5. If no: Send REJECT_REQUEST
+            // Check if we have the requested piece
+            bool have_piece = ctx.dm.have_piece(req.index);
 
-            // Send REJECT_REQUEST for all requests (leecher mode)
-            if (catch excuse = peer.send_reject_request(req.index, req.begin, req.length))
+            // Check if peer is allowed to request (not choked, or piece is in allowed_fast set)
+            bool is_allowed = !peer.am_choking;  // Peer is unchoked
+
+            // BEP 6: If choked, check if piece is in allowed_fast set
+            if (peer.am_choking && peer.supports_fast)
             {
-                io::printfn("  Failed to send REJECT_REQUEST to peer %s: %s", addr, excuse);
+                // Check if this piece is in the peer's allowed_fast set
+                // TODO: Once we track peer_allowed_fast sets, check here
+                // For now, allowed_fast is not implemented
+                is_allowed = false;
+            }
+
+            if (have_piece && is_allowed)
+            {
+                // Add request to upload queue
+                bool added = ctx.upload_mgr.add_request(addr, req.index, req.begin, req.length);
+                if (!added)
+                {
+                    // Queue full - send REJECT_REQUEST
+                    if (catch excuse = peer.send_reject_request(req.index, req.begin, req.length))
+                    {
+                        io::printfn("  Failed to send REJECT_REQUEST to peer %s: %s", addr, excuse);
+                    }
+                }
+            }
+            else
+            {
+                // Send REJECT_REQUEST (don't have piece or peer is choked)
+                if (catch excuse = peer.send_reject_request(req.index, req.begin, req.length))
+                {
+                    io::printfn("  Failed to send REJECT_REQUEST to peer %s: %s", addr, excuse);
+                }
             }
 
         case peer_wire::MessageType.CHOKE:

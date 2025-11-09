@@ -16,6 +16,8 @@ import libtorrent::download_manager;
 import libtorrent::block_manager;
 import libtorrent::piece_assembler;
 import libtorrent::storage_manager;
+import libtorrent::upload_manager;
+import libtorrent::upload_handler;
 import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
@@ -96,6 +98,10 @@ struct DownloadContext
 
     // Peer management
     peer_pool::PeerPool* peer_pool;
+
+    // Upload/seeding
+    upload_manager::UploadManager* upload_mgr;  // Upload request queue manager
+    async::timer::Timer* upload_timer;          // Upload request processor (every 1s)
 
     // DHT peer discovery
     dht_client::DhtClient* dht_client;
@@ -209,46 +215,63 @@ fn String format_size(long bytes) @public
 // ============================================================================
 
 <*
- Called when download is complete - closes all handles.
- Event loop will exit naturally once all handles are closed.
+ Called when download is complete - enters seeding mode.
+ Keeps peer connections and upload manager running to serve pieces.
 *>
 fn void on_complete_download(DownloadContext* ctx) @public
 {
     io::printfn("");
     io::printfn("=== Download Complete! ===");
     io::printfn("All %d pieces verified successfully", ctx.num_pieces);
-    io::printfn("Cleaning up...");
+    io::printfn("Entering seeding mode - will continue uploading to peers...");
+    io::printfn("");
 
-    // Stop tracker coordinator (handles announce_timer and retry_timer internally)
+    // Mark download as complete
+    ctx.download_complete = true;
+
+    // Send "completed" event to tracker (announces we're now seeding)
     if (ctx.tracker_coord)
     {
-        ctx.tracker_coord.stop();
-        ctx.tracker_coord.free();
-        ctx.tracker_coord = null;
+        ctx.tracker_coord.start_announce("completed");
     }
 
-    if (ctx.pex_timer)
-    {
-        ctx.pex_timer.close();
-        ctx.pex_timer = null;
-    }
-    if (ctx.keepalive_timer)
-    {
-        ctx.keepalive_timer.close();
-        ctx.keepalive_timer = null;
-    }
-    if (ctx.flush_timer)
-    {
-        ctx.flush_timer.close();
-        ctx.flush_timer = null;
-    }
+    // Stop download-only timers
     if (ctx.block_timeout_timer)
     {
         ctx.block_timeout_timer.close();
         ctx.block_timeout_timer = null;
     }
 
-    // Stop DHT timers
+    // Stop web seeding (only needed during download)
+    if (ctx.webseed_timer)
+    {
+        ctx.webseed_timer.close();
+        ctx.webseed_timer = null;
+    }
+    if (ctx.webseed_mgr)
+    {
+        ctx.webseed_mgr.free();
+        ctx.webseed_mgr = null;
+    }
+
+    // Stop metadata download timer (if magnet link)
+    if (ctx.metadata_timer)
+    {
+        ctx.metadata_timer.close();
+        ctx.metadata_timer = null;
+    }
+
+    // Keep these running for seeding:
+    // - keepalive_timer: Keep peer connections alive
+    // - upload_timer: Process upload requests from peers
+    // - pex_timer: Share peer information (BEP 11)
+    // - flush_timer: Periodic file flush
+    // - tracker_coord: Periodic announces (tells tracker we're seeding)
+    // - dht_client: DHT operations continue
+
+    io::printfn("Seeding mode active. Press Ctrl+C to stop seeding and exit.");
+
+    // Stop DHT peer discovery (no longer needed - we have enough peers)
     if (ctx.dht_timer)
     {
         ctx.dht_timer.close();
@@ -259,66 +282,15 @@ fn void on_complete_download(DownloadContext* ctx) @public
         ctx.dht_check_timer.close();
         ctx.dht_check_timer = null;
     }
-    if (ctx.dht_tick_timer)
-    {
-        ctx.dht_tick_timer.close();
-        ctx.dht_tick_timer = null;
-    }
 
-    // Free DHT resources
+    // Free the DHT search (but keep dht_client and dht_tick_timer for DHT operations)
     if (ctx.dht_search)
     {
         ctx.dht_search.free();
         ctx.dht_search = null;
     }
-    if (ctx.dht_client)
-    {
-        ctx.dht_client.free();
-        ctx.dht_client = null;
-    }
 
-    // Free speed tracker
-    if (ctx.speed_tracker)
-    {
-        ctx.speed_tracker.free();
-        ctx.speed_tracker = null;
-    }
-
-    // Free tracker manager resources
-    if (ctx.tracker_mgr)
-    {
-        ctx.tracker_mgr.free();
-        free(ctx.tracker_mgr);
-        ctx.tracker_mgr = null;
-    }
-    if (ctx.current_tracker_url.len > 0 && ctx.current_tracker_url != ctx.torrent.announce)
-    {
-        // Only free if it's not pointing to torrent.announce
-        // (current_tracker_url may be a reference to a tracker manager string)
-        ctx.current_tracker_url = "";
-    }
-
-    // Set completion flag BEFORE disconnecting peers
-    // (prevents queued disconnect callbacks from re-triggering completion)
-    ctx.download_complete = true;
-    ctx.exit_code = 0;
-
-    // Gracefully disconnect from all peers
-    if (ctx.peer_pool)
-    {
-        usz total_peers, candidates, connecting, connected;
-        ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-        if (connected > 0)
-        {
-            io::printfn("Gracefully disconnecting from %d peer%s...",
-                       connected, connected == 1 ? "" : "s");
-        }
-        // Set shutdown flag to prevent reconnection attempts
-        ctx.peer_pool.shutting_down = true;
-        ctx.peer_pool.disconnect_all_gracefully();
-    }
-
-    // Event loop will exit naturally when all handles are closed
+    // Event loop continues running - client now seeds until user presses Ctrl+C
 }
 
 <*
@@ -349,6 +321,16 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
     }
 
     io::printfn("✓ Piece %d verified (%d bytes)", piece_index, piece_data.len);
+
+    // Broadcast HAVE message to all connected peers (BEP 3)
+    // This informs peers we now have this piece available for upload
+    ctx.peer_pool.peers.@each(; common::SocketAddress addr, peer_pool::TorrentPeer* peer_info)
+    {
+        if (peer_info.state == peer_pool::PeerState.CONNECTED && peer_info.connection)
+        {
+            (void)peer_info.connection.send_have(piece_index);  // Best effort
+        }
+    };
 
     // Update speed tracker with downloaded bytes (smooth sliding window calculation)
     if (ctx.speed_tracker)
@@ -846,12 +828,8 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
 {
     download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
 
-    // Store tracker response
-    if (ctx.tracker_response)
-    {
-        free(ctx.tracker_response);
-    }
-    ctx.tracker_response = response;
+    // NOTE: Do NOT store or free the response pointer - it points to stack-allocated memory
+    // in http_tracker that will be automatically freed when AnnounceContext is freed
 
     // Get current tracker URL from coordinator
     String active_tracker = ctx.tracker_coord.get_current_tracker();
@@ -1254,6 +1232,39 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
 }
 
 // ============================================================================
+// Upload Request Processing
+// ============================================================================
+
+<*
+ Timer callback for processing upload requests.
+ Runs every second to process pending upload requests from all peers.
+*>
+fn void on_upload_timer_tick(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    // Process upload requests for all connected peers
+    ctx.peer_pool.peers.@each(; common::SocketAddress addr, peer_pool::TorrentPeer* peer_info)
+    {
+        // Only process for connected peers
+        if (peer_info.state != peer_pool::PeerState.CONNECTED) return;
+        if (!peer_info.connection) return;
+
+        // Check if peer is unchoked (we allow them to download from us)
+        if (peer_info.connection.am_choking) return;
+
+        // Process pending uploads for this peer (max 10 requests per tick)
+        upload_handler::process_pending_uploads(
+            ctx.upload_mgr,
+            ctx.sm,
+            peer_info.connection,
+            &addr,
+            10  // Max requests per peer per tick
+        );
+    };
+}
+
+// ============================================================================
 // DHT Peer Discovery
 // ============================================================================
 
@@ -1578,6 +1589,23 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         ctx
     );
     io::printfn("");
+
+    // Create upload manager
+    ctx.upload_mgr = upload_manager::create();
+    io::printfn("Created upload manager");
+
+    // Create upload timer (process upload requests every 1 second)
+    async::timer::Timer*? upload_timer_opt = async::timer::create(ctx.loop);
+    if (catch err = upload_timer_opt)
+    {
+        io::eprintfn("  Warning: Failed to create upload timer");
+    }
+    else
+    {
+        ctx.upload_timer = upload_timer_opt;
+        ctx.upload_timer.start(1000, 1000, &on_upload_timer_tick, ctx);
+        io::printfn("Started upload request processor (1s interval)");
+    }
 
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)

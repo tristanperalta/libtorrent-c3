@@ -28,7 +28,8 @@
     },
     "torrent-client": {
       "type": "executable",
-      "sources": ["src/main.c3", "src/ui/**", "src/log_outputs.c3"]
+      "sources": ["src/main.c3", "src/ui/**", "src/log_outputs.c3"],
+      "sanitize": "address"
     },
     "libtorrent-prod": {
       "type": "dynamic-lib",
@@ -70,7 +71,7 @@
   "reloc": "none",
   "trap-on-wrap": false,
   "safe": true,
-  "sanitize": "address",
+  "sanitize": "none",
   "single-module": true,
   "soft-float": false,
   "strip-unused": true,

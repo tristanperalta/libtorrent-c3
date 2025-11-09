@@ -961,6 +961,17 @@ fn void free(UIState* state) @public
         mem::free(state.peer_list.ptr);
     }
 
+    // Free tracker list
+    if (state.tracker_list.len > 0)
+    {
+        foreach (tracker : state.tracker_list)
+        {
+            if (tracker.url.len > 0) mem::free(tracker.url.ptr);
+            if (tracker.status.len > 0) mem::free(tracker.status.ptr);
+        }
+        mem::free(state.tracker_list.ptr);
+    }
+
     // Free log messages
     for (usz i = 0; i < state.log_capacity; i++)
     {

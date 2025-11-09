@@ -69,6 +69,7 @@ struct StorageManager
 alias InitCompleteCallback = fn void(int status, void* user_data);
 alias WriteCompleteCallback = fn void(uint piece_index, int status, void* user_data);
 alias ReadCompleteCallback = fn void(uint piece_index, char[] piece_data, int status, void* user_data);
+alias ReadBlockCallback = fn void(uint piece_index, uint offset, char[] block_data, int status, void* user_data);
 alias VerifyCompleteCallback = fn void(uint piece_index, bool verified, int status, void* user_data);
 
 <*
@@ -671,6 +672,135 @@ fn void StorageManager.read_piece(&self, uint piece_index,
 
     // Start reading
     read_next_span(ctx);
+}
+
+// Context for block read operations
+struct BlockReadContext
+{
+    StorageManager* manager;
+    uint piece_index;
+    uint block_offset;  // Offset within piece
+    char[] block_data;  // Buffer we're reading into
+    ReadBlockCallback cb;
+    void* user_data;
+    FileSpan[] spans;
+    usz current_span;
+    usz data_offset;
+    int error_code;
+}
+
+fn void on_read_block_span_complete(char[] data, int status, void* user_data)
+{
+    BlockReadContext* ctx = (BlockReadContext*)user_data;
+
+    if (status < 0)
+    {
+        // Read error - clean up and call callback
+        ctx.error_code = status;
+        if (ctx.cb)
+        {
+            ctx.cb(ctx.piece_index, ctx.block_offset, {}, status, ctx.user_data);
+        }
+        std::core::mem::free(ctx.spans);
+        std::core::mem::free(ctx);
+        return;
+    }
+
+    // Copy data to our buffer
+    FileSpan* span = &ctx.spans[ctx.current_span];
+    usz copy_len = data.len < span.length ? data.len : span.length;
+    for (usz i = 0; i < copy_len; i++)
+    {
+        ctx.block_data[ctx.data_offset + i] = data[i];
+    }
+    ctx.data_offset += copy_len;
+
+    // Move to next span
+    ctx.current_span++;
+    read_next_block_span(ctx);
+}
+
+fn void read_next_block_span(BlockReadContext* ctx)
+{
+    // Check if done
+    if (ctx.current_span >= ctx.spans.len)
+    {
+        // All spans read successfully - clean up
+        if (ctx.cb)
+        {
+            ctx.cb(ctx.piece_index, ctx.block_offset, ctx.block_data, 0, ctx.user_data);
+        }
+        std::core::mem::free(ctx.spans);
+        std::core::mem::free(ctx);
+        return;
+    }
+
+    // Get current span
+    FileSpan* span = &ctx.spans[ctx.current_span];
+    FileInfo* file = &ctx.manager.files[span.file_index];
+
+    if (file.file == null)
+    {
+        // File not open - error - clean up
+        if (ctx.cb)
+        {
+            ctx.cb(ctx.piece_index, ctx.block_offset, {}, -1, ctx.user_data);
+        }
+        std::core::mem::free(ctx.spans);
+        std::core::mem::free(ctx);
+        return;
+    }
+
+    file.file.read((long)span.file_offset,
+                   (usz)span.length, &on_read_block_span_complete, ctx);
+}
+
+<*
+ Read a block from a piece (for upload).
+
+ @param piece_index : "Piece index"
+ @param offset : "Offset within the piece (begin field in protocol)"
+ @param length : "Block length (typically 16KB)"
+ @param callback : "Completion callback"
+ @param user_data : "User data for callback"
+*>
+fn void StorageManager.read_block(&self, uint piece_index, uint offset, uint length,
+                                   ReadBlockCallback callback, void* user_data) @public
+{
+    // Get piece location
+    PieceLocation loc = self.get_piece_location(piece_index);
+
+    // Calculate absolute offset in torrent
+    ulong absolute_offset = (ulong)loc.offset + (ulong)offset;
+
+    // Allocate buffer for block
+    char[] block_data = mem::new_array(char, length);
+
+    // Get file spans for this block (temp allocated)
+    FileSpan[] temp_spans = self.get_file_spans(absolute_offset, (ulong)length);
+
+    // Copy spans to persistent memory (they'll be used in async callbacks)
+    FileSpan[] spans = mem::new_array(FileSpan, temp_spans.len);
+    for (usz i = 0; i < temp_spans.len; i++)
+    {
+        spans[i] = temp_spans[i];
+    }
+
+    // Create read context
+    BlockReadContext* ctx = mem::new(BlockReadContext);
+    ctx.manager = (StorageManager*)self;
+    ctx.piece_index = piece_index;
+    ctx.block_offset = offset;
+    ctx.block_data = block_data;
+    ctx.cb = callback;
+    ctx.user_data = user_data;
+    ctx.spans = spans;
+    ctx.current_span = 0;
+    ctx.data_offset = 0;
+    ctx.error_code = 0;
+
+    // Start reading
+    read_next_block_span(ctx);
 }
 
 // Context for verify operations

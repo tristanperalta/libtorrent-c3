@@ -95,6 +95,7 @@ struct PeerConnection
     event_loop::EventLoop* loop;
     PeerState state;
     DisconnectReason last_disconnect_reason;  // Reason for disconnect (valid when state==CLOSED)
+    bool is_closed;  // Safety flag: true when connection is being closed/freed (prevents use-after-free in callbacks)
 
     // Torrent info
     common::InfoHash info_hash;
@@ -236,6 +237,9 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
 *>
 fn void PeerConnection.close(&self) @public
 {
+    // Mark as closed FIRST to prevent use-after-free in pending callbacks
+    self.is_closed = true;
+
     if (self.state != PeerState.CLOSED)
     {
         self.state = PeerState.CLOSED;
@@ -263,7 +267,10 @@ fn void PeerConnection.close(&self) @public
     self.peer_allowed_fast.free();
     self.suggested_pieces.free();
 
-    free(self);
+    // NOTE: Do NOT free(self) here!
+    // During shutdown, there may be pending async callbacks that still reference this connection.
+    // The PeerConnection will be freed by peer_pool.free() after the event loop has drained.
+    // This prevents use-after-free crashes during shutdown.
 }
 
 <*
@@ -307,6 +314,12 @@ fn void PeerConnection.graceful_close(&self) @public
 fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
+
+    // Safety check: ignore callback if connection is being freed (prevents use-after-free)
+    if (peer.is_closed)
+    {
+        return;
+    }
 
     // Ignore callback if connection was already closed (shutdown race condition)
     if (peer.state == PeerState.CLOSED)
@@ -368,9 +381,16 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
 *>
 fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
+    PeerConnection* peer = (PeerConnection*)user_data;
+
+    // Safety check: ignore callback if connection is being freed
+    if (peer.is_closed)
+    {
+        return;
+    }
+
     if (status != 0)
     {
-        PeerConnection* peer = (PeerConnection*)user_data;
         logger::logf(logger::LogLevel.ERROR, "Failed to send handshake: status=%d", status);
         if (peer.tcp)
         {
@@ -398,6 +418,12 @@ fn char[] alloc_buffer(async::tcp::TcpConnection* conn, usz suggested_size, void
 fn void on_tcp_read(async::tcp::TcpConnection* conn, char[] data, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
+
+    // Safety check: ignore callback if connection is being freed
+    if (peer.is_closed)
+    {
+        return;
+    }
 
     if (data.len == 0)
     {
@@ -608,8 +634,19 @@ fn void handle_state_message(PeerConnection* peer, peer_wire::Message* msg)
             peer.peer_choking = false;
         case peer_wire::MessageType.INTERESTED:
             peer.peer_interested = true;
+            // MVP: Automatically unchoke interested peers (simple seeding)
+            // TODO: Implement proper choking algorithm (BEP 3) for production
+            if (peer.am_choking)
+            {
+                (void)peer.send_unchoke();  // Ignore errors - best effort
+            }
         case peer_wire::MessageType.NOT_INTERESTED:
             peer.peer_interested = false;
+            // Choke peers that are not interested (save bandwidth)
+            if (!peer.am_choking)
+            {
+                (void)peer.send_choke();  // Ignore errors - best effort
+            }
         case peer_wire::MessageType.EXTENDED:
             // Handle extension protocol messages (BEP 10)
             handle_extension_message(peer, msg.payload);
@@ -663,9 +700,16 @@ fn fault? send_message(PeerConnection* peer, char[] data) @inline
 *>
 fn void on_message_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
+    PeerConnection* peer = (PeerConnection*)user_data;
+
+    // Safety check: ignore callback if connection is being freed
+    if (peer.is_closed)
+    {
+        return;
+    }
+
     if (status != 0)
     {
-        PeerConnection* peer = (PeerConnection*)user_data;
         logger::logf(logger::LogLevel.ERROR, "Failed to send message to peer: status=%d", status);
         // Don't close connection on send failure, just log it
     }
