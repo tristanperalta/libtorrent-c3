@@ -1622,11 +1622,12 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.peer_pool.disconnect_all_gracefully();
     }
 
-    // Process any remaining async cleanup callbacks
-    // Keep running until all handles are closed (with limit to prevent infinite loop)
-    io::printfn("Processing pending events...");
+    // Process pending cleanup events (let all close callbacks fire)
+    // We've already stopped timers and closed connections above,
+    // now just drain the event loop to process all close callbacks
+    io::printfn("Processing cleanup events...");
     int cleanup_iterations = 0;
-    while (loop.is_alive() && cleanup_iterations < 200)
+    while (loop.is_alive() && cleanup_iterations < 100)
     {
         loop.run_nowait();
         cleanup_iterations++;
@@ -1724,6 +1725,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Free GUI (this also closes the window)
     io::printfn("Freeing GUI...");
     raylib_gui::free(ui);
+
+    // Final cleanup: close any remaining handles that weren't explicitly closed
+    io::printfn("Closing any remaining event loop handles...");
+    loop.close_all_handles();
 
     io::printfn("Cleanup complete");
     return ctx.exit_code;
@@ -1837,7 +1842,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     loop.run()!!;
 
     // Cleanup - free allocated memory
-    // (Handles are already closed by on_complete_download or error handlers)
+    // Note: Handles are closed individually during resource cleanup below,
+    // then we'll use close_all_handles() at the end to catch stragglers
     if (ctx.dm)
     {
         ctx.dm.free();
@@ -1931,6 +1937,9 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // Free logger resources
     logger::free_logger();
+
+    // Final cleanup: close any remaining handles that weren't explicitly closed
+    loop.close_all_handles();
 
     return ctx.exit_code;
 }
