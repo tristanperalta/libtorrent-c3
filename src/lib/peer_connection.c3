@@ -308,6 +308,12 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
 {
     PeerConnection* peer = (PeerConnection*)user_data;
 
+    // Ignore callback if connection was already closed (shutdown race condition)
+    if (peer.state == PeerState.CLOSED)
+    {
+        return;
+    }
+
     if (status != 0)
     {
         // Connection failed - libuv already cleaned up the handle

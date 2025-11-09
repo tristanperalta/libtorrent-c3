@@ -298,6 +298,11 @@ fn void on_complete_download(DownloadContext* ctx) @public
         ctx.current_tracker_url = "";
     }
 
+    // Set completion flag BEFORE disconnecting peers
+    // (prevents queued disconnect callbacks from re-triggering completion)
+    ctx.download_complete = true;
+    ctx.exit_code = 0;
+
     // Gracefully disconnect from all peers
     if (ctx.peer_pool)
     {
@@ -308,12 +313,12 @@ fn void on_complete_download(DownloadContext* ctx) @public
             io::printfn("Gracefully disconnecting from %d peer%s...",
                        connected, connected == 1 ? "" : "s");
         }
+        // Set shutdown flag to prevent reconnection attempts
+        ctx.peer_pool.shutting_down = true;
         ctx.peer_pool.disconnect_all_gracefully();
     }
 
     // Event loop will exit naturally when all handles are closed
-    ctx.download_complete = true;
-    ctx.exit_code = 0;
 }
 
 <*
@@ -560,15 +565,24 @@ fn void on_download_peer_disconnected(common::SocketAddress* addr,
                 addr,
                 was_error ? " (error)" : "");
 
+    // DEBUG: Log state before completion check
+    int shutting_down_val = ctx.peer_pool ? (int)ctx.peer_pool.shutting_down : -1;
+    io::eprintfn("[DEBUG] Peer disconnected. download_complete=%d, is_complete=%d, shutting_down=%d",
+                 ctx.download_complete, ctx.dm.is_complete(), shutting_down_val);
+
     // Peer pool automatically tries to replace failed connections
-    // Check if download is complete
-    if (ctx.dm.is_complete())
+    // Check if download is complete (and we haven't already handled completion)
+    if (!ctx.download_complete && ctx.dm.is_complete())
     {
         io::printfn("");
         io::printfn("Download complete!");
+        io::eprintfn("[DEBUG] Calling on_complete_download() - setting download_complete=true");
         on_complete_download(ctx);
+        io::eprintfn("[DEBUG] Returned from on_complete_download() - download_complete should be %d", ctx.download_complete);
         return;
     }
+
+    io::eprintfn("[DEBUG] Skipping completion (already handled or not complete yet)");
 
     // Check if all peers are disconnected
     usz total_peers, candidates, connecting, connected;
