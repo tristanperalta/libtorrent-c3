@@ -73,10 +73,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 ctx.dm.update_peer_bitfield(has_pieces)!!;
 
                 // Store the bitfield in the peer's struct (critical for piece selection later!)
-                if (peer_info.pieces.data.len > 0)
-                {
-                    peer_info.pieces.free();
-                }
+                // Note: Just overwrite - arena allocator will clean up old bitfield automatically
                 peer_info.pieces = bitfield::from_bytes(&ctx.peer_pool.arena, msg.payload, num_pieces);
 
                 io::printfn("  Peer %s sent bitfield", addr);
@@ -136,10 +133,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             ctx.dm.update_peer_bitfield(has_all_pieces)!!;
 
             // Store bitfield in peer struct (all pieces set)
-            if (peer_info.pieces.data.len > 0)
-            {
-                peer_info.pieces.free();
-            }
+            // Note: Just overwrite - arena allocator will clean up old bitfield automatically
             peer_info.pieces = bitfield::create(&ctx.peer_pool.arena, num_pieces);
             peer_info.pieces.set_all();
 
@@ -175,10 +169,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                                         ctx.torrent.info.piece_length);
 
             // Create empty bitfield
-            if (peer_info.pieces.data.len > 0)
-            {
-                peer_info.pieces.free();
-            }
+            // Note: Just overwrite - arena allocator will clean up old bitfield automatically
             peer_info.pieces = bitfield::create(&ctx.peer_pool.arena, num_pieces_none);
 
             io::printfn("  Peer %s sent HAVE_NONE (new leecher)", addr);
@@ -258,10 +249,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
                 ctx.dm.update_peer_bitfield(has_all_pieces)!!;
 
                 // Store the bitfield in the peer's struct (all pieces = seed)
-                if (peer_info.pieces.data.len > 0)
-                {
-                    peer_info.pieces.free();
-                }
+                // Note: Just overwrite - arena allocator will clean up old bitfield automatically
                 peer_info.pieces = bitfield::create(&ctx.peer_pool.arena, num_pieces);
                 peer_info.pieces.set_all();
 
