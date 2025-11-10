@@ -1475,21 +1475,40 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
         ctx.dht_search = dht_get_peers::create_search(ctx.torrent.info_hash);
     }
 
-    // Get 8 closest nodes from routing table for this info_hash
-    dht_routing_table::NodeEntry[] nodes =
-        ctx.dht_client.routing_table.find_closest_nodes(
-            ctx.torrent.info_hash,
-            8
-        );
-    defer free(nodes);
+    // BEP 32: Query both IPv4 and IPv6 routing tables for closest nodes
+    dht_routing_table::NodeEntry[] ipv4_nodes =
+        ctx.dht_client.routing_table_ipv4.find_closest_nodes(ctx.torrent.info_hash, 8);
+    defer free(ipv4_nodes);
 
-    if (nodes.len == 0)
+    dht_routing_table::NodeEntry[] ipv6_nodes =
+        ctx.dht_client.routing_table_ipv6.find_closest_nodes(ctx.torrent.info_hash, 8);
+    defer free(ipv6_nodes);
+
+    // Merge results from both tables
+    usz total_nodes = ipv4_nodes.len + ipv6_nodes.len;
+    if (total_nodes == 0)
     {
-        io::printfn("[DHT] No nodes in routing table yet, will retry later");
+        io::printfn("[DHT] No nodes in routing tables yet, will retry later");
         return;
     }
 
-    io::printfn("[DHT] Querying %d DHT nodes for peers...", nodes.len);
+    dht_routing_table::NodeEntry[] nodes = mem::new_array(dht_routing_table::NodeEntry, total_nodes);
+    defer free(nodes);
+
+    // Copy IPv4 nodes
+    for (usz i = 0; i < ipv4_nodes.len; i++)
+    {
+        nodes[i] = ipv4_nodes[i];
+    }
+
+    // Copy IPv6 nodes
+    for (usz i = 0; i < ipv6_nodes.len; i++)
+    {
+        nodes[ipv4_nodes.len + i] = ipv6_nodes[i];
+    }
+
+    io::printfn("[DHT] Querying %d DHT nodes for peers (%d IPv4, %d IPv6)...",
+        nodes.len, ipv4_nodes.len, ipv6_nodes.len);
 
     // Send get_peers query to each node
     for (int i = 0; i < (int)nodes.len; i++)

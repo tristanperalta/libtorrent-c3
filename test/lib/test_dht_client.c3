@@ -37,8 +37,9 @@ fn void test_create_dht_client() @test
         assert(client.our_id[i] == our_id[i], "Our ID should match");
     }
 
-    // Verify initial state
-    assert(client.routing_table != null, "Routing table should be created");
+    // Verify initial state (BEP 32: dual routing tables)
+    assert(client.routing_table_ipv4 != null, "IPv4 routing table should be created");
+    assert(client.routing_table_ipv6 != null, "IPv6 routing table should be created");
     assert(client.rpc_manager != null, "RPC manager should be created");
     assert(client.state == dht_client::DhtState.UNINITIALIZED, "Should start uninitialized");
 
@@ -274,8 +275,8 @@ fn void test_bootstrap_populates_multiple_buckets() @test
 
         common::SocketAddress node_addr = common::create_ipv4_address(192, 168, 1, (char)(10 + i), (ushort)(6881 + i));
 
-        // Manually add to routing table (simulates bootstrap process)
-        client.routing_table.add_node(node_id, node_addr, 100);
+        // Manually add to IPv4 routing table (BEP 32, simulates bootstrap process)
+        client.routing_table_ipv4.add_node(node_id, node_addr, 100);
     }
 
     // Verify routing table has nodes in multiple buckets
@@ -307,15 +308,25 @@ fn void test_bootstrap_convergence() @test
     // (needs nodes in routing table and successful queries)
     bool initially_bootstrapped = client.is_bootstrapped();
 
-    // Simulate adding nodes to routing table (as would happen during bootstrap)
+    // BEP 32: Simulate adding nodes to BOTH routing tables (as would happen during bootstrap)
+    // Need 8 nodes in each table to be considered bootstrapped
     for (int i = 0; i < 8; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x20 + i * 15));
-        common::SocketAddress node_addr = common::create_ipv4_address(192, 168, 1, (char)(20 + i), (ushort)(6881 + i));
-        client.routing_table.add_node(node_id, node_addr, 100);
+        common::SocketAddress ipv4_addr = common::create_ipv4_address(192, 168, 1, (char)(20 + i), (ushort)(6881 + i));
+        client.routing_table_ipv4.add_node(node_id, ipv4_addr, 100);
+
+        // Also add IPv6 nodes (2001:db8::1+i:port)
+        common::NodeId node_id_v6 = create_test_node_id((char)(0x30 + i * 15));
+        char[16] ipv6_bytes = {
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, (char)(0x01 + i)
+        };
+        common::SocketAddress ipv6_addr = common::create_ipv6_address(ipv6_bytes, (ushort)(6881 + i));
+        client.routing_table_ipv6.add_node(node_id_v6, ipv6_addr, 100);
     }
 
-    // After populating routing table, should be considered bootstrapped
+    // After populating both routing tables, should be considered bootstrapped
     bool after_nodes_added = client.is_bootstrapped();
 
     // NOTE: Exact bootstrapping criteria may vary by implementation
@@ -349,12 +360,12 @@ fn void test_bucket_refresh_after_inactivity() @test
     // Set state to running
     client.state = dht_client::DhtState.RUNNING;
 
-    // Add nodes to routing table
+    // Add IPv4 nodes to routing table (BEP 32)
     for (int i = 0; i < 5; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x30 + i * 20));
         common::SocketAddress node_addr = common::create_ipv4_address(192, 168, 1, (char)(30 + i), (ushort)(6881 + i));
-        client.routing_table.add_node(node_id, node_addr, 100);
+        client.routing_table_ipv4.add_node(node_id, node_addr, 100);
     }
 
     // In a real implementation with time tracking:
@@ -437,4 +448,160 @@ fn void test_tick() @test
     client.tick();
 
     io::printn("✓ DHT tick");
+}
+
+// ============================================================================
+// BEP 32: Dual IPv4/IPv6 Routing Table Tests
+// ============================================================================
+
+fn void test_dual_routing_tables_created() @test
+{
+    // Verify both routing tables are created on initialization
+    common::NodeId our_id = create_test_node_id(0xAA);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
+    defer client.free();
+
+    assert(client.routing_table_ipv4 != null, "IPv4 routing table should be created");
+    assert(client.routing_table_ipv6 != null, "IPv6 routing table should be created");
+
+    io::printn("✓ BEP 32: Dual routing tables created");
+}
+
+fn void test_ipv4_nodes_route_to_ipv4_table() @test
+{
+    // Verify IPv4 nodes are added to IPv4 table only
+    common::NodeId our_id = create_test_node_id(0xBB);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
+    defer client.free();
+
+    client.state = dht_client::DhtState.RUNNING;
+
+    // Add IPv4 nodes
+    for (int i = 0; i < 5; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
+        common::SocketAddress ipv4_addr = common::create_ipv4_address(192, 168, 1, (char)(10 + i), 6881);
+        client.routing_table_ipv4.add_node(node_id, ipv4_addr, 100);
+    }
+
+    // Verify IPv4 table has nodes, IPv6 table is empty
+    int ipv4_nodes, ipv4_buckets, ipv6_nodes, ipv6_buckets;
+    client.routing_table_ipv4.get_stats(&ipv4_nodes, &ipv4_buckets);
+    client.routing_table_ipv6.get_stats(&ipv6_nodes, &ipv6_buckets);
+
+    assert(ipv4_nodes == 5, "IPv4 table should have 5 nodes");
+    assert(ipv6_nodes == 0, "IPv6 table should be empty");
+
+    io::printn("✓ BEP 32: IPv4 nodes route to IPv4 table");
+}
+
+fn void test_ipv6_nodes_route_to_ipv6_table() @test
+{
+    // Verify IPv6 nodes are added to IPv6 table only
+    common::NodeId our_id = create_test_node_id(0xCC);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
+    defer client.free();
+
+    client.state = dht_client::DhtState.RUNNING;
+
+    // Add IPv6 nodes
+    for (int i = 0; i < 5; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x20 + i * 10));
+        char[16] ipv6_bytes = {
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, (char)(0x01 + i)
+        };
+        common::SocketAddress ipv6_addr = common::create_ipv6_address(ipv6_bytes, 6881);
+        client.routing_table_ipv6.add_node(node_id, ipv6_addr, 100);
+    }
+
+    // Verify IPv6 table has nodes, IPv4 table is empty
+    int ipv4_nodes, ipv4_buckets, ipv6_nodes, ipv6_buckets;
+    client.routing_table_ipv4.get_stats(&ipv4_nodes, &ipv4_buckets);
+    client.routing_table_ipv6.get_stats(&ipv6_nodes, &ipv6_buckets);
+
+    assert(ipv4_nodes == 0, "IPv4 table should be empty");
+    assert(ipv6_nodes == 5, "IPv6 table should have 5 nodes");
+
+    io::printn("✓ BEP 32: IPv6 nodes route to IPv6 table");
+}
+
+fn void test_stats_aggregate_both_tables() @test
+{
+    // Verify get_stats() aggregates from both tables
+    common::NodeId our_id = create_test_node_id(0xDD);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
+    defer client.free();
+
+    client.state = dht_client::DhtState.RUNNING;
+
+    // Add 3 IPv4 nodes
+    for (int i = 0; i < 3; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
+        common::SocketAddress ipv4_addr = common::create_ipv4_address(192, 168, 1, (char)(10 + i), 6881);
+        client.routing_table_ipv4.add_node(node_id, ipv4_addr, 100);
+    }
+
+    // Add 5 IPv6 nodes
+    for (int i = 0; i < 5; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x30 + i * 10));
+        char[16] ipv6_bytes = {
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, (char)(0x01 + i)
+        };
+        common::SocketAddress ipv6_addr = common::create_ipv6_address(ipv6_bytes, 6881);
+        client.routing_table_ipv6.add_node(node_id, ipv6_addr, 100);
+    }
+
+    // Get aggregated stats
+    int total_nodes, active_buckets, transactions;
+    client.get_stats(&total_nodes, &active_buckets, &transactions);
+
+    assert(total_nodes == 8, "Total nodes should be 3 + 5 = 8");
+
+    io::printn("✓ BEP 32: Stats aggregate both tables");
+}
+
+fn void test_bootstrap_requires_both_tables() @test
+{
+    // Verify is_bootstrapped() requires 8 nodes in EACH table
+    common::NodeId our_id = create_test_node_id(0xEE);
+    dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
+    defer client.free();
+
+    client.state = dht_client::DhtState.RUNNING;
+
+    // Initially not bootstrapped
+    assert(!client.is_bootstrapped(), "Should not be bootstrapped initially");
+
+    // Add 10 IPv4 nodes (more than 8)
+    for (int i = 0; i < 10; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
+        common::SocketAddress ipv4_addr = common::create_ipv4_address(192, 168, 1, (char)(10 + i), 6881);
+        client.routing_table_ipv4.add_node(node_id, ipv4_addr, 100);
+    }
+
+    // Still not bootstrapped (no IPv6 nodes)
+    assert(!client.is_bootstrapped(), "Should not be bootstrapped with only IPv4 nodes");
+
+    // Add 8 IPv6 nodes
+    for (int i = 0; i < 8; i++)
+    {
+        common::NodeId node_id = create_test_node_id((char)(0x30 + i * 10));
+        char[16] ipv6_bytes = {
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, (char)(0x01 + i)
+        };
+        common::SocketAddress ipv6_addr = common::create_ipv6_address(ipv6_bytes, 6881);
+        client.routing_table_ipv6.add_node(node_id, ipv6_addr, 100);
+    }
+
+    // Now bootstrapped (both tables have >= 8 nodes)
+    assert(client.is_bootstrapped(), "Should be bootstrapped with 8+ nodes in each table");
+
+    io::printn("✓ BEP 32: Bootstrap requires both tables");
 }

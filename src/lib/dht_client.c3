@@ -75,18 +75,19 @@ enum DhtState : char
  */
 struct DhtClient
 {
-    common::NodeId our_id;                         // Our 20-byte node ID
-    dht_routing_table::RoutingTable* routing_table; // Routing table
-    dht_rpc_manager::RpcManager* rpc_manager;      // RPC transaction manager
-    DhtState state;                                // Current state
-    long last_refresh_time;                        // Last bucket refresh timestamp
+    common::NodeId our_id;                              // Our 20-byte node ID
+    dht_routing_table::RoutingTable* routing_table_ipv4; // IPv4 routing table (BEP 32)
+    dht_routing_table::RoutingTable* routing_table_ipv6; // IPv6 routing table (BEP 32)
+    dht_rpc_manager::RpcManager* rpc_manager;           // RPC transaction manager
+    DhtState state;                                     // Current state
+    long last_refresh_time;                             // Last bucket refresh timestamp
     BootstrapNode[MAX_BOOTSTRAP_NODES] bootstrap_nodes;
     int bootstrap_node_count;
-    udp::UdpSocket* socket;                        // UDP socket for DHT communication
-    event_loop::EventLoop* loop;                   // Event loop
-    bencode::BencodeValue* current_response_root;  // Temporarily store response during callback
-    allocator::DynamicArenaAllocator arena;        // Arena for RPC contexts and temp allocations
-    event_bus::EventBus* event_bus;                // Event bus for publishing DHT events (can be null)
+    udp::UdpSocket* socket;                             // UDP socket for DHT communication
+    event_loop::EventLoop* loop;                        // Event loop
+    bencode::BencodeValue* current_response_root;       // Temporarily store response during callback
+    allocator::DynamicArenaAllocator arena;             // Arena for RPC contexts and temp allocations
+    event_bus::EventBus* event_bus;                     // Event bus for publishing DHT events (can be null)
 }
 
 // ============================================================================
@@ -120,12 +121,13 @@ fn DhtClient* create_dht_client(common::NodeId our_id, event_loop::EventLoop* lo
     client.current_response_root = null;
     client.event_bus = event_bus;
 
-    // Initialize arena allocator for routing table, RPC manager, and RPC contexts
-    // 4KB pages grow as needed (typical: ~200KB for routing table + RPC manager)
+    // Initialize arena allocator for routing tables, RPC manager, and RPC contexts
+    // 4KB pages grow as needed (typical: ~400KB for dual routing tables + RPC manager)
     client.arena.init(mem, 4096);
 
-    // Create routing table and RPC manager (allocated from arena)
-    client.routing_table = dht_routing_table::create_routing_table(our_id, &client.arena);
+    // Create dual routing tables (BEP 32) and RPC manager (allocated from arena)
+    client.routing_table_ipv4 = dht_routing_table::create_routing_table(our_id, &client.arena);
+    client.routing_table_ipv6 = dht_routing_table::create_routing_table(our_id, &client.arena);
     client.rpc_manager = dht_rpc_manager::create_rpc_manager(&client.arena);
 
     // Create UDP socket (only if event loop is provided)
@@ -314,8 +316,10 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
         // Publish query timeout event
         if (client.event_bus)
         {
-            int total_nodes, active_buckets;
-            client.routing_table.get_stats(&total_nodes, &active_buckets);
+            int ipv4_nodes, ipv4_buckets, ipv6_nodes, ipv6_buckets;
+            client.routing_table_ipv4.get_stats(&ipv4_nodes, &ipv4_buckets);
+            client.routing_table_ipv6.get_stats(&ipv6_nodes, &ipv6_buckets);
+            int total_nodes = ipv4_nodes + ipv6_nodes;
             event_types::DhtEvent evt = event_types::create_dht_event(0, total_nodes, "DHT query timed out");
             client.event_bus.publish(event_types::EVENT_DHT_QUERY_COMPLETE, &evt, event_types::DhtEvent.sizeof);
         }
@@ -392,8 +396,8 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
 
                     common::CompactNodeIPv4 decoded = common::decode_compact_node_ipv4(compact_bytes[..])!!;
 
-                    // Add node to routing table (with estimated RTT of 100ms)
-                    bool added = client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
+                    // Add IPv4 node to IPv4 routing table (BEP 32, with estimated RTT of 100ms)
+                    bool added = client.routing_table_ipv4.add_node(decoded.node_id, decoded.addr, 100);
 
                     if (added && i < 3)
                     {
@@ -434,8 +438,8 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
 
                     common::CompactNodeIPv6 decoded = common::decode_compact_node_ipv6(compact_bytes[..])!!;
 
-                    // Add IPv6 node to routing table (with estimated RTT of 100ms)
-                    bool added = client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
+                    // Add IPv6 node to IPv6 routing table (BEP 32, with estimated RTT of 100ms)
+                    bool added = client.routing_table_ipv6.add_node(decoded.node_id, decoded.addr, 100);
 
                     if (added && i < 3)
                     {
@@ -496,8 +500,11 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                     // Publish DHT peers found event
                     if (ctx.client.event_bus)
                     {
-                        int total_nodes, active_buckets;
-                        ctx.client.routing_table.get_stats(&total_nodes, &active_buckets);
+                        // Aggregate stats from both IPv4 and IPv6 routing tables (BEP 32)
+                        int ipv4_nodes, ipv4_buckets, ipv6_nodes, ipv6_buckets;
+                        ctx.client.routing_table_ipv4.get_stats(&ipv4_nodes, &ipv4_buckets);
+                        ctx.client.routing_table_ipv6.get_stats(&ipv6_nodes, &ipv6_buckets);
+                        int total_nodes = ipv4_nodes + ipv6_nodes;
                         event_types::DhtEvent evt = event_types::create_dht_event(added, total_nodes, "DHT peers found");
                         ctx.client.event_bus.publish(event_types::EVENT_DHT_PEERS_FOUND, &evt, event_types::DhtEvent.sizeof);
                     }
@@ -526,7 +533,7 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                     }
 
                     common::CompactNodeIPv4 decoded = common::decode_compact_node_ipv4(compact_bytes[..])!!;
-                    client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
+                    client.routing_table_ipv4.add_node(decoded.node_id, decoded.addr, 100);
                 }
             }
 
@@ -560,8 +567,8 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
 
                     common::CompactNodeIPv6 decoded = common::decode_compact_node_ipv6(compact_bytes[..])!!;
 
-                    // Add IPv6 node to routing table (with estimated RTT of 100ms)
-                    bool added = client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
+                    // Add IPv6 node to IPv6 routing table (BEP 32, with estimated RTT of 100ms)
+                    bool added = client.routing_table_ipv6.add_node(decoded.node_id, decoded.addr, 100);
 
                     if (added && i < 3)
                     {
@@ -586,8 +593,11 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
     // Publish successful query complete event
     if (client.event_bus)
     {
-        int total_nodes, active_buckets;
-        client.routing_table.get_stats(&total_nodes, &active_buckets);
+        // Aggregate stats from both IPv4 and IPv6 routing tables (BEP 32)
+        int ipv4_nodes, ipv4_buckets, ipv6_nodes, ipv6_buckets;
+        client.routing_table_ipv4.get_stats(&ipv4_nodes, &ipv4_buckets);
+        client.routing_table_ipv6.get_stats(&ipv6_nodes, &ipv6_buckets);
+        int total_nodes = ipv4_nodes + ipv6_nodes;
         event_types::DhtEvent evt = event_types::create_dht_event(0, total_nodes, "DHT query completed");
         client.event_bus.publish(event_types::EVENT_DHT_QUERY_COMPLETE, &evt, event_types::DhtEvent.sizeof);
     }
@@ -923,7 +933,9 @@ fn bool DhtClient.bootstrap(&self) @public
 
 /**
  * Check if DHT client is bootstrapped
- * A client is considered bootstrapped if it has at least a few nodes in routing table
+ * BEP 32: With dual IPv4/IPv6 routing tables, we consider bootstrapped if:
+ * - At least 8 nodes in each routing table that has connectivity
+ * This ensures robust dual-stack operation per BEP 32 requirements
  *
  * @return true if bootstrapped
  */
@@ -931,17 +943,21 @@ fn bool DhtClient.is_bootstrapped(&self) @public
 {
     if (self.state != DhtState.RUNNING) return false;
 
-    int total_nodes, active_buckets;
-    self.routing_table.get_stats(&total_nodes, &active_buckets);
+    // Get stats from both IPv4 and IPv6 routing tables (BEP 32)
+    int ipv4_nodes, ipv4_buckets, ipv6_nodes, ipv6_buckets;
+    self.routing_table_ipv4.get_stats(&ipv4_nodes, &ipv4_buckets);
+    self.routing_table_ipv6.get_stats(&ipv6_nodes, &ipv6_buckets);
 
-    // Consider bootstrapped if we have at least 10 nodes
-    bool bootstrapped = total_nodes >= 10;
+    // BEP 32: Require at least 8 nodes in each table for robust dual-stack operation
+    // (8 nodes = k-bucket size, enough for basic DHT operations)
+    bool bootstrapped = ipv4_nodes >= 8 && ipv6_nodes >= 8;
 
     // Publish bootstrapped event (first time only, when crossing threshold)
     // Note: In production, you'd want to track if this event was already published
     // to avoid publishing it repeatedly. For now, we publish it each time.
     if (bootstrapped && self.event_bus)
     {
+        int total_nodes = ipv4_nodes + ipv6_nodes;
         event_types::DhtEvent evt = event_types::create_dht_event(0, total_nodes, "DHT bootstrapped");
         self.event_bus.publish(event_types::EVENT_DHT_BOOTSTRAPPED, &evt, event_types::DhtEvent.sizeof);
     }
@@ -990,7 +1006,13 @@ fn void DhtClient.tick(&self) @public
 fn void DhtClient.get_stats(&self, int* total_nodes, int* active_buckets,
                             int* active_transactions) @public
 {
-    self.routing_table.get_stats(total_nodes, active_buckets);
+    // Aggregate stats from both IPv4 and IPv6 routing tables (BEP 32)
+    int ipv4_nodes, ipv4_buckets, ipv6_nodes, ipv6_buckets;
+    self.routing_table_ipv4.get_stats(&ipv4_nodes, &ipv4_buckets);
+    self.routing_table_ipv6.get_stats(&ipv6_nodes, &ipv6_buckets);
+
+    *total_nodes = ipv4_nodes + ipv6_nodes;
+    *active_buckets = ipv4_buckets + ipv6_buckets;
 
     int pending;
     self.rpc_manager.get_stats(active_transactions, &pending);
