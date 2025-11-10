@@ -42,7 +42,8 @@ struct ResumeData
  */
 struct ResumeDataProvider (download_state_provider::StateProvider)
 {
-    char _dummy;  // C3 requires non-zero sized structs
+    void* _vtable;     // Space for interface vtable pointer
+    void* _typeinfo;   // Space for interface type information
 }
 
 /**
@@ -191,7 +192,7 @@ fn void ResumeData.free(&self) @public
 /**
  * Load state implementation.
  */
-fn download_state_provider::DownloadState? ResumeDataProvider.load_state(ResumeDataProvider* self, String torrent_path) @dynamic
+fn download_state_provider::DownloadState? ResumeDataProvider.load_state(&self, String torrent_path) @dynamic
 {
     // Load resume data
     ResumeData? resume_opt = load_resume_data(torrent_path);
@@ -213,7 +214,7 @@ fn download_state_provider::DownloadState? ResumeDataProvider.load_state(ResumeD
 /**
  * Save state implementation.
  */
-fn void? ResumeDataProvider.save_state(ResumeDataProvider* self, String torrent_path, download_state_provider::DownloadState* state) @dynamic
+fn void? ResumeDataProvider.save_state(&self, String torrent_path, download_state_provider::DownloadState* state) @dynamic
 {
     // Save resume data
     if (catch err = save_resume_data(torrent_path, state.file_selection))
@@ -225,7 +226,7 @@ fn void? ResumeDataProvider.save_state(ResumeDataProvider* self, String torrent_
 /**
  * Has state implementation.
  */
-fn bool ResumeDataProvider.has_state(ResumeDataProvider* self, String torrent_path) @dynamic
+fn bool ResumeDataProvider.has_state(&self, String torrent_path) @dynamic
 {
     return has_resume_data(torrent_path);
 }
@@ -233,7 +234,7 @@ fn bool ResumeDataProvider.has_state(ResumeDataProvider* self, String torrent_pa
 /**
  * Delete state implementation.
  */
-fn void? ResumeDataProvider.delete_state(ResumeDataProvider* self, String torrent_path) @dynamic
+fn void? ResumeDataProvider.delete_state(&self, String torrent_path) @dynamic
 {
     if (catch err = delete_resume_data(torrent_path))
     {

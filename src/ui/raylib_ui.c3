@@ -12,6 +12,9 @@ import std::io;
 // Data Structures
 // ============================================================================
 
+// Callback types (BEP 21 Phase 3)
+alias FileSelectionCallback = fn void(usz file_index, bool selected, void* user_data);
+
 <*
  Tab selection for the UI.
 *>
@@ -35,6 +38,19 @@ struct TrackerDisplayInfo
     String status;           // Status: "Working", "Trying...", "Failed", "Idle"
     int peers_returned;      // Number of peers returned (-1 if not announced yet)
     bool is_active;          // Is this the currently active tracker?
+}
+
+<*
+ File display information (BEP 21).
+ Used for rendering file list in the Files tab.
+*>
+struct FileDisplayInfo
+{
+    String path;             // File path (relative to torrent root)
+    long length;             // File size in bytes
+    bool is_selected;        // Selected for download (BEP 21)
+    bool is_complete;        // All pieces for this file are complete
+    float progress;          // Download progress (0.0 - 1.0)
 }
 
 <*
@@ -76,6 +92,12 @@ struct UIState
     // Tracker state (BEP 12 multi-tracker)
     TrackerDisplayInfo[] tracker_list;
     int tracker_scroll_offset;
+
+    // File state (BEP 21 file selection)
+    FileDisplayInfo[] file_list;
+    int file_scroll_offset;
+    void* file_selection_callback_data;  // User data for callback
+    FileSelectionCallback file_selection_callback;  // Phase 3: File selection change callback
 
     // Log messages (ring buffer)
     String[] log_messages;
@@ -142,6 +164,13 @@ fn UIState* init(String torrent_name, long total_size, uint pieces_total,
     TrackerDisplayInfo[] empty_trackers;
     state.tracker_list = empty_trackers;
     state.tracker_scroll_offset = 0;
+
+    // Initialize file state (BEP 21)
+    FileDisplayInfo[] empty_files;
+    state.file_list = empty_files;
+    state.file_scroll_offset = 0;
+    state.file_selection_callback = null;
+    state.file_selection_callback_data = null;
 
     // Initialize log buffer (keep last 1000 messages)
     state.log_capacity = 1000;
@@ -533,17 +562,207 @@ fn void render_peers_tab(UIState* state, int content_y, int content_height) @pri
 }
 
 <*
- Render the Files tab.
+ Render the Files tab (BEP 21 file selection).
 *>
 fn void render_files_tab(UIState* state, int content_y, int content_height) @private
 {
-    int margin = 20;
+    int margin = 10;
+    int row_height = 25;
+    int header_height = 30;
+
+    // Table columns
+    int col0_x = margin;                    // Checkbox (BEP 21 Phase 3)
+    int col0_width = 30;
+    int col1_x = col0_x + col0_width;       // File name/path
+    int col1_width = 370;                   // Reduced to make room for checkbox
+    int col2_x = col1_x + col1_width;       // Size
+    int col2_width = 120;
+    int col3_x = col2_x + col2_width;       // Progress bar
+    int col3_width = 200;
+    int col4_x = col3_x + col3_width;       // Status
+    int col4_width = 120;
+
     int y = content_y;
 
-    rl::drawText("Files", margin, y, 20, rl::DARKGRAY);
-    y += 40;
+    // Check if we have files to display
+    if (state.file_list.len == 0)
+    {
+        rl::drawText("No files to display (single-file torrent or not yet loaded)",
+                     margin, y + 20, 18, rl::DARKGRAY);
+        return;
+    }
 
-    rl::drawText("File list will be implemented next...", margin, y, 18, rl::LIGHTGRAY);
+    // Draw header background
+    rl::drawRectangle(margin, y, state.window_width - margin * 2, header_height,
+                      (rl::Color){220, 220, 220, 255});
+
+    // Draw column headers
+    rl::drawText("☑", col0_x + 8, y + 8, 18, rl::DARKGRAY);  // Checkbox column
+    rl::drawText("File Path", col1_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Size", col2_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Progress", col3_x + 5, y + 8, 18, rl::DARKGRAY);
+    rl::drawText("Status", col4_x + 5, y + 8, 18, rl::DARKGRAY);
+
+    y += header_height;
+
+    // Calculate how many rows we can display
+    int table_height = content_height - header_height - 40;  // Reserve 40px for status bar
+    int max_rows = table_height / row_height;
+
+    // Draw file rows
+    int row_count = 0;
+    foreach (i, file : state.file_list)
+    {
+        // Skip rows that are scrolled out of view
+        if (i < (usz)state.file_scroll_offset) continue;
+
+        // Stop if we've filled the visible area
+        if (row_count >= max_rows) break;
+
+        // Alternating row colors
+        rl::Color row_color = (row_count % 2 == 0) ?
+            (rl::Color){255, 255, 255, 255} :  // White
+            (rl::Color){245, 245, 245, 255};   // Light gray
+
+        rl::drawRectangle(margin, y, state.window_width - margin * 2, row_height, row_color);
+
+        // Column 0: Checkbox (BEP 21 Phase 3)
+        rl::Rectangle checkbox_rect = { (float)(col0_x + 5), (float)(y + 3), 18.0, 18.0 };
+        bool old_checked = file.is_selected;
+        bool checked = file.is_selected;
+        rg::guiCheckBox(checkbox_rect, null, &checked);
+
+        // Check if value changed
+        if (checked != old_checked)
+        {
+            // Checkbox was clicked - invoke callback to toggle selection
+            if (state.file_selection_callback)
+            {
+                usz file_index = i;  // Actual file index in the full list
+                state.file_selection_callback(file_index, checked, state.file_selection_callback_data);
+            }
+        }
+
+        // Column 1: File path (truncate if too long)
+        String display_path = file.path;
+        if (display_path.len > 50)
+        {
+            DString truncated;
+            truncated.append("...");
+            truncated.append(display_path[display_path.len - 47..]);
+            rl::drawText(truncated.zstr_view(), col1_x + 5, y + 5, 16, rl::DARKGRAY);
+        }
+        else
+        {
+            rl::drawText((ZString)file.path.ptr, col1_x + 5, y + 5, 16, rl::DARKGRAY);
+        }
+
+        // Column 2: Size (human-readable)
+        DString size_str;
+        if (file.length >= 1073741824)  // >= 1 GiB
+        {
+            size_str.appendf("%.2f GiB", (double)file.length / 1073741824.0);
+        }
+        else if (file.length >= 1048576)  // >= 1 MiB
+        {
+            size_str.appendf("%.2f MiB", (double)file.length / 1048576.0);
+        }
+        else if (file.length >= 1024)  // >= 1 KiB
+        {
+            size_str.appendf("%.2f KiB", (double)file.length / 1024.0);
+        }
+        else
+        {
+            size_str.appendf("%d B", file.length);
+        }
+        rl::drawText(size_str.zstr_view(), col2_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        // Column 3: Progress bar
+        int progress_bar_width = col3_width - 20;
+        int progress_bar_height = 16;
+        int progress_bar_x = col3_x + 10;
+        int progress_bar_y = y + 5;
+
+        // Background (gray)
+        rl::drawRectangle(progress_bar_x, progress_bar_y, progress_bar_width, progress_bar_height,
+                          (rl::Color){200, 200, 200, 255});
+
+        // Progress fill (green if complete, blue if downloading, gray if not selected)
+        rl::Color progress_color;
+        if (file.is_complete)
+        {
+            progress_color = (rl::Color){0, 180, 0, 255};  // Green
+        }
+        else if (file.is_selected)
+        {
+            progress_color = (rl::Color){0, 120, 215, 255};  // Blue
+        }
+        else
+        {
+            progress_color = (rl::Color){150, 150, 150, 255};  // Gray (not selected)
+        }
+
+        int filled_width = (int)(progress_bar_width * file.progress);
+        if (filled_width > 0)
+        {
+            rl::drawRectangle(progress_bar_x, progress_bar_y, filled_width, progress_bar_height,
+                              progress_color);
+        }
+
+        // Progress percentage text
+        DString progress_text;
+        progress_text.appendf("%.1f%%", file.progress * 100.0);
+        rl::drawText(progress_text.zstr_view(), progress_bar_x + progress_bar_width + 5, y + 5, 16, rl::DARKGRAY);
+
+        // Column 4: Status
+        String status_text;
+        if (file.is_complete)
+        {
+            status_text = "Complete";
+        }
+        else if (file.is_selected)
+        {
+            status_text = "Downloading";
+        }
+        else
+        {
+            status_text = "Skipped";
+        }
+        rl::drawText((ZString)status_text.ptr, col4_x + 5, y + 5, 16, rl::DARKGRAY);
+
+        y += row_height;
+        row_count++;
+    }
+
+    // Draw status bar at bottom of table
+    int status_y = content_y + content_height - 35;
+    rl::drawRectangle(margin, status_y, state.window_width - margin * 2, 30,
+                      (rl::Color){230, 230, 230, 255});
+
+    // Count selected and complete files
+    usz selected_count = 0;
+    usz complete_count = 0;
+    long total_selected_size = 0;
+
+    foreach (file : state.file_list)
+    {
+        if (file.is_selected)
+        {
+            selected_count++;
+            total_selected_size += file.length;
+        }
+        if (file.is_complete) complete_count++;
+    }
+
+    DString status_text;
+    status_text.appendf("Files: %d total  |  %d selected  |  %d complete",
+                       state.file_list.len,
+                       selected_count,
+                       complete_count);
+    rl::drawText(status_text.zstr_view(), margin + 10, status_y + 8, 16, rl::DARKGRAY);
+
+    // TODO: Add scrollbar if file_list.len > max_rows
+    // TODO: Add checkboxes for file selection (Phase 3)
 }
 
 <*
@@ -894,6 +1113,45 @@ fn void update_tracker_list(UIState* state,
         new_list[0] = info;
         state.tracker_list = new_list;
     }
+}
+
+<*
+ Update file list from storage manager (BEP 21).
+ Called to refresh the Files tab with current file download status.
+
+ @param state : "UI state"
+ @param new_file_list : "New file list (ownership transferred to UIState)"
+*>
+fn void update_file_list(UIState* state, FileDisplayInfo[] new_file_list) @public
+{
+    // Free old file list
+    if (state.file_list.len > 0)
+    {
+        foreach (file : state.file_list)
+        {
+            if (file.path.len > 0) mem::free(file.path.ptr);
+        }
+        mem::free(state.file_list.ptr);
+    }
+
+    // Store new file list
+    state.file_list = new_file_list;
+}
+
+<*
+ Set file selection callback (BEP 21 Phase 3).
+ Called by main.c3 to register callback for file selection changes.
+
+ @param state : "UI state"
+ @param callback : "Callback function (file_index, selected, user_data)"
+ @param user_data : "User data passed to callback"
+*>
+fn void set_file_selection_callback(UIState* state,
+                                      FileSelectionCallback callback,
+                                      void* user_data) @public
+{
+    state.file_selection_callback = callback;
+    state.file_selection_callback_data = user_data;
 }
 
 <*

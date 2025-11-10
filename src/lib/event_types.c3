@@ -41,6 +41,11 @@ const String EVENT_STORAGE_VERIFICATION_COMPLETE = "storage.verification_complet
 
 const String EVENT_ERROR_OCCURRED = "error.occurred";
 
+// File events (BEP 21)
+const String EVENT_FILE_PROGRESS_UPDATED = "file.progress_updated";
+const String EVENT_FILE_COMPLETED = "file.completed";
+const String EVENT_FILE_SELECTION_CHANGED = "file.selection_changed";  // Phase 3
+
 // ============================================================================
 // Event Payload Structures
 // ============================================================================
@@ -133,6 +138,19 @@ struct ErrorEvent
 {
     String message;            // Error message
     int error_code;            // Error code (0 = no specific code)
+}
+
+/**
+ * File progress event - file-level download progress (BEP 21)
+ */
+struct FileProgressEvent
+{
+    uint file_index;           // Which file (or (uint)-1 for "all files" bulk update)
+    float progress;            // Progress percentage (0.0 - 1.0)
+    ulong bytes_complete;      // Bytes downloaded for this file
+    ulong bytes_total;         // Total file size
+    bool is_complete;          // True if file just completed
+    bool is_selected;          // File selection status
 }
 
 // ============================================================================
@@ -246,5 +264,22 @@ fn ErrorEvent create_error_event(String message, int code) @public
     ErrorEvent evt;
     evt.message = message;
     evt.error_code = code;
+    return evt;
+}
+
+/**
+ * Create a file progress event (BEP 21).
+ */
+fn FileProgressEvent create_file_progress_event(uint file_index, float progress,
+                                                  ulong bytes_complete, ulong bytes_total,
+                                                  bool is_complete, bool is_selected) @public
+{
+    FileProgressEvent evt;
+    evt.file_index = file_index;
+    evt.progress = progress;
+    evt.bytes_complete = bytes_complete;
+    evt.bytes_total = bytes_total;
+    evt.is_complete = is_complete;
+    evt.is_selected = is_selected;
     return evt;
 }

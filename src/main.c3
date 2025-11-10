@@ -1156,6 +1156,70 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
 }
 
 // ============================================================================
+// GUI Helper Functions
+// ============================================================================
+
+/**
+ * Build and update file list for GUI display (BEP 21).
+ * Called to initialize or refresh the Files tab.
+ */
+fn void update_gui_file_list(download_session::DownloadContext* ctx)
+{
+    if (!ctx.gui_state) return;  // No GUI
+    if (!ctx.sm) return;  // No storage manager yet
+
+    // Build have_pieces bitfield from download manager
+    bool[] have_pieces;
+    if (ctx.dm)
+    {
+        have_pieces = mem::new_array(bool, ctx.sm.num_pieces);
+        for (uint i = 0; i < ctx.sm.num_pieces; i++)
+        {
+            have_pieces[i] = ctx.dm.have_piece(i);
+        }
+    }
+    else
+    {
+        // No download manager yet, assume no pieces
+        have_pieces = mem::new_array(bool, ctx.sm.num_pieces);
+    }
+    defer mem::free(have_pieces.ptr);
+
+    // Build file display list
+    usz num_files = ctx.sm.files.len;
+    if (num_files == 0) return;  // Single-file torrent or not initialized
+
+    raylib_gui::FileDisplayInfo[] file_list = mem::new_array(raylib_gui::FileDisplayInfo, num_files);
+
+    for (usz i = 0; i < num_files; i++)
+    {
+        storage_manager::FileInfo* file = &ctx.sm.files[i];
+
+        file_list[i].path = file.path.copy(mem);
+        file_list[i].length = (long)file.length;
+        file_list[i].is_selected = file.is_selected;
+        file_list[i].is_complete = file.is_complete;
+        file_list[i].progress = ctx.sm.get_file_progress(i, &have_pieces);
+    }
+
+    // Update GUI
+    raylib_gui::update_file_list(ctx.gui_state, file_list);
+}
+
+/**
+ * File selection callback (BEP 21 Phase 3).
+ * Called when user clicks checkbox in Files tab.
+ */
+fn void on_file_selection_toggled(usz file_index, bool selected, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    download_session::toggle_file_selection(ctx, file_index, selected);
+
+    // Refresh GUI file list to reflect the change
+    update_gui_file_list(ctx);
+}
+
+// ============================================================================
 // GUI Event Handlers - Subscribe to EventBus events
 // ============================================================================
 
@@ -1177,6 +1241,45 @@ fn void on_progress_updated_event(String event_type, void* event_data, void* use
     raylib_gui::update_progress(ctx.gui_state, evt.pieces_complete, evt.pieces_downloading,
                                 (long)evt.bytes_downloaded, evt.download_speed, evt.upload_speed);
     raylib_gui::update_peers(ctx.gui_state, (int)connected_peers, (int)total_peers);
+
+    // Phase 1 removed: update_gui_file_list(ctx) moved to dedicated event handler
+}
+
+/**
+ * Event handler: File progress updated (BEP 21 Phase 2)
+ * Updates GUI file list display with current download progress
+ */
+fn void on_file_progress_updated_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;  // No GUI to update
+
+    // Rebuild and update the entire file list
+    // This is triggered once per second (same debounce as progress updates)
+    update_gui_file_list(ctx);
+}
+
+/**
+ * Event handler: File completed (BEP 21 Phase 2)
+ * Shows notification when a file finishes downloading
+ */
+fn void on_file_completed_event(String event_type, void* event_data, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    if (!ctx.gui_state) return;
+
+    event_types::FileProgressEvent* evt = (event_types::FileProgressEvent*)event_data;
+
+    // Show completion message in GUI log
+    if (evt.file_index < ctx.sm.files.len)
+    {
+        DString msg;
+        msg.appendf("[File] Completed: %s", ctx.sm.files[evt.file_index].path);
+        raylib_gui::add_log(ctx.gui_state, msg.str_view());
+    }
+
+    // Refresh file list to show completion status
+    update_gui_file_list(ctx);
 }
 
 /**
@@ -1450,7 +1553,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.numwant = numwant;
     ctx.save_path = save_path;
     ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
-    ctx.select_files_str = "";  // BEP 21: GUI mode doesn't support file selection yet
+    ctx.torrent_path = torrent_path;  // BEP 21: Torrent file path for resume data
+    ctx.select_files_str = "";  // BEP 21: File selection loaded from resume data if available
     ctx.gui_state = ui;
     ctx.webseed_mgr = null;
     ctx.webseed_timer = null;
@@ -1485,6 +1589,13 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_COMPLETE, &on_webseed_download_complete_event, &ctx);
     ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_FAILED, &on_webseed_download_failed_event, &ctx);
     ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_URL_DISABLED, &on_webseed_url_disabled_event, &ctx);
+
+    // Subscribe to file progress events (BEP 21 Phase 2)
+    ctx.event_bus.subscribe(event_types::EVENT_FILE_PROGRESS_UPDATED, &on_file_progress_updated_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_FILE_COMPLETED, &on_file_completed_event, &ctx);
+
+    // Register file selection callback (BEP 21 Phase 3)
+    raylib_gui::set_file_selection_callback(ui, &on_file_selection_toggled, &ctx);
 
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
@@ -1562,6 +1673,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         (usz)ctx.max_concurrent_pieces,
         BLOCK_SIZE
     );
+
+    // Initialize file list in GUI (BEP 21)
+    // Call after both storage and download managers are created
+    update_gui_file_list(&ctx);
 
     // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();

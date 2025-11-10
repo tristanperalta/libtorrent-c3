@@ -1082,6 +1082,45 @@ fn bool StorageManager.is_file_complete(&self, usz file_index) @public
 }
 
 <*
+ * Get download progress for a specific file (BEP 21).
+ * Calculates which pieces belong to this file and checks how many are complete.
+ *
+ * @param file_index : "Index of file"
+ * @param have_bitfield : "Bitfield of pieces we have"
+ * @return "Progress as percentage (0.0 - 1.0), or 0.0 if file is invalid"
+ *>
+fn float StorageManager.get_file_progress(&self, usz file_index, bool[]* have_bitfield) @public
+{
+    if (file_index >= self.files.len) return 0.0;
+
+    FileInfo* file = &self.files[file_index];
+    if (file.length == 0) return 1.0;  // Empty file is complete
+
+    // Calculate which pieces this file spans
+    ulong file_start = file.offset;
+    ulong file_end = file.offset + file.length;
+
+    uint first_piece = (uint)(file_start / self.piece_length);
+    uint last_piece = (uint)((file_end - 1) / self.piece_length);
+
+    if (last_piece >= self.num_pieces) last_piece = self.num_pieces - 1;
+
+    // Count how many pieces we have for this file
+    uint total_pieces = last_piece - first_piece + 1;
+    uint complete_pieces = 0;
+
+    for (uint piece = first_piece; piece <= last_piece; piece++)
+    {
+        if (piece < have_bitfield.len && (*have_bitfield)[piece])
+        {
+            complete_pieces++;
+        }
+    }
+
+    return (float)complete_pieces / (float)total_pieces;
+}
+
+<*
  * Check if all selected files are complete.
  *
  * @return "True if all selected files are complete"

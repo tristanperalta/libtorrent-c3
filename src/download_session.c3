@@ -271,6 +271,14 @@ fn void check_file_completion(DownloadContext* ctx, uint piece_index)
         {
             ctx.sm.mark_file_complete(i);
             io::printfn("  [BEP 21] File %d complete: %s", i, ctx.sm.files[i].path);
+
+            // Publish file completed event (BEP 21 Phase 2)
+            event_types::FileProgressEvent file_evt = event_types::create_file_progress_event(
+                (uint)i, 1.0,
+                ctx.sm.files[i].length, ctx.sm.files[i].length,
+                true, ctx.sm.files[i].is_selected
+            );
+            ctx.event_bus.publish(event_types::EVENT_FILE_COMPLETED, &file_evt, event_types::FileProgressEvent.sizeof);
         }
     }
 }
@@ -519,6 +527,67 @@ fn void on_complete_download(DownloadContext* ctx) @public
 }
 
 <*
+ * Build file selection string from storage manager (BEP 21 Phase 3).
+ * Returns comma-separated list of selected file indices (e.g., "0,2,4").
+ *
+ * @param sm : "Storage manager"
+ * @return "File selection string (caller must free)"
+ *>
+fn String build_file_selection_string(storage_manager::StorageManager* sm) @private
+{
+    DString result;
+    bool first = true;
+    for (usz i = 0; i < sm.files.len; i++)
+    {
+        if (sm.files[i].is_selected)
+        {
+            if (!first) result.append(",");
+            result.appendf("%d", i);
+            first = false;
+        }
+    }
+    return result.copy_str(mem);
+}
+
+<*
+ * Toggle file selection (BEP 21 Phase 3).
+ * Called from GUI when user clicks file checkbox.
+ *
+ * @param ctx : "Download context"
+ * @param file_index : "Index of file to toggle"
+ * @param selected : "New selection state"
+ *>
+fn void toggle_file_selection(DownloadContext* ctx, usz file_index, bool selected) @public
+{
+    if (!ctx.sm || file_index >= ctx.sm.files.len) return;
+
+    // Update storage manager
+    ctx.sm.files[file_index].is_selected = selected;
+
+    // Save to resume data
+    if (ctx.state_provider && ctx.torrent_path.len > 0)
+    {
+        // Build new file selection string
+        String selection_str = build_file_selection_string(ctx.sm);
+        defer free(selection_str);
+
+        // Save via resume_data module directly (workaround for interface issue)
+        (void)resume_data::save_resume_data(ctx.torrent_path, selection_str);
+    }
+
+    // Publish selection change event
+    event_types::FileProgressEvent evt = event_types::create_file_progress_event(
+        (uint)file_index, 0.0, 0, 0, false, selected
+    );
+    ctx.event_bus.publish(event_types::EVENT_FILE_SELECTION_CHANGED, &evt, event_types::FileProgressEvent.sizeof);
+
+    io::printfn("[BEP 21] File %d selection changed: %s -> %s",
+                file_index,
+                selected ? "selected" : "deselected",
+                ctx.sm.files[file_index].path);
+}
+
+<*
  Callback for piece completion - write to disk.
 *>
 fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool success, void* user_data) @public
@@ -618,6 +687,13 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
             ctx.total_bytes_downloaded, ctx.current_download_speed, 0.0
         );
         ctx.event_bus.publish(event_types::EVENT_PROGRESS_UPDATED, &progress_evt, event_types::ProgressEvent.sizeof);
+
+        // Publish file progress update (BEP 21 Phase 2)
+        // Signal GUI to refresh all file progress (file_index = -1 means "all files")
+        event_types::FileProgressEvent file_evt = event_types::create_file_progress_event(
+            (uint)-1, 0.0, 0, 0, false, true
+        );
+        ctx.event_bus.publish(event_types::EVENT_FILE_PROGRESS_UPDATED, &file_evt, event_types::FileProgressEvent.sizeof);
     }
 
     if (complete % 100 == 0 || complete == total)
