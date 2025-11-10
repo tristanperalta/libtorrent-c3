@@ -159,7 +159,7 @@ fn String build_announce_url(String tracker_url, common::InfoHash* info_hash,
  @param peer_data : "Raw peer data from tracker"
  @return "Array of parsed peers or fault"
 *>
-fn common::SocketAddress[]? parse_compact_peers(char[] peer_data)
+fn common::SocketAddress[]? parse_compact_peers(char[] peer_data, Allocator allocator = mem)
 {
     // Validate length is multiple of 6
     const usz IPV4_COMPACT_SIZE = 6;  // 4 bytes IP + 2 bytes port
@@ -173,7 +173,7 @@ fn common::SocketAddress[]? parse_compact_peers(char[] peer_data)
         return empty;
     }
 
-    common::SocketAddress[] peers = mem::new_array(common::SocketAddress, count);
+    common::SocketAddress[] peers = allocator::alloc_array(allocator, common::SocketAddress, count);
 
     for (usz i = 0; i < count; i++)
     {
