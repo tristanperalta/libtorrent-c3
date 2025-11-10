@@ -55,6 +55,7 @@ struct TrackerResponse {
     common::SocketAddress[] peers;   // List of peers
     String failure_reason;  // Error message if request failed (empty if none)
     String warning_message; // Optional warning from tracker (empty if none)
+    int retry_in_minutes;   // BEP 31: Minutes until retry (-1 = "never", 0 = not set, >0 = minutes)
 }
 
 <*
@@ -207,12 +208,30 @@ fn TrackerResponse? parse_tracker_response(String response_data)
 
     TrackerResponse response = {};
 
-    // Check for failure first
+    // Check for failure first (but still parse retry_in before returning)
     if (BencodeValue* failure = root.dict_get("failure reason"))
     {
         if (failure.type == bencode::BencodeType.STRING)
         {
             response.failure_reason = ((String)failure.string).copy(mem);
+
+            // BEP 31: Parse retry_in even with failure_reason
+            if (BencodeValue* retry_in = root.dict_get("retry in"))
+            {
+                if (retry_in.type == bencode::BencodeType.INTEGER)
+                {
+                    response.retry_in_minutes = (int)retry_in.integer;
+                }
+                else if (retry_in.type == bencode::BencodeType.STRING)
+                {
+                    String retry_str = (String)retry_in.string;
+                    if (retry_str == "never")
+                    {
+                        response.retry_in_minutes = -1;
+                    }
+                }
+            }
+
             return response;
         }
     }
@@ -255,6 +274,23 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         if (warning.type == bencode::BencodeType.STRING)
         {
             response.warning_message = ((String)warning.string).copy(mem);
+        }
+    }
+
+    // BEP 31: Parse retry_in field (can be integer minutes or string "never")
+    if (BencodeValue* retry_in = root.dict_get("retry in"))
+    {
+        if (retry_in.type == bencode::BencodeType.INTEGER)
+        {
+            response.retry_in_minutes = (int)retry_in.integer;
+        }
+        else if (retry_in.type == bencode::BencodeType.STRING)
+        {
+            String retry_str = (String)retry_in.string;
+            if (retry_str == "never")
+            {
+                response.retry_in_minutes = -1;  // -1 indicates "never"
+            }
         }
     }
 

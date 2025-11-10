@@ -425,3 +425,145 @@ fn void test_correct_path_extraction_from_announce_url() @test {
     assert(correct_path.str_view()[0] != '?',
            "Path should not start with '?' - it needs the /announce part");
 }
+
+<*
+ * BEP 31: Test parsing retry_in as integer (minutes).
+ * Verifies that integer retry_in values are parsed correctly.
+ *>
+fn void test_parse_retry_in_integer() @test {
+    // Build a bencode response with retry_in as integer
+    DString response;
+    response.append("d");
+    response.append("8:intervali1800e");
+    response.append("8:retry ini5e");  // retry in 5 minutes
+    response.append("5:peers0:");  // Empty peers
+    response.append("e");
+
+    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    if (catch excuse = result_opt) {
+        assert(false, "Should parse response with retry_in integer");
+        return;
+    }
+
+    tracker::TrackerResponse result = result_opt;
+    assert(result.retry_in_minutes == 5, "retry_in should be 5 minutes");
+    assert(result.interval == 1800, "Interval should be 1800");
+
+    // Cleanup
+    if (result.peers.len > 0) free(result.peers);
+    if (result.failure_reason.len > 0) free(result.failure_reason);
+    if (result.warning_message.len > 0) free(result.warning_message);
+}
+
+<*
+ * BEP 31: Test parsing retry_in as string "never".
+ * Verifies that the special "never" value is parsed as -1.
+ *>
+fn void test_parse_retry_in_never() @test {
+    // Build a bencode response with retry_in: "never"
+    DString response;
+    response.append("d");
+    response.append("8:intervali1800e");
+    response.append("8:retry in5:nevere");  // retry in: "never"
+    response.append("5:peers0:");  // Empty peers
+    response.append("e");
+
+    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    if (catch excuse = result_opt) {
+        assert(false, "Should parse response with retry_in 'never'");
+        return;
+    }
+
+    tracker::TrackerResponse result = result_opt;
+    assert(result.retry_in_minutes == -1, "retry_in 'never' should be -1");
+    assert(result.interval == 1800, "Interval should be 1800");
+
+    // Cleanup
+    if (result.peers.len > 0) free(result.peers);
+    if (result.failure_reason.len > 0) free(result.failure_reason);
+    if (result.warning_message.len > 0) free(result.warning_message);
+}
+
+<*
+ * BEP 31: Test parsing when retry_in field is missing.
+ * Verifies that missing retry_in defaults to 0.
+ *>
+fn void test_parse_retry_in_missing() @test {
+    // Build a bencode response without retry_in field
+    DString response;
+    response.append("d");
+    response.append("8:intervali1800e");
+    response.append("5:peers0:");  // Empty peers
+    response.append("e");
+
+    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    if (catch excuse = result_opt) {
+        assert(false, "Should parse response without retry_in");
+        return;
+    }
+
+    tracker::TrackerResponse result = result_opt;
+    assert(result.retry_in_minutes == 0, "retry_in should default to 0 when missing");
+    assert(result.interval == 1800, "Interval should be 1800");
+
+    // Cleanup
+    if (result.peers.len > 0) free(result.peers);
+    if (result.failure_reason.len > 0) free(result.failure_reason);
+    if (result.warning_message.len > 0) free(result.warning_message);
+}
+
+<*
+ * BEP 31: Test parsing retry_in as zero (retry immediately).
+ * Verifies that zero value is handled correctly.
+ *>
+fn void test_parse_retry_in_zero() @test {
+    // Build a bencode response with retry_in: 0
+    DString response;
+    response.append("d");
+    response.append("8:intervali1800e");
+    response.append("8:retry ini0e");  // retry in 0 minutes (immediate)
+    response.append("5:peers0:");  // Empty peers
+    response.append("e");
+
+    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    if (catch excuse = result_opt) {
+        assert(false, "Should parse response with retry_in 0");
+        return;
+    }
+
+    tracker::TrackerResponse result = result_opt;
+    assert(result.retry_in_minutes == 0, "retry_in should be 0");
+    assert(result.interval == 1800, "Interval should be 1800");
+
+    // Cleanup
+    if (result.peers.len > 0) free(result.peers);
+    if (result.failure_reason.len > 0) free(result.failure_reason);
+    if (result.warning_message.len > 0) free(result.warning_message);
+}
+
+<*
+ * BEP 31: Test parsing retry_in with failure_reason.
+ * Verifies that retry_in is parsed even when failure_reason is present.
+ *>
+fn void test_parse_retry_in_with_failure() @test {
+    // Build a bencode failure response with retry_in
+    DString response;
+    response.append("d");
+    response.append("14:failure reason20:Too many connections");
+    response.append("8:retry ini10e");  // retry in 10 minutes
+    response.append("e");
+
+    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    if (catch excuse = result_opt) {
+        assert(false, "Should parse failure response with retry_in");
+        return;
+    }
+
+    tracker::TrackerResponse result = result_opt;
+    assert(result.failure_reason.len > 0, "Should have failure reason");
+    assert(result.failure_reason == "Too many connections", "Failure reason should match");
+    assert(result.retry_in_minutes == 10, "retry_in should be 10 minutes");
+
+    // Cleanup
+    if (result.failure_reason.len > 0) free(result.failure_reason);
+}

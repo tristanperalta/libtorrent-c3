@@ -322,6 +322,38 @@ fn void on_announce_complete_with_retry_internal(tracker::TrackerResponse* respo
             io::eprintfn("  Tracker error: %s", response.failure_reason);
         }
 
+        // BEP 31: Check retry_in field for permanent failure ("never")
+        if (response && response.retry_in_minutes == -1)
+        {
+            io::eprintfn("  Tracker returned 'retry in: never' - permanently failed");
+
+            // BEP 12: Try next tracker immediately
+            if (coord.tracker_mgr && coord.tracker_mgr.has_trackers())
+            {
+                coord.tracker_mgr.mark_failure();
+                String next_tracker = coord.tracker_mgr.get_next_tracker();
+
+                if (next_tracker.len > 0)
+                {
+                    io::printfn("  Trying next tracker...");
+                    coord.current_tracker_url = next_tracker;
+
+                    tracker::announce_to_url(coord.loop, coord.torrent, next_tracker, 6881,
+                                              coord.initial_announce_done ? "" : "started",
+                                              &on_announce_complete_with_retry_internal, coord);
+                    return;
+                }
+            }
+
+            // No more trackers available
+            io::eprintfn("  All trackers exhausted - giving up");
+            if (coord.on_tracker_failed)
+            {
+                coord.on_tracker_failed("All trackers permanently failed", coord.user_data);
+            }
+            return;
+        }
+
         // BEP 12: Try next tracker if available
         if (coord.tracker_mgr && coord.tracker_mgr.has_trackers())
         {
@@ -347,12 +379,23 @@ fn void on_announce_complete_with_retry_internal(tracker::TrackerResponse* respo
             }
         }
 
-        // Exponential backoff for retry
+        // Calculate retry delay
         coord.announce_retry_count++;
+        int backoff_ms;
 
-        // Calculate backoff: 1s, 2s, 4s, 8s, 16s, 30s (cap at 30s)
-        int backoff_ms = 1000 * (1 << (coord.announce_retry_count - 1));
-        if (backoff_ms > 30000) backoff_ms = 30000;
+        // BEP 31: Honor retry_in if specified by tracker
+        if (response && response.retry_in_minutes > 0)
+        {
+            backoff_ms = response.retry_in_minutes * 60 * 1000;  // Convert minutes to milliseconds
+            io::printfn("  Tracker requested retry in %d minutes", response.retry_in_minutes);
+        }
+        else
+        {
+            // Use exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s (cap at 30s)
+            backoff_ms = 1000 * (1 << (coord.announce_retry_count - 1));
+            if (backoff_ms > 30000) backoff_ms = 30000;
+        }
+
         coord.announce_backoff_ms = backoff_ms;
 
         io::printfn("  Retrying in %d seconds...", backoff_ms / 1000);
@@ -400,8 +443,14 @@ fn void on_announce_complete_with_retry_internal(tracker::TrackerResponse* respo
     // Freeing it here would cause a double-free.
 
     // Start periodic announces if not already running
+    // BEP 31: Enforce min_interval - use the larger of interval and min_interval
     if (!coord.announce_timer && response.interval > 0)
     {
-        coord.start_periodic_announces((int)response.interval);
+        int announce_interval = (int)response.interval;
+        if (response.min_interval > 0 && response.min_interval > response.interval)
+        {
+            announce_interval = (int)response.min_interval;
+        }
+        coord.start_periodic_announces(announce_interval);
     }
 }
