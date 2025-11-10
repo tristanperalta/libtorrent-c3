@@ -46,6 +46,33 @@ struct FileEntry
 }
 
 /**
+ * Check if this file is a symlink (BEP 47).
+ * @return true if attr contains 'l' flag
+ */
+fn bool FileEntry.is_symlink(&self) @public
+{
+    foreach (c : self.attr)
+    {
+        if (c == 'l') return true;
+    }
+    return false;
+}
+
+/**
+ * Check if this file is a padding file (BEP 47).
+ * Padding files are used for alignment and should not be written to disk.
+ * @return true if attr contains 'p' flag
+ */
+fn bool FileEntry.is_padding(&self) @public
+{
+    foreach (c : self.attr)
+    {
+        if (c == 'p') return true;
+    }
+    return false;
+}
+
+/**
  * TorrentInfo represents the 'info' dictionary in a torrent file.
  * This contains the actual file metadata.
  *

@@ -49,6 +49,8 @@ struct FileInfo
     ulong length;          // File length in bytes
     ulong offset;          // Offset within torrent (cumulative)
     async::file::FileHandle* file; // File handle (or null if not open)
+    bool is_symlink;       // BEP 47: True if this is a symlink (don't allocate/write)
+    bool is_padding;       // BEP 47: True if this is padding (don't allocate/write)
 }
 
 // Storage manager
@@ -116,6 +118,8 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
         manager.files[0].length = (ulong)info.length;
         manager.files[0].offset = 0;
         manager.files[0].file = null;
+        manager.files[0].is_symlink = false;  // Single-file torrents don't have symlinks
+        manager.files[0].is_padding = false;
     }
     else
     {
@@ -135,6 +139,10 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
             manager.files[i].path = path_builder.copy_str(mem);
             manager.files[i].length = (ulong)info.files[i].length;
             manager.files[i].offset = (ulong)info.files[i].offset;
+
+            // BEP 47: Check if this is a symlink or padding file
+            manager.files[i].is_symlink = info.files[i].is_symlink();
+            manager.files[i].is_padding = info.files[i].is_padding();
             manager.files[i].file = null;
         }
     }
@@ -376,6 +384,16 @@ fn void open_next_file(InitContext* ctx)
 
     // Build full path
     FileInfo* file_info = &ctx.manager.files[ctx.current_file];
+
+    // BEP 47: Skip symlinks and padding files (don't create them on disk)
+    if (file_info.is_symlink || file_info.is_padding)
+    {
+        // Skip this file, move to next
+        ctx.current_file++;
+        open_next_file(ctx);
+        return;
+    }
+
     DString path_builder;
     path_builder.append(ctx.manager.base_path);
     path_builder.append("/");
@@ -488,6 +506,16 @@ fn void write_next_span(WriteContext* ctx)
     // Get current span
     FileSpan* span = &ctx.spans[ctx.current_span];
     FileInfo* file = &ctx.manager.files[span.file_index];
+
+    // BEP 47: Skip writes to symlinks and padding files
+    if (file.is_symlink || file.is_padding)
+    {
+        // Skip this span - move to next without writing
+        ctx.data_offset += (usz)span.length;
+        ctx.current_span++;
+        write_next_span(ctx);
+        return;
+    }
 
     // Extract data for this span using pointer arithmetic
     // (workaround for C3 slice syntax issue)
