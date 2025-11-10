@@ -339,7 +339,10 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
 
     // Basic info
     io::printfn("Name: %s", torrent.info.name);
-    io::printfn("Size: %s (%d bytes)", download_session::format_size(torrent.info.length), torrent.info.length);
+
+    String size_str = download_session::format_size(torrent.info.length);
+    defer free(size_str);
+    io::printfn("Size: %s (%d bytes)", size_str, torrent.info.length);
 
     // Info hash (convert to hex)
     String hash_hex = hex::encode(mem, &torrent.info_hash);
@@ -381,7 +384,9 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
                 if (i > 0) path.append_char('/');
                 path.append(component);
             }
-            io::printfn("    [%d] %s (%s)", idx + 1, path.str_view(), download_session::format_size(file.length));
+            String file_size_str = download_session::format_size(file.length);
+            defer free(file_size_str);
+            io::printfn("    [%d] %s (%s)", idx + 1, path.str_view(), file_size_str);
         }
     }
     else
@@ -392,7 +397,9 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
 
     // Piece info
     io::printfn("Piece Info:");
-    io::printfn("  Piece length: %s", download_session::format_size(torrent.info.piece_length));
+    String piece_length_str = download_session::format_size(torrent.info.piece_length);
+    defer free(piece_length_str);
+    io::printfn("  Piece length: %s", piece_length_str);
     long num_pieces = torrent.info.pieces.len / 20;
     io::printfn("  Total pieces: %d", num_pieces);
     io::printfn("");
@@ -414,6 +421,31 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
         foreach (idx, url : torrent.httpseeds)
         {
             io::printfn("  [%d] %s", idx + 1, url);
+        }
+        io::printfn("");
+    }
+
+    // Collections (BEP 38)
+    if (torrent.collections.len > 0)
+    {
+        io::printfn("Collections (BEP 38):");
+        foreach (idx, collection : torrent.collections)
+        {
+            io::printfn("  [%d] %s", idx + 1, collection);
+        }
+        io::printfn("");
+    }
+
+    // Similar torrents (BEP 38)
+    if (torrent.similar_count > 0)
+    {
+        io::printfn("Similar Torrents (BEP 38):");
+        for (usz i = 0; i < torrent.similar_count; i++)
+        {
+            usz offset = i * 20;
+            String similar_hash_hex = hex::encode(mem, torrent.similar[offset:20]);
+            defer free(similar_hash_hex);
+            io::printfn("  [%d] %s", i + 1, similar_hash_hex);
         }
         io::printfn("");
     }
