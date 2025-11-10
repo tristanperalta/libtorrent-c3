@@ -804,10 +804,13 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
         return;
     }
 
-    // Get first IPv4 address
+    // Get first IPv4 or IPv6 address (BEP 7: IPv6 Tracker Extension)
+    // Prefer IPv4 for backward compatibility, fallback to IPv6
     uv::AddrInfo* info = result;
+    uv::AddrInfo* ipv6_fallback = null;
     bool found = false;
 
+    // First pass: Look for IPv4
     while (info && !found)
     {
         if (info.ai_family == uv::AF_INET && info.ai_socktype == uv::SOCK_DGRAM)
@@ -821,7 +824,21 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
 
             found = true;
         }
+        else if (info.ai_family == uv::AF_INET6 && info.ai_socktype == uv::SOCK_DGRAM && !ipv6_fallback)
+        {
+            // Save first IPv6 address as fallback
+            ipv6_fallback = info;
+        }
         info = info.ai_next;
+    }
+
+    // Second pass: Use IPv6 if no IPv4 found
+    if (!found && ipv6_fallback)
+    {
+        ctx.tracker_addr = mem::new(uv::Sockaddr);
+        *ctx.tracker_addr = *ipv6_fallback.ai_addr;
+        ctx.tracker_ip = async::dns::addr_to_string(ipv6_fallback.ai_addr);
+        found = true;
     }
 
     async::dns::free_result(result);
