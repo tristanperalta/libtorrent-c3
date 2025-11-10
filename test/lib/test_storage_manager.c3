@@ -1016,3 +1016,491 @@ fn void test_all_symlinks_and_padding() @test
     std::core::mem::free(piece_data);
 }
 
+// ============================================================================
+// BEP 21: File Completion Tracking Tests
+// ============================================================================
+
+fn void test_mark_file_complete() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent using existing helper
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // Initially no files are complete
+    assert(!manager.is_file_complete(0), "File 0 should not be complete initially");
+    assert(!manager.is_file_complete(1), "File 1 should not be complete initially");
+    assert(!manager.is_file_complete(2), "File 2 should not be complete initially");
+
+    // Mark file 0 as complete
+    manager.mark_file_complete(0);
+    assert(manager.is_file_complete(0), "File 0 should be complete after marking");
+    assert(!manager.is_file_complete(1), "File 1 should still not be complete");
+
+    // Mark file 1 as complete
+    manager.mark_file_complete(1);
+    assert(manager.is_file_complete(0), "File 0 should still be complete");
+    assert(manager.is_file_complete(1), "File 1 should be complete after marking");
+    assert(!manager.is_file_complete(2), "File 2 should still not be complete");
+}
+
+fn void test_count_complete_files() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent with 5 files
+    metainfo::TorrentInfo info;
+    info.name = "test_files";
+    info.length = 163840;  // 160KB total
+    info.piece_length = 32768;  // 32KB pieces
+    info.is_multi_file = true;
+
+    // Create 5 files of 32KB each
+    info.files = mem::new_array(metainfo::FileEntry, 5);
+    for (usz i = 0; i < 5; i++)
+    {
+        info.files[i].path = mem::new_array(String, 1);
+        info.files[i].path[0] = "file.bin";
+        info.files[i].length = 32768;
+        info.files[i].offset = i * 32768;
+    }
+
+    // Create dummy piece hashes (5 pieces)
+    info.pieces = mem::new_array(char, 100);  // 5 * 20 bytes
+    for (usz i = 0; i < 100; i++)
+    {
+        info.pieces[i] = (char)(i % 256);
+    }
+
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    assert(manager.count_complete_files() == 0, "Should have 0 complete files initially");
+
+    manager.mark_file_complete(0);
+    assert(manager.count_complete_files() == 1, "Should have 1 complete file");
+
+    manager.mark_file_complete(2);
+    manager.mark_file_complete(4);
+    assert(manager.count_complete_files() == 3, "Should have 3 complete files");
+}
+
+fn void test_are_all_files_complete() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent using existing helper
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    assert(!manager.are_all_files_complete(), "Not all files should be complete initially");
+
+    manager.mark_file_complete(0);
+    manager.mark_file_complete(1);
+    assert(!manager.are_all_files_complete(), "Not all files complete yet");
+
+    manager.mark_file_complete(2);
+    assert(manager.are_all_files_complete(), "All files should now be complete");
+}
+
+fn void test_are_selected_files_complete() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent using existing helper
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // Mark only file 0 and 2 as selected (simulating --select-files 0,2)
+    manager.files[0].is_selected = true;
+    manager.files[1].is_selected = false;
+    manager.files[2].is_selected = true;
+
+    assert(!manager.are_selected_files_complete(), "Selected files not complete initially");
+
+    // Complete file 0
+    manager.mark_file_complete(0);
+    assert(!manager.are_selected_files_complete(), "File 2 still not complete");
+
+    // Complete file 1 (not selected)
+    manager.mark_file_complete(1);
+    assert(!manager.are_selected_files_complete(), "File 2 (selected) still not complete");
+
+    // Complete file 2 (last selected file)
+    manager.mark_file_complete(2);
+    assert(manager.are_selected_files_complete(), "All selected files should be complete");
+}
+
+fn void test_single_file_always_selected() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create single-file torrent using existing helper
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
+    defer {
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    assert(manager.files.len == 1, "Should have exactly 1 file");
+    assert(manager.files[0].is_selected, "Single file should always be selected");
+    assert(!manager.files[0].is_complete, "File should not be complete initially");
+    assert(!manager.are_selected_files_complete(), "File not complete yet");
+
+    manager.mark_file_complete(0);
+    assert(manager.are_selected_files_complete(), "Selected file should be complete");
+    assert(manager.are_all_files_complete(), "All files (one file) should be complete");
+}
+
+// ============================================================================
+// BEP 21: Piece Selection Tests (is_piece_wanted)
+// ============================================================================
+
+fn void test_is_piece_wanted_single_file_selected() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create single-file torrent
+    metainfo::TorrentInfo info = create_test_torrent_single_file();
+    defer {
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // Single file should always be selected, so all pieces wanted
+    assert(manager.is_piece_wanted(0), "Piece 0 should be wanted");
+    assert(manager.is_piece_wanted(1), "Piece 1 should be wanted");
+    assert(manager.is_piece_wanted(2), "Piece 2 should be wanted");
+}
+
+fn void test_is_piece_wanted_all_files_selected() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // All files selected by default, so all pieces wanted
+    assert(manager.is_piece_wanted(0), "Piece 0 should be wanted");
+    assert(manager.is_piece_wanted(1), "Piece 1 should be wanted");
+    assert(manager.is_piece_wanted(2), "Piece 2 should be wanted");
+}
+
+fn void test_is_piece_wanted_partial_selection() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // Select only file 0 (simulating --select-files 0)
+    manager.files[0].is_selected = true;
+    manager.files[1].is_selected = false;
+    manager.files[2].is_selected = false;
+
+    // Piece 0 is entirely in file 0, should be wanted
+    assert(manager.is_piece_wanted(0), "Piece 0 in selected file should be wanted");
+
+    // Piece 1 spans file 0 and file 1, should be wanted (touches selected file)
+    assert(manager.is_piece_wanted(1), "Piece 1 spanning selected file should be wanted");
+
+    // Piece 2 is entirely in files 1 and 2 (unselected), should NOT be wanted
+    assert(!manager.is_piece_wanted(2), "Piece 2 in unselected files should NOT be wanted");
+}
+
+fn void test_is_piece_wanted_piece_spanning_boundary() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // Select file 1, deselect files 0 and 2
+    manager.files[0].is_selected = false;
+    manager.files[1].is_selected = true;
+    manager.files[2].is_selected = false;
+
+    // Piece 1 spans file 0 and file 1
+    // Since file 1 is selected, piece 1 should be wanted
+    assert(manager.is_piece_wanted(1), "Piece spanning into selected file should be wanted");
+}
+
+fn void test_is_piece_wanted_piece_in_unselected_file() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // Deselect all files
+    manager.files[0].is_selected = false;
+    manager.files[1].is_selected = false;
+    manager.files[2].is_selected = false;
+
+    // No pieces should be wanted
+    assert(!manager.is_piece_wanted(0), "Piece 0 should NOT be wanted");
+    assert(!manager.is_piece_wanted(1), "Piece 1 should NOT be wanted");
+    assert(!manager.is_piece_wanted(2), "Piece 2 should NOT be wanted");
+}
+
+fn void test_is_piece_wanted_first_and_last_pieces() @test
+{
+    EventLoop? loop_opt = event_loop::create();
+    if (catch err = loop_opt)
+    {
+        assert(false, "Should create event loop");
+        return;
+    }
+    EventLoop loop = loop_opt;
+    defer loop.free();
+
+    // Create multi-file torrent
+    metainfo::TorrentInfo info = create_test_torrent_multi_file();
+    defer {
+        for (usz i = 0; i < info.files.len; i++)
+        {
+            std::core::mem::free(info.files[i].path);
+        }
+        std::core::mem::free(info.files);
+        std::core::mem::free(info.pieces);
+    }
+
+    StorageManager? manager_opt = storage_manager::create(&loop, &info, "/tmp/test", false);
+    if (catch err = manager_opt)
+    {
+        assert(false, "Should create storage manager");
+        return;
+    }
+    StorageManager manager = manager_opt;
+    defer manager.free();
+
+    // Select only last file
+    manager.files[0].is_selected = false;
+    manager.files[1].is_selected = false;
+    manager.files[2].is_selected = true;
+
+    // First piece should not be wanted (file 0 only)
+    assert(!manager.is_piece_wanted(0), "First piece should NOT be wanted");
+
+    // Last piece should be wanted (file 2)
+    assert(manager.is_piece_wanted(2), "Last piece should be wanted");
+}
+

@@ -52,6 +52,7 @@ struct TrackerResponse {
     long min_interval;      // Minimum announce interval (optional)
     long complete;          // Number of seeders
     long incomplete;        // Number of leechers
+    long downloaders;       // BEP 21: Active downloaders (incomplete - partial seeds, 0 if not provided)
     common::SocketAddress[] peers;   // List of peers
     String failure_reason;  // Error message if request failed (empty if none)
     String warning_message; // Optional warning from tracker (empty if none)
@@ -266,6 +267,15 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         if (incomplete.type == bencode::BencodeType.INTEGER)
         {
             response.incomplete = incomplete.integer;
+        }
+    }
+
+    // BEP 21: Parse downloaders field (active downloaders, excluding partial seeds)
+    if (BencodeValue* downloaders = root.dict_get("downloaders"))
+    {
+        if (downloaders.type == bencode::BencodeType.INTEGER)
+        {
+            response.downloaders = downloaders.integer;
         }
     }
 

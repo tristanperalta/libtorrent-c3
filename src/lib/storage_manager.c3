@@ -51,6 +51,8 @@ struct FileInfo
     async::file::FileHandle* file; // File handle (or null if not open)
     bool is_symlink;       // BEP 47: True if this is a symlink (don't allocate/write)
     bool is_padding;       // BEP 47: True if this is padding (don't allocate/write)
+    bool is_complete;      // BEP 21: True if all pieces for this file are complete
+    bool is_selected;      // BEP 21: True if user selected this file for download
 }
 
 // Storage manager
@@ -65,6 +67,7 @@ struct StorageManager
     char[] piece_hashes;       // SHA-1 hashes (20 bytes each)
     ulong total_length;        // Total torrent size
     bool pre_allocate;         // Pre-allocate files
+    bool[] piece_complete;     // BEP 21: Track which pieces are complete
 }
 
 // Callback types
@@ -109,6 +112,13 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
     // Copy base path
     manager.base_path = base_path.copy(mem);
 
+    // Initialize piece completion tracking (BEP 21)
+    manager.piece_complete = mem::new_array(bool, manager.num_pieces);
+    for (usz i = 0; i < manager.num_pieces; i++)
+    {
+        manager.piece_complete[i] = false;
+    }
+
     // Build file list with offsets
     if (!info.is_multi_file)
     {
@@ -120,6 +130,8 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
         manager.files[0].file = null;
         manager.files[0].is_symlink = false;  // Single-file torrents don't have symlinks
         manager.files[0].is_padding = false;
+        manager.files[0].is_complete = false;  // BEP 21
+        manager.files[0].is_selected = true;   // BEP 21: Single-file always selected
     }
     else
     {
@@ -144,6 +156,10 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
             manager.files[i].is_symlink = info.files[i].is_symlink();
             manager.files[i].is_padding = info.files[i].is_padding();
             manager.files[i].file = null;
+
+            // BEP 21: Initialize file selection and completion tracking
+            manager.files[i].is_complete = false;
+            manager.files[i].is_selected = true;  // Default: all files selected
         }
     }
 
@@ -228,6 +244,13 @@ fn void StorageManager.free(&self) @public
     {
         std::core::mem::free(self.piece_hashes);
         self.piece_hashes = {};
+    }
+
+    // Free piece completion tracking (BEP 21)
+    if (self.piece_complete.len > 0)
+    {
+        std::core::mem::free(self.piece_complete);
+        self.piece_complete = {};
     }
 }
 
@@ -1029,4 +1052,106 @@ fn void StorageManager.sync_all_files(&self) @public
             self.files[i].file.fsync(&on_file_sync_complete, ctx);
         }
     }
+}
+
+// ============================================================================
+// BEP 21: Partial Seeds - File Completion Tracking
+// ============================================================================
+
+<*
+ * Mark a file as complete (all pieces downloaded).
+ *
+ * @param file_index : "Index of the file"
+ *>
+fn void StorageManager.mark_file_complete(&self, usz file_index) @public
+{
+    if (file_index >= self.files.len) return;
+    self.files[file_index].is_complete = true;
+}
+
+<*
+ * Check if a file is complete.
+ *
+ * @param file_index : "Index of the file"
+ * @return "True if file is complete"
+ *>
+fn bool StorageManager.is_file_complete(&self, usz file_index) @public
+{
+    if (file_index >= self.files.len) return false;
+    return self.files[file_index].is_complete;
+}
+
+<*
+ * Check if all selected files are complete.
+ *
+ * @return "True if all selected files are complete"
+ *>
+fn bool StorageManager.are_selected_files_complete(&self) @public
+{
+    for (usz i = 0; i < self.files.len; i++)
+    {
+        if (self.files[i].is_selected && !self.files[i].is_complete)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+<*
+ * Count how many files are complete.
+ *
+ * @return "Number of complete files"
+ *>
+fn usz StorageManager.count_complete_files(&self) @public
+{
+    usz count = 0;
+    for (usz i = 0; i < self.files.len; i++)
+    {
+        if (self.files[i].is_complete) count++;
+    }
+    return count;
+}
+
+<*
+ * Check if all files are complete (full seed).
+ *
+ * @return "True if all files are complete"
+ *>
+fn bool StorageManager.are_all_files_complete(&self) @public
+{
+    for (usz i = 0; i < self.files.len; i++)
+    {
+        if (!self.files[i].is_complete) return false;
+    }
+    return true;
+}
+
+<*
+ * Check if a piece should be downloaded based on file selection (BEP 21).
+ * A piece is wanted if it contains bytes from ANY selected file.
+ * This handles pieces that span multiple files correctly.
+ *
+ * @param piece_index "Piece index to check"
+ * @return "True if piece should be downloaded"
+ *>
+fn bool StorageManager.is_piece_wanted(&self, uint piece_index) @public
+{
+    // Get the byte range for this piece
+    PieceLocation loc = self.get_piece_location(piece_index);
+
+    // Get which files this piece touches (allocated from temp allocator, auto-freed)
+    FileSpan[] spans = self.get_file_spans(loc.offset, loc.length);
+
+    // If ANY file in the span is selected, the piece is wanted
+    foreach (span : spans)
+    {
+        if (self.files[span.file_index].is_selected)
+        {
+            return true;
+        }
+    }
+
+    // No selected files touched by this piece
+    return false;
 }

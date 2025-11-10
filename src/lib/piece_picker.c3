@@ -2,6 +2,7 @@ module libtorrent::piece_picker;
 
 import std::io;
 import std::collections::list;
+import libtorrent::storage_manager;
 
 <*
  Piece Picker - Rarest-First Algorithm
@@ -139,9 +140,10 @@ fn fault? PiecePicker.peer_has_piece(&self, uint piece_index) @public
  - We don't have (not complete or downloading)
 
  @param peer_pieces : "Bitfield of pieces the peer has"
+ @param storage : "Storage manager for file selection (BEP 21), or null to download all pieces"
  @return "Piece index to download, or fault if no pieces available"
 *>
-fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces) @public
+fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces, storage_manager::StorageManager* storage = null) @public
 {
     if (peer_pieces.len != self.num_pieces)
     {
@@ -190,6 +192,9 @@ fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces) @public
 
         // Skip if we already have or are downloading
         if (self.pieces[i].state != PieceState.FREE) continue;
+
+        // BEP 21: Skip if piece not wanted for selected files
+        if (storage != null && !storage.is_piece_wanted((uint)i)) continue;
 
         // Check if this is rarer than current best
         if (self.pieces[i].availability < lowest_availability)
@@ -339,9 +344,10 @@ fn uint PiecePicker.get_availability(&self, uint piece_index) @public
  - Download from the beginning of the gap for maximum sequential data
  - This allows HTTP/FTP to download long sequential runs efficiently
 
+ @param storage : "Storage manager for file selection (BEP 21), or null to download all pieces"
  @return "Piece index to download, or fault if no pieces available"
 *>
-fn uint? PiecePicker.pick_piece_for_webseed(&self) @public
+fn uint? PiecePicker.pick_piece_for_webseed(&self, storage_manager::StorageManager* storage = null) @public
 {
     // Track the largest gap found
     uint max_gap_size = 0;
@@ -353,7 +359,10 @@ fn uint? PiecePicker.pick_piece_for_webseed(&self) @public
     // Scan all pieces to find gaps
     foreach (i, piece : self.pieces)
     {
-        if (piece.state == PieceState.COMPLETE)
+        // BEP 21: Treat unwanted pieces as if they were complete (not a gap)
+        bool is_wanted = (storage == null || storage.is_piece_wanted((uint)i));
+
+        if (piece.state == PieceState.COMPLETE || !is_wanted)
         {
             // Gap ended - check if it's the largest so far
             if (in_gap && current_gap_size > max_gap_size)
@@ -366,7 +375,7 @@ fn uint? PiecePicker.pick_piece_for_webseed(&self) @public
         }
         else
         {
-            // In a gap (FREE or DOWNLOADING)
+            // In a gap (FREE or DOWNLOADING, and wanted)
             if (!in_gap)
             {
                 in_gap = true;
@@ -399,7 +408,11 @@ fn uint? PiecePicker.pick_piece_for_webseed(&self) @public
     {
         if (self.pieces[i].state == PieceState.FREE)
         {
-            return i;
+            // Double-check it's wanted (should always be true in the gap, but be safe)
+            if (storage == null || storage.is_piece_wanted(i))
+            {
+                return i;
+            }
         }
     }
 

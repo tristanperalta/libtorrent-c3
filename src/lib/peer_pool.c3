@@ -104,6 +104,7 @@ struct TorrentPeer
 
     // Flags
     bool seed;                   // Is this peer a seed (has all pieces)?
+    bool upload_only;            // BEP 21: Is this peer a partial seed (upload-only)?
     bool optimistically_unchoked; // Currently optimistically unchoked?
     bool handshake_ok;           // Has handshake completed successfully?
     bool received_bitfield;      // Have we received BITFIELD from this peer?
@@ -233,6 +234,7 @@ struct PeerPool
     common::InfoHash info_hash;   // Torrent info hash
     common::PeerId our_peer_id;   // Our peer ID
     bool is_private;              // BEP 27: Private torrent flag (DHT/PEX disabled)
+    bool upload_only;             // BEP 21: Partial seed mode (upload-only, no downloads)
 
     // Callbacks (user-provided)
     PeerConnectedCallback on_connected;       // Called when peer connects successfully
@@ -328,6 +330,7 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     pool.info_hash[..] = (*info_hash)[..];
     pool.our_peer_id[..] = (*our_peer_id)[..];
     pool.is_private = is_private;
+    pool.upload_only = false;  // BEP 21: Start in normal download mode
 
     // Initialize arena allocator with 64KB pages
     // Will automatically grow as needed for peer storage
@@ -396,6 +399,18 @@ fn void PeerPool.free(&self) @public
 
     // Free pool structure itself (allocated from global heap in create())
     std::core::mem::free(self);
+}
+
+<*
+ Set upload-only mode (BEP 21: Partial Seeds).
+ When enabled, new peer connections will be told we're not downloading.
+ Existing connections are not affected.
+
+ @param upload_only: "True to enter upload-only mode (partial seed), false for normal mode"
+*>
+fn void PeerPool.set_upload_only(&self, bool upload_only) @public
+{
+    self.upload_only = upload_only;
 }
 
 <*
@@ -613,6 +628,9 @@ fn void on_peer_message_internal(peer_connection::PeerConnection* conn,
 
     if (!peer_info) return;
 
+    // BEP 21: Sync upload_only status from connection to peer info
+    peer_info.upload_only = conn.peer_upload_only;
+
     // Forward to user callback with peer address
     if (pool.on_message)
     {
@@ -698,6 +716,7 @@ fn void PeerPool.add_peer(&self, common::SocketAddress* addr, common::PeerSource
         peer.failcount = 0;
         peer.last_connected = 0;
         peer.seed = false;
+        peer.upload_only = false;  // BEP 21: Will be set from extension handshake
         peer.optimistically_unchoked = false;
         peer.handshake_ok = false;
         peer.received_bitfield = false;
@@ -983,7 +1002,8 @@ fn void PeerPool.connect_to_peers(&self) @public
             &on_pex_message_internal,   // Bridge: adds PEX peers to pool
             self.on_metadata,            // Metadata callback for magnet links (BEP 9)
             (PeerPool*)self,             // Pass pool as user_data for bridge
-            self.is_private              // BEP 27: Pass private flag
+            self.is_private,             // BEP 27: Pass private flag
+            self.upload_only             // BEP 21: Pass upload-only flag
         );
 
         if (catch err = conn_opt)

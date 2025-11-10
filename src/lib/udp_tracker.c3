@@ -606,6 +606,7 @@ fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Soc
     ctx.result.min_interval = 0;
     ctx.result.complete = response.seeders;
     ctx.result.incomplete = response.leechers;
+    ctx.result.downloaders = 0;  // BEP 21: UDP trackers don't provide this field
     ctx.result.failure_reason = "";
     ctx.result.warning_message = "";
 

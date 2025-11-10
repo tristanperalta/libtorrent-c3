@@ -3,6 +3,7 @@ module libtorrent::download_manager;
 import libtorrent::piece_picker;
 import libtorrent::block_manager;
 import libtorrent::piece_assembler;
+import libtorrent::storage_manager;
 import async::event_loop;
 import std::io;
 import std::time;
@@ -90,6 +91,7 @@ struct DownloadManager
 {
     event_loop::EventLoop* loop;              // Event loop for async operations
     piece_picker::PiecePicker picker;         // Piece selection strategy
+    storage_manager::StorageManager* storage; // Storage manager for file selection (BEP 21)
     DownloadingPiece[] active_downloads;      // Concurrent downloads
     usz max_concurrent_pieces;                // Max pieces to download at once
     uint piece_length;                        // Standard piece length
@@ -109,10 +111,12 @@ struct DownloadManager
  @param piece_hashes : "SHA-1 hashes for all pieces (20 * num_pieces bytes)"
  @param max_concurrent : "Maximum concurrent piece downloads"
  @param block_size : "Block size in bytes (typically 16384)"
+ @param storage : "Storage manager for file selection (BEP 21), or null to download all pieces"
  @return "Initialized download manager"
 *>
 fn DownloadManager create(event_loop::EventLoop* loop, uint num_pieces, uint piece_length, uint last_piece_length,
-                           char[] piece_hashes, usz max_concurrent, uint block_size) @public
+                           char[] piece_hashes, usz max_concurrent, uint block_size,
+                           storage_manager::StorageManager* storage = null) @public
 {
     DownloadManager manager;
     manager.loop = loop;
@@ -121,6 +125,7 @@ fn DownloadManager create(event_loop::EventLoop* loop, uint num_pieces, uint pie
     manager.last_piece_length = last_piece_length;
     manager.block_size = block_size;
     manager.max_concurrent_pieces = max_concurrent;
+    manager.storage = storage;
 
     // Create piece picker
     manager.picker = piece_picker::create(num_pieces);
@@ -229,8 +234,8 @@ fn fault? DownloadManager.start_piece_download(&self, bool[] peer_pieces) @publi
         return NO_PIECES_TO_REQUEST?;
     }
 
-    // Pick piece using rarest-first
-    uint? piece_opt = self.picker.pick_piece(peer_pieces);
+    // Pick piece using rarest-first (BEP 21: respects file selection)
+    uint? piece_opt = self.picker.pick_piece(peer_pieces, self.storage);
     if (catch excuse = piece_opt)
     {
         return excuse?;

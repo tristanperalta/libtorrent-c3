@@ -267,6 +267,7 @@ struct ExtensionHandshake
     String client_name;   // Client name and version (e.g., "libtorrent-c3 0.1")
     uint reqq;            // Max outstanding requests (default 250)
     uint metadata_size;   // Size of metadata in bytes (BEP 9, 0 = unknown/not sharing)
+    bool upload_only;     // BEP 21: Partial seed indicator (true = not downloading)
 }
 
 <*
@@ -479,6 +480,12 @@ fn char[] encode_extension_handshake(ExtensionHandshake* handshake, Allocator al
         builder.append("13:metadata_sizei");
         builder.appendf("%d", handshake.metadata_size);
         builder.append("e");
+    }
+
+    // upload_only: partial seed indicator (BEP 21)
+    if (handshake.upload_only)
+    {
+        builder.append("11:upload_onlyi1e");
     }
 
     // p: port (if provided)
@@ -746,6 +753,7 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
     handshake.client_name = "";
     handshake.reqq = 0;
     handshake.metadata_size = 0;
+    handshake.upload_only = false;
 
     // Parse "m" dictionary (extension name -> message ID mappings)
     bencode::BencodeValue* m_dict = root.dict_get("m");
@@ -793,6 +801,13 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
     if (reqq_val && reqq_val.type == bencode::BencodeType.INTEGER)
     {
         handshake.reqq = (uint)reqq_val.integer;
+    }
+
+    // Parse "upload_only" (BEP 21 - partial seed indicator)
+    bencode::BencodeValue* upload_only_val = root.dict_get("upload_only");
+    if (upload_only_val && upload_only_val.type == bencode::BencodeType.INTEGER)
+    {
+        handshake.upload_only = (upload_only_val.integer != 0);
     }
 
     return handshake;

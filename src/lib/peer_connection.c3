@@ -175,6 +175,10 @@ struct PeerConnection
     char our_metadata_msg_id;    // Our message ID for ut_metadata (fixed at 2)
     uint peer_metadata_size;     // Size of metadata the peer has (0 = unknown/not sharing)
 
+    // Partial Seeds (BEP 21) - upload-only mode
+    bool peer_upload_only;       // Peer is a partial seed (not downloading, only uploading)
+    bool upload_only;            // We are a partial seed (not downloading, only uploading)
+
     // Fast Extension (BEP 6) - for improved bootstrapping
     bool supports_fast;                  // Peer supports Fast Extension
     List{uint} allowed_fast_set;         // Pieces peer allows us to download when choked
@@ -216,7 +220,7 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
                               common::InfoHash info_hash, common::PeerId our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
                               PexCallback pex_cb, MetadataCallback metadata_cb,
-                              void* user_data, bool is_private) @public
+                              void* user_data, bool is_private, bool upload_only = false) @public
 {
     PeerConnection* peer = mem::new(PeerConnection);
     peer.loop = loop;
@@ -256,6 +260,10 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.peer_metadata_msg_id = 0;
     peer.our_metadata_msg_id = 2;  // Fixed message ID for ut_metadata
     peer.peer_metadata_size = 0;
+
+    // Initialize partial seed state (BEP 21)
+    peer.peer_upload_only = false;
+    peer.upload_only = upload_only;  // Set from parameter
 
     // Initialize Fast Extension state (BEP 6)
     peer.supports_fast = false;
@@ -1049,6 +1057,7 @@ fn void send_extension_handshake(PeerConnection* peer) @private
     ext_hs.client_name = "libtorrent-c3 0.1.0";
     ext_hs.reqq = 250;  // Max outstanding requests
     ext_hs.metadata_size = 0;  // Set to actual size when we have metadata
+    ext_hs.upload_only = peer.upload_only;  // BEP 21: Partial seed status
 
     usz mark = peer.msg_arena.mark();
     char[] msg = peer_wire::encode_extension_handshake(&ext_hs, &peer.msg_arena);
@@ -1099,6 +1108,13 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
         peer.peer_metadata_size = ext_hs.metadata_size;
         logger::logf(logger::LogLevel.INFO, "[Metadata] Peer supports metadata exchange (msg_id: %d, size: %d)",
                      peer.peer_metadata_msg_id, peer.peer_metadata_size);
+    }
+
+    // Check if peer is upload-only (BEP 21 - partial seed)
+    peer.peer_upload_only = ext_hs.upload_only;
+    if (peer.peer_upload_only)
+    {
+        logger::log(logger::LogLevel.INFO, "[BEP 21] Peer is upload-only (partial seed)");
     }
 
     // Debug output disabled for logging mode

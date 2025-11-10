@@ -24,9 +24,11 @@ import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::event_bus;
 import libtorrent::event_types;
+import libtorrent::file_selection;
 import torrent_client::log_outputs;
 import torrent_client::download_session;
 import torrent_client::magnet_download_session;
+import libtorrent::resume_data;
 import raylib_gui;
 
 // ============================================================================
@@ -130,6 +132,7 @@ fn int main(int argc, ZString* argv)
         String log_file_path = "";  // No file logging by default
         bool debug_mode = false;
         bool gui_mode = false;
+        String select_files_str = "";  // BEP 21: File selection for multi-file torrents
 
         for (usz i = 3; i < (usz)argc; i++)
         {
@@ -151,6 +154,12 @@ fn int main(int argc, ZString* argv)
                 log_file_path = (String)argv[i + 1].str_view();
                 i++; // Skip next arg
             }
+            else if (arg == "--select-files" && i + 1 < (usz)argc)
+            {
+                // BEP 21: Selective file download (e.g., "0,2,4")
+                select_files_str = (String)argv[i + 1].str_view();
+                i++; // Skip next arg
+            }
             else if (arg == "--debug")
             {
                 debug_mode = true;
@@ -161,7 +170,7 @@ fn int main(int argc, ZString* argv)
             }
         }
 
-        return cmd_download(&loop, torrent_path, save_path, numwant, log_file_path, debug_mode, gui_mode);
+        return cmd_download(&loop, torrent_path, save_path, numwant, log_file_path, debug_mode, gui_mode, select_files_str);
     }
     else
     {
@@ -314,11 +323,12 @@ fn void print_usage()
     io::printfn("  magnet <uri>         Parse and display magnet link (BEP 9)");
     io::printfn("");
     io::printfn("Download Options:");
-    io::printfn("  --save-path <path>   Directory to save files (default: current directory)");
-    io::printfn("  --numwant <n>        Number of peers to request from tracker (default: 50)");
-    io::printfn("  --log-file <path>    Log to file");
-    io::printfn("  --debug              Enable debug output to stderr");
-    io::printfn("  --gui                Launch graphical user interface");
+    io::printfn("  --save-path <path>       Directory to save files (default: current directory)");
+    io::printfn("  --numwant <n>            Number of peers to request from tracker (default: 50)");
+    io::printfn("  --select-files <indices> Download only selected files (e.g., '0,2,4') [BEP 21]");
+    io::printfn("  --log-file <path>        Log to file");
+    io::printfn("  --debug                  Enable debug output to stderr");
+    io::printfn("  --gui                    Launch graphical user interface");
     io::printfn("");
     io::printfn("Examples:");
     io::printfn("  torrent-client info ubuntu.torrent");
@@ -327,6 +337,7 @@ fn void print_usage()
     io::printfn("  torrent-client magnet 'magnet:?xt=urn:btih:...'");
     io::printfn("  torrent-client download ubuntu.torrent");
     io::printfn("  torrent-client download ubuntu.torrent --save-path ~/Downloads --numwant 100");
+    io::printfn("  torrent-client download ubuntu.torrent --select-files 0,2,4");
     io::printfn("  torrent-client download ubuntu.torrent --log-file download.log --debug");
     io::printfn("  torrent-client download ubuntu.torrent --gui");
     io::printfn("  torrent-client ubuntu.torrent          # Same as 'info'");
@@ -1431,6 +1442,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.dht_tick_timer = null;
     ctx.dht_enabled = false;
     ctx.download_complete = false;
+    ctx.is_partial_seed = false;  // BEP 21: TODO - set true if selective download
     ctx.exit_code = 0;
     ctx.num_pieces = num_pieces;
     ctx.pieces_verified_count = 0;
@@ -1438,6 +1450,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.numwant = numwant;
     ctx.save_path = save_path;
     ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
+    ctx.select_files_str = "";  // BEP 21: GUI mode doesn't support file selection yet
     ctx.gui_state = ui;
     ctx.webseed_mgr = null;
     ctx.webseed_timer = null;
@@ -1449,6 +1462,9 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
 
     // Initialize event bus for pub/sub
     ctx.event_bus = libtorrent::event_bus::create(loop);
+
+    // BEP 21: Create download state provider (file-based resume data)
+    ctx.state_provider = resume_data::create_resume_data_provider();
 
     // Subscribe GUI event handlers to EventBus
     ctx.event_bus.subscribe(event_types::EVENT_PROGRESS_UPDATED, &on_progress_updated_event, &ctx);
@@ -1804,7 +1820,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
  @return "Exit code (0 = success, 1 = error)"
 *>
 fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
-                    String save_path, int numwant, String log_file_path, bool debug_mode, bool gui_mode)
+                    String save_path, int numwant, String log_file_path, bool debug_mode, bool gui_mode,
+                    String select_files_str)
 {
     // GUI mode - launch graphical interface
     if (gui_mode)
@@ -1833,6 +1850,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.block_timeout_timer = null;
     ctx.peer_pool = null;
     ctx.download_complete = false;
+    ctx.is_partial_seed = false;  // BEP 21: TODO - set true if selective download
     ctx.exit_code = 0;
     ctx.num_pieces = 0;
     ctx.pieces_verified_count = 0;
@@ -1840,6 +1858,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.numwant = numwant;
     ctx.save_path = save_path;
     ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
+    ctx.torrent_path = torrent_path;          // BEP 21: Torrent file path for resume data
+    ctx.select_files_str = select_files_str;  // BEP 21: File selection for partial seeds
     ctx.gui_state = null;  // Console mode has no GUI
     ctx.webseed_mgr = null;
     ctx.webseed_timer = null;
@@ -1851,6 +1871,9 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // Initialize event bus for pub/sub
     ctx.event_bus = libtorrent::event_bus::create(loop);
+
+    // BEP 21: Create download state provider (file-based resume data)
+    ctx.state_provider = resume_data::create_resume_data_provider();
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
     async::timer::Timer* flush_timer = null;

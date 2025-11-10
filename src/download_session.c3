@@ -16,6 +16,8 @@ import libtorrent::download_manager;
 import libtorrent::block_manager;
 import libtorrent::piece_assembler;
 import libtorrent::storage_manager;
+import libtorrent::file_selection;
+import libtorrent::download_state_provider;
 import libtorrent::upload_manager;
 import libtorrent::upload_handler;
 import libtorrent::bitfield;
@@ -140,7 +142,10 @@ struct DownloadContext
 
     // Download state
     bool download_complete;
+    bool is_partial_seed;       // BEP 21: We are a partial seed (multi-file, selective download)
     int exit_code;
+    String torrent_path;        // Path to .torrent file (for resume data)
+    download_state_provider::StateProvider* state_provider;  // BEP 21: Pluggable state persistence
 
     // Download statistics
     ulong total_bytes_downloaded;       // Total bytes downloaded (all sources)
@@ -159,6 +164,7 @@ struct DownloadContext
     int numwant;
     String save_path;
     int max_concurrent_pieces;          // Max pieces to download simultaneously
+    String select_files_str;            // BEP 21: File selection string (e.g., "0,2,4")
 
     // GUI integration (null in CLI mode)
     raylib_gui::UIState* gui_state;
@@ -230,6 +236,187 @@ fn String format_size(long bytes) @public
 
 // ============================================================================
 // Download Session Callbacks and Helper Functions
+// ============================================================================
+
+// ============================================================================
+// BEP 21: Partial Seed Support Functions
+// ============================================================================
+
+<*
+ * Check if writing a piece completed any files (BEP 21).
+ * A file is complete when all pieces that touch it are complete.
+ *
+ * @param ctx "Download context"
+ * @param piece_index "Piece that was just written"
+ *>
+fn void check_file_completion(DownloadContext* ctx, uint piece_index)
+{
+    if (!ctx.torrent.info.is_multi_file) return;  // Single file torrents handled differently
+
+    // Get piece location
+    ulong piece_offset = (ulong)piece_index * (ulong)ctx.torrent.info.piece_length;
+    ulong piece_len = (piece_index == ctx.num_pieces - 1)
+                     ? (ulong)(ctx.torrent.info.length % (ulong)ctx.torrent.info.piece_length)
+                     : (ulong)ctx.torrent.info.piece_length;
+    if (piece_len == 0) piece_len = (ulong)ctx.torrent.info.piece_length;  // Last piece might be full size
+
+    // Check each file to see if this piece was its last missing piece
+    for (usz i = 0; i < ctx.sm.files.len; i++)
+    {
+        if (ctx.sm.files[i].is_complete) continue;  // Already marked complete
+        if (!ctx.sm.files[i].is_selected) continue; // Not selected, skip
+
+        // Check if this file is now complete
+        if (is_file_complete_now(ctx, i))
+        {
+            ctx.sm.mark_file_complete(i);
+            io::printfn("  [BEP 21] File %d complete: %s", i, ctx.sm.files[i].path);
+        }
+    }
+}
+
+<*
+ * Check if all pieces for a file are complete.
+ *
+ * @param ctx "Download context"
+ * @param file_index "File index to check"
+ * @return "True if all pieces for this file are complete"
+ *>
+fn bool is_file_complete_now(DownloadContext* ctx, usz file_index)
+{
+    // Get file byte range
+    ulong file_start = ctx.sm.files[file_index].offset;
+    ulong file_end = file_start + ctx.sm.files[file_index].length;
+
+    // Calculate which pieces touch this file
+    uint first_piece = (uint)(file_start / (ulong)ctx.torrent.info.piece_length);
+    uint last_piece = (uint)((file_end - 1) / (ulong)ctx.torrent.info.piece_length);
+
+    // Check if all pieces are complete
+    for (uint p = first_piece; p <= last_piece; p++)
+    {
+        if (!ctx.dm.have_piece(p)) return false;
+    }
+
+    return true;
+}
+
+<*
+ * Called when selected files are complete - enters partial seed mode (BEP 21).
+ * Stops downloading unwanted pieces, continues uploading to peers.
+ *
+ * @param ctx "Download context"
+ *>
+fn void on_partial_seed_complete(DownloadContext* ctx) @public
+{
+    io::printfn("");
+    io::printfn("=== Selected Files Complete! ===");
+    io::printfn("Entering partial seed mode (BEP 21)...");
+    io::printfn("Will continue uploading but won't download remaining pieces.");
+    io::printfn("");
+
+    // Mark as partial seed
+    ctx.is_partial_seed = true;
+
+    // BEP 21: Tell peer pool to advertise upload_only in extension handshake
+    if (ctx.peer_pool)
+    {
+        ctx.peer_pool.set_upload_only(true);
+    }
+
+    // Send "completed" event to tracker
+    if (ctx.tracker_coord)
+    {
+        ctx.tracker_coord.start_announce("completed");
+    }
+
+    // BEP 21: Save resume data with file selection
+    if (ctx.state_provider && ctx.torrent_path.len > 0 && ctx.select_files_str.len > 0)
+    {
+        download_state_provider::DownloadState state;
+        state.file_selection = ctx.select_files_str;
+        state.version = 1;
+
+        if (catch err = ctx.state_provider.save_state(ctx.torrent_path, &state))
+        {
+            io::eprintfn("[BEP 21] Warning: Failed to save resume data");
+        }
+        else
+        {
+            io::printfn("[BEP 21] Saved file selection to resume data");
+        }
+    }
+
+    // Stop download-only timers
+    if (ctx.block_timeout_timer)
+    {
+        ctx.block_timeout_timer.close();
+        ctx.block_timeout_timer = null;
+    }
+
+    if (ctx.webseed_timer)
+    {
+        ctx.webseed_timer.close();
+        ctx.webseed_timer = null;
+    }
+    if (ctx.webseed_mgr)
+    {
+        ctx.webseed_mgr.free();
+        ctx.webseed_mgr = null;
+    }
+
+    if (ctx.httpseed_timer)
+    {
+        ctx.httpseed_timer.close();
+        ctx.httpseed_timer = null;
+    }
+    if (ctx.httpseed_mgr)
+    {
+        ctx.httpseed_mgr.free();
+        ctx.httpseed_mgr = null;
+    }
+
+    if (ctx.metadata_timer)
+    {
+        ctx.metadata_timer.close();
+        ctx.metadata_timer = null;
+    }
+
+    if (ctx.dht_timer)
+    {
+        ctx.dht_timer.close();
+        ctx.dht_timer = null;
+    }
+    if (ctx.dht_check_timer)
+    {
+        ctx.dht_check_timer.close();
+        ctx.dht_check_timer = null;
+    }
+    if (ctx.dht_search)
+    {
+        ctx.dht_search.free();
+        ctx.dht_search = null;
+    }
+
+    if (ctx.lsd_timer)
+    {
+        ctx.lsd_timer.close();
+        ctx.lsd_timer = null;
+    }
+
+    // Keep these running for seeding:
+    // - keepalive_timer: Keep peer connections alive
+    // - upload_timer: Process upload requests from peers
+    // - pex_timer: Share peer information (BEP 11)
+    // - flush_timer: Periodic file flush
+    // - tracker_coord: Periodic announces
+
+    io::printfn("Partial seed mode active. Will continue seeding selected files.");
+    io::printfn("Press Ctrl+C to stop and exit.");
+}
+
+// ============================================================================
+// Download Completion Handlers
 // ============================================================================
 
 <*
@@ -439,10 +626,26 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
         io::printfn("Progress: %d/%d pieces (%.1f%%)", complete, total, percent);
     }
 
+    // BEP 21: Check for partial seed completion BEFORE full completion
+    if (!ctx.is_partial_seed && !ctx.download_complete)
+    {
+        if (ctx.sm.are_selected_files_complete())
+        {
+            on_partial_seed_complete(ctx);
+            return;
+        }
+    }
+
     // Check if download is complete
     if (ctx.dm.is_complete())
     {
         on_complete_download(ctx);
+        return;
+    }
+
+    // BEP 21: Don't start new downloads in partial seed mode
+    if (ctx.is_partial_seed)
+    {
         return;
     }
 
@@ -761,6 +964,9 @@ fn void on_piece_written(uint piece_index, int status, void* user_data) @public
     if (status == 0)
     {
         io::printfn("  Piece %d written to disk", piece_index);
+
+        // BEP 21: Check if this piece completes any files
+        check_file_completion(ctx, piece_index);
     }
     else
     {
@@ -1834,7 +2040,72 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     ctx.sm = mem::new(storage_manager::StorageManager);
     *ctx.sm = sm_opt;
 
-    // Create download manager
+    // BEP 21: Apply file selection (from CLI or resume data)
+    String file_sel_to_apply = ctx.select_files_str;
+    bool loaded_from_resume = false;
+
+    // Try loading from resume data if no CLI selection
+    if (file_sel_to_apply.len == 0 && ctx.state_provider && ctx.torrent_path.len > 0 && torrent.info.is_multi_file)
+    {
+        download_state_provider::DownloadState? state_opt = ctx.state_provider.load_state(ctx.torrent_path);
+        if (catch err = state_opt)
+        {
+            // No resume data - that's fine
+        }
+        else
+        {
+            download_state_provider::DownloadState state = state_opt;
+            defer state.free();
+
+            if (state.file_selection.len > 0)
+            {
+                file_sel_to_apply = state.file_selection;
+                loaded_from_resume = true;
+                io::printfn("[BEP 21] Loaded file selection from resume data: %s", file_sel_to_apply);
+            }
+        }
+    }
+
+    // Apply file selection
+    if (file_sel_to_apply.len > 0 && torrent.info.is_multi_file)
+    {
+        file_selection::FileSelection? selection_opt =
+            file_selection::create_from_string(file_sel_to_apply, ctx.sm.files.len);
+
+        if (catch err = selection_opt)
+        {
+            io::eprintfn("Error: Invalid file selection '%s'", file_sel_to_apply);
+            io::eprintfn("Please specify valid file indices (e.g., '0,2,4')");
+            ctx.exit_code = 1;
+            ctx.download_complete = true;
+            return;
+        }
+
+        file_selection::FileSelection selection = selection_opt;
+        defer selection.free();
+
+        // Apply selection to storage manager
+        for (usz i = 0; i < ctx.sm.files.len; i++)
+        {
+            ctx.sm.files[i].is_selected = selection.is_file_selected(i);
+        }
+
+        // Update ctx.select_files_str for later use (save resume data on completion)
+        if (loaded_from_resume)
+        {
+            ctx.select_files_str = file_sel_to_apply.copy(mem);
+        }
+
+        io::printfn("[BEP 21] File selection applied: %s", file_sel_to_apply);
+        io::printfn("[BEP 21] Selected %d of %d files for download",
+                   selection.count_selected(), selection.total_files);
+    }
+    else if (ctx.select_files_str.len > 0 && !torrent.info.is_multi_file)
+    {
+        io::printfn("[BEP 21] Warning: File selection ignored for single-file torrent");
+    }
+
+    // Create download manager (BEP 21: pass storage for file selection)
     ctx.dm = mem::new(download_manager::DownloadManager);
     *ctx.dm = download_manager::create(
         ctx.loop,
@@ -1843,7 +2114,8 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         last_piece_length,
         torrent.info.pieces,
         (usz)ctx.max_concurrent_pieces,  // Configurable concurrent pieces
-        16384  // 16KB blocks
+        16384,  // 16KB blocks
+        ctx.sm  // BEP 21: Storage manager for selective piece downloading
     );
 
     // Store num_pieces for resume verification
