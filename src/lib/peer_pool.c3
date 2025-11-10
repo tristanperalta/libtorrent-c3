@@ -375,32 +375,18 @@ fn void PeerPool.free(&self) @public
     // 2. Called loop.close_all_handles() which drained all TCP close callbacks
     // 3. TCP close callbacks freed the TcpConnection* wrappers (tcp.c3:366)
     //
-    // However, PeerConnection* structs were NOT freed by the TCP close callback!
-    // The TCP callback only frees TcpConnection*, not PeerConnection*.
-    // So we must free PeerConnection structs here.
-    usz connection_count = 0;
+    // With reference counting, PeerConnection* structs should already be freed
+    // (refcount reached 0 after all async callbacks completed). However, we still
+    // ensure any remaining connections are closed (e.g., connections still in progress).
     self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
     {
-        if (peer.connection)
+        if (peer.connection && !peer.connection.is_closed)
         {
-            connection_count++;
-            // Call .close() if it wasn't already closed (e.g., connection was still in progress)
-            // This ensures Lists are freed even if disconnect_all_gracefully() missed this connection
-            if (!peer.connection.is_closed)
-            {
-                peer.connection.close();
-            }
-
-            // Now free the PeerConnection struct itself
-            free(peer.connection);
-            peer.connection = null;
+            // Call .close() to decrement owner refcount and free if no pending operations
+            peer.connection.close();
+            // Note: connection may be freed by close() if refcount reached 0
         }
     };
-
-    if (connection_count > 0)
-    {
-        io::printfn("[PEER_POOL] Freed %d PeerConnection structs", connection_count);
-    }
 
     // Free HashMap (heap-allocated buckets and entries)
     self.peers.free();
@@ -569,21 +555,14 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             // Don't call close() from here - it causes recursion since close()
             // triggers this callback. The peer will be freed by disconnect_all()
             // or when the connection object is freed.
-            // Free the PeerConnection struct during normal operation, but keep it during shutdown
+            // Call close() which handles refcounting and may free immediately
             if (peer_info.connection)
             {
-                // Free the PeerConnection struct during normal operation
-                // Don't free during shutdown - peer_pool.free() will handle it
-                if (!pool.shutting_down)
+                if (!peer_info.connection.is_closed)
                 {
-                    // Call close() first to free Lists and other resources
-                    if (!peer_info.connection.is_closed)
-                    {
-                        peer_info.connection.close();
-                    }
-                    free(peer_info.connection);
+                    peer_info.connection.close();  // Decrements refcount, may free
                 }
-                peer_info.connection = null;
+                peer_info.connection = null;  // Clear reference (close() may have freed it)
             }
 
             if (pool.on_disconnected)

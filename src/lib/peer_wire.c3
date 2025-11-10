@@ -148,9 +148,9 @@ fn void write_u32_be(char[] buffer, usz offset, uint value) @inline
  @param peer_id : "Our peer ID (20 bytes)"
  @return "Encoded handshake message (caller must free)"
 *>
-fn char[] encode_handshake(char[20] info_hash, char[20] peer_id) @public
+fn char[] encode_handshake(char[20] info_hash, char[20] peer_id, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 68);
+    char[] msg = allocator::alloc_array(allocator, char, 68);
 
     // Protocol string length and name
     msg[0] = 19;
@@ -292,11 +292,12 @@ struct ExtensionMessage
  Encode a keep-alive message.
  Keep-alive is just a length of 0 (4 zero bytes).
 
+ @param allocator : "Allocator for message buffer (default: heap)"
  @return "Encoded keep-alive message (4 bytes)"
 *>
-fn char[] encode_keepalive() @public
+fn char[] encode_keepalive(Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 4);
+    char[] msg = allocator::alloc_array(allocator, char, 4);
     write_u32_be(msg, 0, 0);
     return msg;
 }
@@ -308,11 +309,12 @@ fn char[] encode_keepalive() @public
  Total: 5 bytes
 
  @param msg_type : "The message type"
+ @param allocator : "Allocator for message buffer (default: heap)"
  @return "Encoded message (caller must free)"
 *>
-fn char[] encode_simple_message(MessageType msg_type) @public
+fn char[] encode_simple_message(MessageType msg_type, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 5);
+    char[] msg = allocator::alloc_array(allocator, char, 5);
     write_u32_be(msg, 0, 1);  // Length = 1 (just the message ID)
     msg[4] = (char)msg_type;
     return msg;
@@ -327,9 +329,9 @@ fn char[] encode_simple_message(MessageType msg_type) @public
  @param piece_index : "The piece index we have"
  @return "Encoded HAVE message (caller must free)"
 *>
-fn char[] encode_have(uint piece_index) @public
+fn char[] encode_have(uint piece_index, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 9);
+    char[] msg = allocator::alloc_array(allocator, char, 9);
     write_u32_be(msg, 0, 5);  // Length = 5 (1 byte ID + 4 bytes payload)
     msg[4] = (char)MessageType.HAVE;
     write_u32_be(msg, 5, piece_index);
@@ -344,10 +346,10 @@ fn char[] encode_have(uint piece_index) @public
  @param bitfield : "The bitfield bytes"
  @return "Encoded BITFIELD message (caller must free)"
 *>
-fn char[] encode_bitfield(char[] bitfield) @public
+fn char[] encode_bitfield(char[] bitfield, Allocator allocator = mem) @public
 {
     usz msg_len = 5 + bitfield.len;
-    char[] msg = mem::new_array(char, msg_len);
+    char[] msg = allocator::alloc_array(allocator, char, msg_len);
     write_u32_be(msg, 0, (uint)(1 + bitfield.len));  // Length = 1 + bitfield length
     msg[4] = (char)MessageType.BITFIELD;
     foreach (i, b : bitfield) msg[i + 5] = b;
@@ -365,9 +367,9 @@ fn char[] encode_bitfield(char[] bitfield) @public
  @param length : "Block length to request"
  @return "Encoded REQUEST message (caller must free)"
 *>
-fn char[] encode_request(uint index, uint begin, uint length) @public
+fn char[] encode_request(uint index, uint begin, uint length, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 17);
+    char[] msg = allocator::alloc_array(allocator, char, 17);
     write_u32_be(msg, 0, 13);  // Length = 13 (1 byte ID + 12 bytes payload)
     msg[4] = (char)MessageType.REQUEST;
     write_u32_be(msg, 5, index);
@@ -386,10 +388,10 @@ fn char[] encode_request(uint index, uint begin, uint length) @public
  @param block : "Block data"
  @return "Encoded PIECE message (caller must free)"
 *>
-fn char[] encode_piece(uint index, uint begin, char[] block) @public
+fn char[] encode_piece(uint index, uint begin, char[] block, Allocator allocator = mem) @public
 {
     usz msg_len = 13 + block.len;  // 4 (length) + 1 (id) + 4 (index) + 4 (begin) + block
-    char[] msg = mem::new_array(char, msg_len);
+    char[] msg = allocator::alloc_array(allocator, char, msg_len);
     write_u32_be(msg, 0, (uint)(9 + block.len));  // Length = 9 + block length
     msg[4] = (char)MessageType.PIECE;
     write_u32_be(msg, 5, index);
@@ -409,9 +411,9 @@ fn char[] encode_piece(uint index, uint begin, char[] block) @public
  @param length : "Block length to cancel"
  @return "Encoded CANCEL message (caller must free)"
 *>
-fn char[] encode_cancel(uint index, uint begin, uint length) @public
+fn char[] encode_cancel(uint index, uint begin, uint length, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 17);
+    char[] msg = allocator::alloc_array(allocator, char, 17);
     write_u32_be(msg, 0, 13);  // Length = 13
     msg[4] = (char)MessageType.CANCEL;
     write_u32_be(msg, 5, index);
@@ -429,9 +431,9 @@ fn char[] encode_cancel(uint index, uint begin, uint length) @public
  @param port : "DHT listen port"
  @return "Encoded PORT message (caller must free)"
 *>
-fn char[] encode_port(ushort port) @public
+fn char[] encode_port(ushort port, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 7);
+    char[] msg = allocator::alloc_array(allocator, char, 7);
     write_u32_be(msg, 0, 3);  // Length = 3 (1 byte ID + 2 bytes payload)
     msg[4] = (char)MessageType.PORT;
     msg[5] = (char)((port >> 8) & 0xFF);
@@ -447,7 +449,7 @@ fn char[] encode_port(ushort port) @public
  @param handshake : "Extension handshake data"
  @return "Encoded extension handshake message (caller must free)"
 *>
-fn char[] encode_extension_handshake(ExtensionHandshake* handshake) @public
+fn char[] encode_extension_handshake(ExtensionHandshake* handshake, Allocator allocator = mem) @public
 {
     // Build bencoded dictionary
     // Format: d1:md6:ut_pexi<id>ee1:pi<port>e1:v<len>:<client>e4:reqqi<reqq>ee
@@ -509,7 +511,7 @@ fn char[] encode_extension_handshake(ExtensionHandshake* handshake) @public
 
     // Allocate message buffer: 4 (length) + 1 (id=20) + 1 (ext_id=0) + payload
     usz total_len = 4 + 1 + 1 + bencoded.len;
-    char[] msg = mem::new_array(char, total_len);
+    char[] msg = allocator::alloc_array(allocator, char, total_len);
 
     // Write length (excluding length prefix itself)
     write_u32_be(msg, 0, (uint)(total_len - 4));
@@ -538,11 +540,11 @@ fn char[] encode_extension_handshake(ExtensionHandshake* handshake) @public
  @param payload : "Bencoded payload data"
  @return "Encoded extension message (caller must free)"
 *>
-fn char[] encode_extension_message(char ext_msg_id, char[] payload) @public
+fn char[] encode_extension_message(char ext_msg_id, char[] payload, Allocator allocator = mem) @public
 {
     // Allocate message: 4 (length) + 1 (id=20) + 1 (ext_id) + payload
     usz total_len = 4 + 1 + 1 + payload.len;
-    char[] msg = mem::new_array(char, total_len);
+    char[] msg = allocator::alloc_array(allocator, char, total_len);
 
     // Write length (excluding length prefix)
     write_u32_be(msg, 0, (uint)(total_len - 4));
@@ -807,9 +809,9 @@ fn ExtensionHandshake? decode_extension_handshake(char[] payload) @public
  @param piece_index : "Piece index to suggest"
  @return "Encoded message (caller must free)"
 *>
-fn char[] encode_suggest_piece(uint piece_index) @public
+fn char[] encode_suggest_piece(uint piece_index, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 9);
+    char[] msg = allocator::alloc_array(allocator, char, 9);
     write_u32_be(msg, 0, 5);  // Length: 1 byte opcode + 4 bytes index
     msg[4] = (char)MessageType.SUGGEST_PIECE;
     write_u32_be(msg, 5, piece_index);
@@ -822,9 +824,9 @@ fn char[] encode_suggest_piece(uint piece_index) @public
 
  @return "Encoded message (caller must free)"
 *>
-fn char[] encode_have_all() @public
+fn char[] encode_have_all(Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 5);
+    char[] msg = allocator::alloc_array(allocator, char, 5);
     write_u32_be(msg, 0, 1);  // Length: 1 byte opcode
     msg[4] = (char)MessageType.HAVE_ALL;
     return msg;
@@ -836,9 +838,9 @@ fn char[] encode_have_all() @public
 
  @return "Encoded message (caller must free)"
 *>
-fn char[] encode_have_none() @public
+fn char[] encode_have_none(Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 5);
+    char[] msg = allocator::alloc_array(allocator, char, 5);
     write_u32_be(msg, 0, 1);  // Length: 1 byte opcode
     msg[4] = (char)MessageType.HAVE_NONE;
     return msg;
@@ -853,9 +855,9 @@ fn char[] encode_have_none() @public
  @param length : "Block length"
  @return "Encoded message (caller must free)"
 *>
-fn char[] encode_reject_request(uint index, uint begin, uint length) @public
+fn char[] encode_reject_request(uint index, uint begin, uint length, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 17);
+    char[] msg = allocator::alloc_array(allocator, char, 17);
     write_u32_be(msg, 0, 13);  // Length: 1 byte opcode + 12 bytes payload
     msg[4] = (char)MessageType.REJECT_REQUEST;
     write_u32_be(msg, 5, index);
@@ -871,9 +873,9 @@ fn char[] encode_reject_request(uint index, uint begin, uint length) @public
  @param piece_index : "Piece index in allowed fast set"
  @return "Encoded message (caller must free)"
 *>
-fn char[] encode_allowed_fast(uint piece_index) @public
+fn char[] encode_allowed_fast(uint piece_index, Allocator allocator = mem) @public
 {
-    char[] msg = mem::new_array(char, 9);
+    char[] msg = allocator::alloc_array(allocator, char, 9);
     write_u32_be(msg, 0, 5);  // Length: 1 byte opcode + 4 bytes index
     msg[4] = (char)MessageType.ALLOWED_FAST;
     write_u32_be(msg, 5, piece_index);

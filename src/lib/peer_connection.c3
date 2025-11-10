@@ -27,6 +27,49 @@ import libtorrent::logger;
    peer.send_request(piece_index, begin, length);
 *>
 
+// ============================================================================
+// Async Operation Macros (Reference Counting Safety)
+// ============================================================================
+// These macros wrap async operations to automatically increment refcount on success,
+// preventing use-after-free bugs from pending callbacks.
+
+// Macro for TCP connect with automatic refcount increment.
+// Prevents forgetting to increment refcount after successful async operation.
+macro async_tcp_connect(loop, host, port, callback, peer)
+{
+    async::tcp::TcpConnection*? tcp_opt = async::tcp::connect(loop, host, port, callback, peer);
+    if (catch excuse = tcp_opt)
+    {
+        return excuse?;
+    }
+    peer.refcount++;  // Increment for pending connect callback
+    return tcp_opt;
+}
+
+// Macro for start_read with automatic refcount increment.
+macro @async_tcp_start_read(#conn_expr, alloc_fn, callback, peer)
+{
+    if (catch excuse = #conn_expr.start_read(alloc_fn, callback, peer))
+    {
+        return excuse?;
+    }
+    peer.refcount++;  // Increment for read operation (decremented on EOF)
+}
+
+// Macro for TCP write with automatic refcount increment.
+macro @async_tcp_write(#conn_expr, data, callback, peer)
+{
+    if (catch excuse = #conn_expr.write(data, callback, peer))
+    {
+        return excuse?;
+    }
+    peer.refcount++;  // Increment for pending write callback
+}
+
+// ============================================================================
+// Faults and Types
+// ============================================================================
+
 // Faults
 faultdef PEER_HANDSHAKE_FAILED;
 faultdef PEER_MESSAGE_SEND_FAILED;
@@ -96,6 +139,7 @@ struct PeerConnection
     PeerState state;
     DisconnectReason last_disconnect_reason;  // Reason for disconnect (valid when state==CLOSED)
     bool is_closed;  // Safety flag: true when connection is being closed/freed (prevents use-after-free in callbacks)
+    int refcount;    // Reference count for async operations (prevents premature free)
 
     // Torrent info
     common::InfoHash info_hash;
@@ -140,6 +184,10 @@ struct PeerConnection
     // Message buffering
     DString recv_buffer;     // Accumulates TCP chunks
 
+    // Arena allocator for temporary message encoding (avoids malloc overhead)
+    ArenaAllocator msg_arena;
+    char[] arena_buffer;     // Backing buffer for arena
+
     // Callbacks
     MessageCallback msg_cb;
     StateCallback state_cb;
@@ -173,6 +221,8 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     PeerConnection* peer = mem::new(PeerConnection);
     peer.loop = loop;
     peer.state = PeerState.CONNECTING;
+    peer.is_closed = false;
+    peer.refcount = 1;  // Start with owner reference
 
     // Copy info hash and peer IDs
     for (usz i = 0; i < 20; i++)
@@ -213,6 +263,10 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.peer_allowed_fast.init(mem);
     peer.suggested_pieces.init(mem);
 
+    // Initialize arena allocator for message encoding (16KB buffer)
+    peer.arena_buffer = mem::new_array(char, 16 * 1024);
+    peer.msg_arena.init(peer.arena_buffer);
+
     // Initialize callbacks
     peer.msg_cb = msg_cb;
     peer.state_cb = state_cb;
@@ -220,8 +274,8 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.metadata_cb = metadata_cb;
     peer.user_data = user_data;
 
-    // Connect to peer
-    async::tcp::TcpConnection*? tcp_opt = async::tcp::connect(loop, host, port, &on_tcp_connect, peer);
+    // Connect to peer (macro auto-increments refcount on success)
+    async::tcp::TcpConnection*? tcp_opt = async_tcp_connect(loop, host, port, &on_tcp_connect, peer);
     if (catch excuse = tcp_opt)
     {
         free(peer);
@@ -232,11 +286,43 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     return peer;
 }
 
+// ============================================================================
+// Reference Counting
+// ============================================================================
+
+<*
+ Decrement refcount and free PeerConnection if it reaches zero.
+ This helper centralizes the free logic and catches negative refcount bugs.
+
+ @param peer : "PeerConnection to decrement"
+*>
+fn void decrement_and_free_if_zero(PeerConnection* peer) @private
+{
+    peer.refcount--;
+
+    if (peer.refcount == 0)
+    {
+        free(peer);
+    }
+    else if (peer.refcount < 0)
+    {
+        // BUG: Indicates missing increment or double-decrement
+        io::eprintfn("[BUG] PeerConnection refcount went negative (%d)", peer.refcount);
+    }
+}
+
+// ============================================================================
+// Connection Management
+// ============================================================================
+
 <*
  Close a peer connection and free resources.
 *>
 fn void PeerConnection.close(&self) @public
 {
+    // Idempotent check - only execute once
+    if (self.is_closed) return;
+
     // Mark as closed FIRST to prevent use-after-free in pending callbacks
     self.is_closed = true;
 
@@ -267,13 +353,11 @@ fn void PeerConnection.close(&self) @public
     self.peer_allowed_fast.free();
     self.suggested_pieces.free();
 
-    // NOTE: Do NOT free(self) here!
-    // During shutdown, there may be pending async callbacks that still reference this connection.
-    // The PeerConnection will be freed by peer_pool.free() after the event loop has drained.
-    // This prevents use-after-free crashes during shutdown.
+    // Free arena allocator buffer
+    if (self.arena_buffer.len > 0) free(self.arena_buffer);
 
-    // WARNING: This method is NOT idempotent - calling it twice will cause double-free!
-    // Use self.is_closed flag to check if already closed before calling.
+    // Decrement owner refcount - may free if no pending async operations
+    decrement_and_free_if_zero(self);
 }
 
 <*
@@ -317,6 +401,7 @@ fn void PeerConnection.graceful_close(&self) @public
 fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
+    defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path
 
     // Safety check: ignore callback if connection is being freed (prevents use-after-free)
     if (peer.is_closed)
@@ -345,11 +430,12 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     peer.state = PeerState.HANDSHAKING;
     if (peer.state_cb) peer.state_cb(peer, PeerState.HANDSHAKING, DisconnectReason.UNKNOWN, peer.user_data);
 
-    char[] handshake = peer_wire::encode_handshake(peer.info_hash, peer.our_peer_id);
-    defer free(handshake);
+    usz mark = peer.msg_arena.mark();
+    char[] handshake = peer_wire::encode_handshake(peer.info_hash, peer.our_peer_id, &peer.msg_arena);
+    defer peer.msg_arena.reset(mark);
 
-    // Start reading to receive handshake response
-    if (catch excuse = conn.start_read(&alloc_buffer, &on_tcp_read, peer))
+    // Start reading to receive handshake response (macro auto-increments refcount)
+    if (catch excuse = @async_tcp_start_read(conn, &alloc_buffer, &on_tcp_read, peer))
     {
         logger::log(logger::LogLevel.ERROR, "Failed to start reading from peer");
         if (peer.tcp)
@@ -363,8 +449,8 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
         return;
     }
 
-    // Send handshake
-    if (catch excuse = conn.write(handshake, &on_handshake_sent, peer))
+    // Send handshake (macro auto-increments refcount)
+    if (catch excuse = @async_tcp_write(conn, handshake, &on_handshake_sent, peer))
     {
         logger::log(logger::LogLevel.ERROR, "Failed to send handshake to peer");
         if (peer.tcp)
@@ -385,6 +471,7 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
 fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
+    defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path
 
     // Safety check: ignore callback if connection is being freed
     if (peer.is_closed)
@@ -430,7 +517,9 @@ fn void on_tcp_read(async::tcp::TcpConnection* conn, char[] data, void* user_dat
 
     if (data.len == 0)
     {
-        // EOF - connection closed
+        // EOF - connection closed (decrement refcount for read operation)
+        decrement_and_free_if_zero(peer);
+
         if (peer.tcp)
         {
             peer.tcp.close();
@@ -690,7 +779,8 @@ fn fault? send_message(PeerConnection* peer, char[] data) @inline
         return PEER_INVALID_STATE?;
     }
 
-    if (catch excuse = peer.tcp.write(data, &on_message_sent, peer))
+    // Use macro for automatic refcount increment
+    if (catch excuse = @async_tcp_write(peer.tcp, data, &on_message_sent, peer))
     {
         return PEER_MESSAGE_SEND_FAILED?;
     }
@@ -704,6 +794,7 @@ fn fault? send_message(PeerConnection* peer, char[] data) @inline
 fn void on_message_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
+    defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path
 
     // Safety check: ignore callback if connection is being freed
     if (peer.is_closed)
@@ -723,8 +814,9 @@ fn void on_message_sent(async::tcp::TcpConnection* conn, int status, void* user_
 *>
 fn fault? PeerConnection.send_choke(&self) @public
 {
-    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.CHOKE);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.CHOKE, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     fault? result = send_message(self, msg);
     if (catch excuse = result) return excuse?;
     self.am_choking = true;
@@ -736,8 +828,9 @@ fn fault? PeerConnection.send_choke(&self) @public
 *>
 fn fault? PeerConnection.send_unchoke(&self) @public
 {
-    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.UNCHOKE);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.UNCHOKE, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     fault? result = send_message(self, msg);
     if (catch excuse = result) return excuse?;
     self.am_choking = false;
@@ -749,8 +842,9 @@ fn fault? PeerConnection.send_unchoke(&self) @public
 *>
 fn fault? PeerConnection.send_interested(&self) @public
 {
-    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.INTERESTED);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.INTERESTED, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     fault? result = send_message(self, msg);
     if (catch excuse = result) return excuse?;
     self.am_interested = true;
@@ -762,8 +856,9 @@ fn fault? PeerConnection.send_interested(&self) @public
 *>
 fn fault? PeerConnection.send_not_interested(&self) @public
 {
-    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.NOT_INTERESTED);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_simple_message(peer_wire::MessageType.NOT_INTERESTED, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     fault? result = send_message(self, msg);
     if (catch excuse = result) return excuse?;
     self.am_interested = false;
@@ -777,8 +872,9 @@ fn fault? PeerConnection.send_not_interested(&self) @public
 *>
 fn fault? PeerConnection.send_have(&self, uint piece_index) @public
 {
-    char[] msg = peer_wire::encode_have(piece_index);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_have(piece_index, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -790,8 +886,9 @@ fn fault? PeerConnection.send_have(&self, uint piece_index) @public
 fn fault? PeerConnection.send_bitfield(&self, bitfield::Bitfield* bf) @public
 {
     char[] bytes = bf.to_bytes();
-    char[] msg = peer_wire::encode_bitfield(bytes);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_bitfield(bytes, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -808,8 +905,9 @@ fn fault? PeerConnection.send_have_all(&self) @public
 {
     if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
 
-    char[] msg = peer_wire::encode_have_all();
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_have_all(&self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -822,8 +920,9 @@ fn fault? PeerConnection.send_have_none(&self) @public
 {
     if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
 
-    char[] msg = peer_wire::encode_have_none();
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_have_none(&self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -836,8 +935,9 @@ fn fault? PeerConnection.send_suggest_piece(&self, uint piece_index) @public
 {
     if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
 
-    char[] msg = peer_wire::encode_suggest_piece(piece_index);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_suggest_piece(piece_index, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -852,8 +952,9 @@ fn fault? PeerConnection.send_reject_request(&self, uint index, uint begin, uint
 {
     if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
 
-    char[] msg = peer_wire::encode_reject_request(index, begin, length);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_reject_request(index, begin, length, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -866,8 +967,9 @@ fn fault? PeerConnection.send_allowed_fast(&self, uint piece_index) @public
 {
     if (!self.supports_fast) return PEER_NO_FAST_EXTENSION?;
 
-    char[] msg = peer_wire::encode_allowed_fast(piece_index);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_allowed_fast(piece_index, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -880,8 +982,9 @@ fn fault? PeerConnection.send_allowed_fast(&self, uint piece_index) @public
 *>
 fn fault? PeerConnection.send_request(&self, uint index, uint begin, uint length) @public
 {
-    char[] msg = peer_wire::encode_request(index, begin, length);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_request(index, begin, length, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -894,8 +997,9 @@ fn fault? PeerConnection.send_request(&self, uint index, uint begin, uint length
 *>
 fn fault? PeerConnection.send_piece(&self, uint index, uint begin, char[] block) @public
 {
-    char[] msg = peer_wire::encode_piece(index, begin, block);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_piece(index, begin, block, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -908,8 +1012,9 @@ fn fault? PeerConnection.send_piece(&self, uint index, uint begin, char[] block)
 *>
 fn fault? PeerConnection.send_cancel(&self, uint index, uint begin, uint length) @public
 {
-    char[] msg = peer_wire::encode_cancel(index, begin, length);
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_cancel(index, begin, length, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -918,8 +1023,9 @@ fn fault? PeerConnection.send_cancel(&self, uint index, uint begin, uint length)
 *>
 fn fault? PeerConnection.send_keepalive(&self) @public
 {
-    char[] msg = peer_wire::encode_keepalive();
-    defer free(msg);
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_keepalive(&self.msg_arena);
+    defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }
 
@@ -944,8 +1050,9 @@ fn void send_extension_handshake(PeerConnection* peer) @private
     ext_hs.reqq = 250;  // Max outstanding requests
     ext_hs.metadata_size = 0;  // Set to actual size when we have metadata
 
-    char[] msg = peer_wire::encode_extension_handshake(&ext_hs);
-    defer free(msg);
+    usz mark = peer.msg_arena.mark();
+    char[] msg = peer_wire::encode_extension_handshake(&ext_hs, &peer.msg_arena);
+    defer peer.msg_arena.reset(mark);
 
     if (catch excuse = send_message(peer, msg))
     {
@@ -1122,8 +1229,9 @@ fn void? PeerConnection.send_pex_message(&self) @public
     defer free(pex_payload);
 
     // Encode as extension message
-    char[] ext_msg = peer_wire::encode_extension_message(self.peer_pex_msg_id, pex_payload);
-    defer free(ext_msg);
+    usz mark = self.msg_arena.mark();
+    char[] ext_msg = peer_wire::encode_extension_message(self.peer_pex_msg_id, pex_payload, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
 
     // Send message
     if (catch err = send_message(self, ext_msg))
@@ -1354,8 +1462,9 @@ fn void? PeerConnection.send_metadata_message(&self, metadata_exchange::Metadata
     defer free(metadata_payload);
 
     // Encode as extension message
-    char[] ext_msg = peer_wire::encode_extension_message(self.peer_metadata_msg_id, metadata_payload);
-    defer free(ext_msg);
+    usz mark = self.msg_arena.mark();
+    char[] ext_msg = peer_wire::encode_extension_message(self.peer_metadata_msg_id, metadata_payload, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
 
     // Send message
     if (catch err = send_message(self, ext_msg))
