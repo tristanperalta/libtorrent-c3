@@ -21,17 +21,6 @@ fn common::NodeId create_test_node_id(char seed)
     return id;
 }
 
-// Helper function to create a test IP address
-fn common::Ipv4Addr create_test_ip(char a, char b, char c, char d)
-{
-    common::Ipv4Addr ip;
-    ip[0] = a;
-    ip[1] = b;
-    ip[2] = c;
-    ip[3] = d;
-    return ip;
-}
-
 // ============================================================================
 // Basic DHT Client Tests
 // ============================================================================
@@ -78,8 +67,8 @@ fn void test_add_bootstrap_node() @test
     dht_client::DhtClient* client = dht_client::create_dht_client(our_id, null, 0, null);
     defer client.free();
 
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 1);
-    bool added = client.add_bootstrap_node( ip, 6881);
+    common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, 1, 6881);
+    bool added = client.add_bootstrap_node(addr);
     assert(added, "Should add bootstrap node");
 
     assert(client.bootstrap_node_count == 1, "Should have 1 bootstrap node");
@@ -96,8 +85,8 @@ fn void test_add_multiple_bootstrap_nodes() @test
     // Add 5 bootstrap nodes
     for (int i = 0; i < 5; i++)
     {
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(10 + i));
-        bool added = client.add_bootstrap_node( ip, (ushort)(6881 + i));
+        common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, (char)(10 + i), (ushort)(6881 + i));
+        bool added = client.add_bootstrap_node(addr);
         assert(added, "Should add bootstrap node");
     }
 
@@ -131,9 +120,9 @@ fn void test_send_ping() @test
     defer client.free();
 
     common::NodeId target_id = create_test_node_id(0xA0);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
-    bool sent = client.send_ping( target_id, target_ip, 6881);
+    bool sent = client.send_ping(target_id, target_addr);
     assert(sent, "Should send ping query");
 
     // Verify transaction was created
@@ -151,10 +140,10 @@ fn void test_send_find_node() @test
     defer client.free();
 
     common::NodeId target_id = create_test_node_id(0xC0);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
     common::NodeId search_id = create_test_node_id(0xD0);
 
-    bool sent = client.send_find_node( target_id, target_ip, 6881, search_id);
+    bool sent = client.send_find_node(target_id, target_addr, search_id);
     assert(sent, "Should send find_node query");
 
     // Verify transaction was created
@@ -189,8 +178,8 @@ fn void test_bootstrap_with_nodes() @test
     defer client.free();
 
     // Add bootstrap nodes
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 1);
-    client.add_bootstrap_node( ip, 6881);
+    common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, 1, 6881);
+    client.add_bootstrap_node(addr);
 
     // Bootstrap
     bool bootstrapped = client.bootstrap();
@@ -229,8 +218,8 @@ fn void test_bootstrap_sends_find_node_for_own_id() @test
     defer client.free();
 
     // Add bootstrap node
-    common::Ipv4Addr bootstrap_ip = create_test_ip(192, 168, 1, 100);
-    client.add_bootstrap_node(bootstrap_ip, 6881);
+    common::SocketAddress bootstrap_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
+    client.add_bootstrap_node(bootstrap_addr);
 
     // Initiate bootstrap
     bool started = client.bootstrap();
@@ -283,10 +272,10 @@ fn void test_bootstrap_populates_multiple_buckets() @test
         int bit_idx = 7 - (dist % 8);
         node_id[byte_idx] ^= (char)(1 << bit_idx);
 
-        common::Ipv4Addr node_ip = create_test_ip(192, 168, 1, (char)(10 + i));
+        common::SocketAddress node_addr = common::create_ipv4_address(192, 168, 1, (char)(10 + i), (ushort)(6881 + i));
 
         // Manually add to routing table (simulates bootstrap process)
-        client.routing_table.add_node(node_id, node_ip, (ushort)(6881 + i), 100);
+        client.routing_table.add_node(node_id, node_addr, 100);
     }
 
     // Verify routing table has nodes in multiple buckets
@@ -309,8 +298,8 @@ fn void test_bootstrap_convergence() @test
     defer client.free();
 
     // Add bootstrap node and start bootstrap
-    common::Ipv4Addr bootstrap_ip = create_test_ip(192, 168, 1, 100);
-    client.add_bootstrap_node(bootstrap_ip, 6881);
+    common::SocketAddress bootstrap_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
+    client.add_bootstrap_node(bootstrap_addr);
     bool started = client.bootstrap();
     assert(started, "Bootstrap should start");
 
@@ -322,8 +311,8 @@ fn void test_bootstrap_convergence() @test
     for (int i = 0; i < 8; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x20 + i * 15));
-        common::Ipv4Addr node_ip = create_test_ip(192, 168, 1, (char)(20 + i));
-        client.routing_table.add_node(node_id, node_ip, (ushort)(6881 + i), 100);
+        common::SocketAddress node_addr = common::create_ipv4_address(192, 168, 1, (char)(20 + i), (ushort)(6881 + i));
+        client.routing_table.add_node(node_id, node_addr, 100);
     }
 
     // After populating routing table, should be considered bootstrapped
@@ -364,8 +353,8 @@ fn void test_bucket_refresh_after_inactivity() @test
     for (int i = 0; i < 5; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x30 + i * 20));
-        common::Ipv4Addr node_ip = create_test_ip(192, 168, 1, (char)(30 + i));
-        client.routing_table.add_node(node_id, node_ip, (ushort)(6881 + i), 100);
+        common::SocketAddress node_addr = common::create_ipv4_address(192, 168, 1, (char)(30 + i), (ushort)(6881 + i));
+        client.routing_table.add_node(node_id, node_addr, 100);
     }
 
     // In a real implementation with time tracking:

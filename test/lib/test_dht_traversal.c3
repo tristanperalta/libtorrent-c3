@@ -22,24 +22,12 @@ fn common::NodeId create_test_node_id(char seed)
     return id;
 }
 
-// Helper function to create a test IP address
-fn common::Ipv4Addr create_test_ip(char a, char b, char c, char d)
-{
-    common::Ipv4Addr ip;
-    ip[0] = a;
-    ip[1] = b;
-    ip[2] = c;
-    ip[3] = d;
-    return ip;
-}
-
 // Helper to create routing table entry
 fn dht_routing_table::NodeEntry create_node_entry(char seed)
 {
     dht_routing_table::NodeEntry entry;
     for (usz i = 0; i < 20; i++) entry.id[i] = (char)(seed + i);
-    for (usz i = 0; i < 4; i++) entry.ip[i] = (char)(192 + i);
-    entry.port = 6881;
+    entry.addr = common::create_ipv4_address(192, 193, 194, 195, 6881);
     entry.last_queried = 0;
     entry.rtt_ms = 100;
     entry.timeout_count = 0;
@@ -106,9 +94,9 @@ fn void test_add_node() @test
     defer t.free();
 
     common::NodeId node_id = create_test_node_id(0x70);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
-    bool added = t.add_node(node_id, ip, 6881);
+    bool added = t.add_node(node_id, addr);
     assert(added, "Should add node");
     assert(t.node_count == 1, "Should have 1 node");
 
@@ -122,14 +110,14 @@ fn void test_add_duplicate_node() @test
     defer t.free();
 
     common::NodeId node_id = create_test_node_id(0x90);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Add node first time
-    bool added1 = t.add_node(node_id, ip, 6881);
+    bool added1 = t.add_node(node_id, addr);
     assert(added1, "Should add node first time");
 
     // Try to add same node again
-    bool added2 = t.add_node(node_id, ip, 6881);
+    bool added2 = t.add_node(node_id, addr);
     assert(!added2, "Should not add duplicate");
     assert(t.node_count == 1, "Should still have only 1 node");
 
@@ -164,8 +152,8 @@ fn void test_get_next_queries() @test
     for (int i = 0; i < 5; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        t.add_node( node_id, ip, (ushort)(6881 + i));
+        common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        t.add_node(node_id, addr);
     }
 
     // Get next 3 queries
@@ -188,8 +176,8 @@ fn void test_mark_querying() @test
     defer t.free();
 
     common::NodeId node_id = create_test_node_id(0xD0);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    t.add_node(node_id, ip, 6881);
+    common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
+    t.add_node(node_id, addr);
 
     // Mark as querying
     t.mark_querying( node_id);
@@ -207,8 +195,8 @@ fn void test_mark_responded() @test
     defer t.free();
 
     common::NodeId node_id = create_test_node_id(0xF0);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    t.add_node(node_id, ip, 6881);
+    common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
+    t.add_node(node_id, addr);
 
     // Mark as responded
     t.mark_responded( node_id);
@@ -226,8 +214,8 @@ fn void test_mark_failed() @test
     defer t.free();
 
     common::NodeId node_id = create_test_node_id(0x22);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    t.add_node(node_id, ip, 6881);
+    common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
+    t.add_node(node_id, addr);
 
     // Mark as failed
     t.mark_failed( node_id);
@@ -264,8 +252,8 @@ fn void test_is_done_with_unqueried() @test
     for (int i = 0; i < 3; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        t.add_node(node_id, ip, 6881);
+        common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, (char)(100 + i), 6881);
+        t.add_node(node_id, addr);
     }
 
     // Should not be done with unqueried nodes
@@ -289,8 +277,8 @@ fn void test_get_closest_nodes() @test
     for (int i = 0; i < 5; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        t.add_node(node_id, ip, 6881);
+        common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, (char)(100 + i), 6881);
+        t.add_node(node_id, addr);
         t.mark_responded( node_id);
     }
 
@@ -324,8 +312,8 @@ fn void test_get_stats() @test
     for (int i = 0; i < 3; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        t.add_node(node_id, ip, 6881);
+        common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, (char)(100 + i), 6881);
+        t.add_node(node_id, addr);
         t.mark_querying( node_id);
     }
 
@@ -354,8 +342,8 @@ fn void test_lookup_respects_alpha_concurrency() @test
     for (int i = 0; i < 10; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x20 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        t.add_node(node_id, ip, (ushort)(6881 + i));
+        common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        t.add_node(node_id, addr);
     }
 
     // Get next queries with alpha=3
@@ -388,8 +376,8 @@ fn void test_lookup_converges_to_k_closest() @test
     for (int i = 0; i < 15; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x30 + i * 8));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(50 + i));
-        t.add_node(node_id, ip, (ushort)(6881 + i));
+        common::SocketAddress addr = common::create_ipv4_address(192, 168, 1, (char)(50 + i), (ushort)(6881 + i));
+        t.add_node(node_id, addr);
     }
 
     // Mark some nodes as queried and responded

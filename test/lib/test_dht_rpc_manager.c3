@@ -34,17 +34,6 @@ fn common::NodeId create_test_node_id(char seed)
     return id;
 }
 
-// Helper function to create a test IP address
-fn common::Ipv4Addr create_test_ip(char a, char b, char c, char d)
-{
-    common::Ipv4Addr ip;
-    ip[0] = a;
-    ip[1] = b;
-    ip[2] = c;
-    ip[3] = d;
-    return ip;
-}
-
 // Helper to create a dummy KRPC response
 fn krpc::KrpcMessage create_dummy_response(char[2] tid)
 {
@@ -82,7 +71,7 @@ fn void test_create_single_transaction() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x10);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Reset callback flag
     g_callback_invoked = false;
@@ -91,8 +80,7 @@ fn void test_create_single_transaction() @test
     char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr,
         &test_callback,
         null
     );
@@ -118,13 +106,12 @@ fn void test_create_multiple_transactions() @test
     for (int i = 0; i < 5; i++)
     {
         common::NodeId target_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, (char)(100 + i));
+        common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
 
         char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.FIND_NODE,
             target_id,
-            target_ip,
-            (ushort)(6881 + i),
+            target_addr,
             &test_callback,
             null
         );
@@ -147,7 +134,7 @@ fn void test_unique_transaction_ids() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x20);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Create 10 transactions and verify they all succeed
     // Transaction IDs are auto-generated and checked internally
@@ -157,8 +144,7 @@ fn void test_unique_transaction_ids() @test
         char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.PING,
             target_id,
-            target_ip,
-            6881,
+            target_addr,
             &test_callback,
             null
         );
@@ -186,7 +172,7 @@ fn void test_handle_response() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x30);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Reset callback flag
     g_callback_invoked = false;
@@ -196,8 +182,7 @@ fn void test_handle_response() @test
     char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr,
         &test_callback,
         null
     );
@@ -256,14 +241,13 @@ fn void test_process_timeouts_no_timeout() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x40);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Create transaction
     char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr,
         &test_callback,
         null
     );
@@ -288,7 +272,7 @@ fn void test_timeout_exactly_5_seconds() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x41);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Reset callback flag
     g_callback_invoked = false;
@@ -297,8 +281,7 @@ fn void test_timeout_exactly_5_seconds() @test
     char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr,
         &test_callback,
         null
     );
@@ -330,7 +313,7 @@ fn void test_timeout_callback_receives_null() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x42);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Reset callback globals
     g_callback_invoked = false;
@@ -340,8 +323,7 @@ fn void test_timeout_callback_receives_null() @test
     char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr,
         &test_callback,
         null
     );
@@ -368,16 +350,15 @@ fn void test_timeout_removes_transaction() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x43);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
     // Create 3 transactions
     for (int i = 0; i < 3; i++)
     {
+        common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, (ushort)(6881 + i));
         char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.PING,
             target_id,
-            target_ip,
-            (ushort)(6881 + i),
+            target_addr,
             &test_callback,
             null
         );
@@ -410,16 +391,15 @@ fn void test_multiple_transactions_timeout() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x44);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
     // Create 5 transactions
     for (int i = 0; i < 5; i++)
     {
+        common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, (ushort)(6881 + i));
         char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.PING,
             target_id,
-            target_ip,
-            (ushort)(6881 + i),
+            target_addr,
             &test_callback,
             null
         );
@@ -450,14 +430,13 @@ fn void test_timeout_boundary_4999ms() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x45);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Create transaction
     char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr,
         &test_callback,
         null
     );
@@ -491,14 +470,13 @@ fn void test_cancel_transaction() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x50);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Create transaction
     char[2]? tid_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr,
         &test_callback,
         null
     );
@@ -541,7 +519,7 @@ fn void test_get_stats() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x60);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, 6881);
 
     // Initially empty
     int total, pending;
@@ -555,8 +533,7 @@ fn void test_get_stats() @test
         char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.PING,
             target_id,
-            target_ip,
-            6881,
+            target_addr,
             &test_callback,
             null
         );
@@ -581,17 +558,16 @@ fn void test_transaction_table_full() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x70);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
     // Fill the transaction table to MAX_TRANSACTIONS (1024)
     io::printn("Creating 1024 transactions...");
     for (int i = 0; i < 1024; i++)
     {
+        common::SocketAddress target_addr = common::create_ipv4_address(192, 168, 1, 100, (ushort)(6881 + (i % 1000)));
         char[2]? tid_opt = mgr.create_transaction(
             krpc::QueryType.PING,
             target_id,
-            target_ip,
-            (ushort)(6881 + (i % 1000)),  // Vary ports
+            target_addr,
             &test_callback,
             null
         );
@@ -609,11 +585,11 @@ fn void test_transaction_table_full() @test
     assert(total == 1024, "Should have exactly 1024 transactions");
 
     // Try to add 1025th transaction - should fail
+    common::SocketAddress target_addr_1025 = common::create_ipv4_address(192, 168, 1, 100, 7000);
     char[2]? tid_1025 = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        7000,
+        target_addr_1025,
         &test_callback,
         null
     );
@@ -636,40 +612,39 @@ fn void test_tid_wraparound() @test
     defer mgr.free();
 
     common::NodeId target_id = create_test_node_id(0x80);
-    common::Ipv4Addr target_ip = create_test_ip(192, 168, 1, 100);
 
     // Set next_tid to 65534 (near wraparound point)
     // Note: next_tid is ushort, wraps from 65535 to 0, but 0 is reserved
     mgr.next_tid = 65534;
 
     // Create 3 transactions to force wraparound
+    common::SocketAddress target_addr1 = common::create_ipv4_address(192, 168, 1, 100, 6881);
     char[2]? tid1_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6881,
+        target_addr1,
         &test_callback,
         null
     );
     if (catch excuse = tid1_opt) { assert(false, "Should create first transaction"); return; }
     char[2] tid1 = tid1_opt;
 
+    common::SocketAddress target_addr2 = common::create_ipv4_address(192, 168, 1, 100, 6882);
     char[2]? tid2_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6882,
+        target_addr2,
         &test_callback,
         null
     );
     if (catch excuse = tid2_opt) { assert(false, "Should create second transaction"); return; }
     char[2] tid2 = tid2_opt;
 
+    common::SocketAddress target_addr3 = common::create_ipv4_address(192, 168, 1, 100, 6883);
     char[2]? tid3_opt = mgr.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        6883,
+        target_addr3,
         &test_callback,
         null
     );

@@ -55,8 +55,7 @@ faultdef DHT_INVALID_NODE_ID;
  */
 struct BootstrapNode
 {
-    common::Ipv4Addr ip;
-    ushort port;
+    common::SocketAddress addr;
 }
 
 /**
@@ -202,11 +201,10 @@ fn void DhtClient.free(&self) @public
 /**
  * Add a bootstrap node
  *
- * @param ip Bootstrap node IP address
- * @param port Bootstrap node port
+ * @param addr Bootstrap node socket address
  * @return true if node was added
  */
-fn bool DhtClient.add_bootstrap_node(&self, common::Ipv4Addr ip, ushort port) @public
+fn bool DhtClient.add_bootstrap_node(&self, common::SocketAddress addr) @public
 {
     if (self.bootstrap_node_count >= MAX_BOOTSTRAP_NODES)
     {
@@ -214,8 +212,7 @@ fn bool DhtClient.add_bootstrap_node(&self, common::Ipv4Addr ip, ushort port) @p
     }
 
     BootstrapNode* node = &self.bootstrap_nodes[self.bootstrap_node_count];
-    for (int i = 0; i < 4; i++) node.ip[i] = ip[i];
-    node.port = port;
+    node.addr = addr;
     self.bootstrap_node_count++;
 
     return true;
@@ -228,15 +225,36 @@ fn bool DhtClient.add_bootstrap_node(&self, common::Ipv4Addr ip, ushort port) @p
 fn void DhtClient.add_default_bootstrap_nodes(&self) @public
 {
     // router.bittorrent.com (87.98.162.88:6881)
-    self.add_bootstrap_node({ 87, 98, 162, 88 }, 6881);
+    common::SocketAddress addr1;
+    addr1.addr.is_ipv6 = false;
+    addr1.addr.ipv4.a = 87;
+    addr1.addr.ipv4.b = 98;
+    addr1.addr.ipv4.c = 162;
+    addr1.addr.ipv4.d = 88;
+    addr1.port = 6881;
+    self.add_bootstrap_node(addr1);
 
     // dht.transmissionbt.com (87.98.162.88:6881 - same IP as above)
     // router.utorrent.com (82.221.103.244:6881)
-    self.add_bootstrap_node({ 82, 221, 103, 244 }, 6881);
+    common::SocketAddress addr2;
+    addr2.addr.is_ipv6 = false;
+    addr2.addr.ipv4.a = 82;
+    addr2.addr.ipv4.b = 221;
+    addr2.addr.ipv4.c = 103;
+    addr2.addr.ipv4.d = 244;
+    addr2.port = 6881;
+    self.add_bootstrap_node(addr2);
 
     // dht.libtorrent.org (87.98.162.88:6881 - same IP)
     // router.silotis.us (130.239.18.159:6881)
-    self.add_bootstrap_node({ 130, 239, 18, 159 }, 6881);
+    common::SocketAddress addr3;
+    addr3.addr.is_ipv6 = false;
+    addr3.addr.ipv4.a = 130;
+    addr3.addr.ipv4.b = 239;
+    addr3.addr.ipv4.c = 18;
+    addr3.addr.ipv4.d = 159;
+    addr3.port = 6881;
+    self.add_bootstrap_node(addr3);
 }
 
 // ============================================================================
@@ -362,25 +380,68 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                         node_id[j] = nodes_data[offset + j];
                     }
 
-                    // Extract IP (4 bytes)
-                    common::Ipv4Addr ip;
-                    ip[0] = nodes_data[offset + 20];
-                    ip[1] = nodes_data[offset + 21];
-                    ip[2] = nodes_data[offset + 22];
-                    ip[3] = nodes_data[offset + 23];
+                    // Decode compact node format (26 bytes: ID + IPv4 + port)
+                    char[26] compact_bytes;
+                    for (int j = 0; j < 26; j++) compact_bytes[j] = nodes_data[offset + j];
 
-                    // Extract port (2 bytes, big-endian)
-                    ushort port = ((ushort)nodes_data[offset + 24] << 8) |
-                                   (ushort)nodes_data[offset + 25];
+                    if (catch excuse = common::decode_compact_node_ipv4(compact_bytes[..]))
+                    {
+                        // Invalid node, skip
+                        continue;
+                    }
+
+                    common::CompactNodeIPv4 decoded = common::decode_compact_node_ipv4(compact_bytes[..])!!;
 
                     // Add node to routing table (with estimated RTT of 100ms)
-                    bool added = client.routing_table.add_node(node_id, ip, port, 100);
+                    bool added = client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
 
                     if (added && i < 3)
                     {
-                        String ip_str = ip_to_string(ip);
-                        defer free(ip_str);
-                        io::printfn("[DHT]   Added node %s:%d", ip_str, port);
+                        String addr_str = decoded.addr.to_string();
+                        defer free(addr_str);
+                        io::printfn("[DHT]   Added node %s", addr_str);
+                    }
+                }
+            }
+
+            // Parse nodes6 from response (BEP 32 - IPv6 nodes)
+            bencode::BencodeValue* nodes6_val = r_dict.dict_get("nodes6");
+            if (nodes6_val != null && nodes6_val.type == bencode::BencodeType.STRING)
+            {
+                char[] nodes6_data = nodes6_val.string;
+                int node6_count = (int)(nodes6_data.len / 38);  // Each IPv6 node is 38 bytes
+
+                if (node6_count > 0)
+                {
+                    io::printfn("[DHT] Received %d IPv6 nodes from find_node", node6_count);
+                }
+
+                // Parse and add each IPv6 node to routing table
+                for (int i = 0; i < node6_count; i++)
+                {
+                    usz offset = (usz)i * 38;
+                    if (offset + 38 > nodes6_data.len) break;
+
+                    // Decode compact IPv6 node format (38 bytes: 20-byte ID + 16-byte IPv6 + 2-byte port)
+                    char[38] compact_bytes;
+                    for (int j = 0; j < 38; j++) compact_bytes[j] = nodes6_data[offset + j];
+
+                    if (catch excuse = common::decode_compact_node_ipv6(compact_bytes[..]))
+                    {
+                        // Invalid node, skip
+                        continue;
+                    }
+
+                    common::CompactNodeIPv6 decoded = common::decode_compact_node_ipv6(compact_bytes[..])!!;
+
+                    // Add IPv6 node to routing table (with estimated RTT of 100ms)
+                    bool added = client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
+
+                    if (added && i < 3)
+                    {
+                        String addr_str = decoded.addr.to_string();
+                        defer free(addr_str);
+                        io::printfn("[DHT]   Added IPv6 node %s", addr_str);
                     }
                 }
             }
@@ -455,19 +516,59 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
                     usz offset = (usz)i * 26;
                     if (offset + 26 > nodes_data.len) break;
 
-                    common::NodeId node_id;
-                    for (int j = 0; j < 20; j++) node_id[j] = nodes_data[offset + j];
+                    // Decode compact node format
+                    char[26] compact_bytes;
+                    for (int j = 0; j < 26; j++) compact_bytes[j] = nodes_data[offset + j];
 
-                    common::Ipv4Addr ip;
-                    ip[0] = nodes_data[offset + 20];
-                    ip[1] = nodes_data[offset + 21];
-                    ip[2] = nodes_data[offset + 22];
-                    ip[3] = nodes_data[offset + 23];
+                    if (catch excuse = common::decode_compact_node_ipv4(compact_bytes[..]))
+                    {
+                        continue;  // Skip invalid node
+                    }
 
-                    ushort port = ((ushort)nodes_data[offset + 24] << 8) |
-                                   (ushort)nodes_data[offset + 25];
+                    common::CompactNodeIPv4 decoded = common::decode_compact_node_ipv4(compact_bytes[..])!!;
+                    client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
+                }
+            }
 
-                    client.routing_table.add_node(node_id, ip, port, 100);
+            // Parse nodes6 from response (BEP 32 - IPv6 nodes)
+            bencode::BencodeValue* nodes6_val = r_dict.dict_get("nodes6");
+            if (nodes6_val != null && nodes6_val.type == bencode::BencodeType.STRING)
+            {
+                char[] nodes6_data = nodes6_val.string;
+                int node6_count = (int)(nodes6_data.len / 38);  // Each IPv6 node is 38 bytes
+
+                if (node6_count > 0)
+                {
+                    io::printfn("[DHT] Received %d IPv6 nodes from get_peers", node6_count);
+                }
+
+                // Parse and add each IPv6 node to routing table
+                for (int i = 0; i < node6_count; i++)
+                {
+                    usz offset = (usz)i * 38;
+                    if (offset + 38 > nodes6_data.len) break;
+
+                    // Decode compact IPv6 node format (38 bytes: 20-byte ID + 16-byte IPv6 + 2-byte port)
+                    char[38] compact_bytes;
+                    for (int j = 0; j < 38; j++) compact_bytes[j] = nodes6_data[offset + j];
+
+                    if (catch excuse = common::decode_compact_node_ipv6(compact_bytes[..]))
+                    {
+                        // Invalid node, skip
+                        continue;
+                    }
+
+                    common::CompactNodeIPv6 decoded = common::decode_compact_node_ipv6(compact_bytes[..])!!;
+
+                    // Add IPv6 node to routing table (with estimated RTT of 100ms)
+                    bool added = client.routing_table.add_node(decoded.node_id, decoded.addr, 100);
+
+                    if (added && i < 3)
+                    {
+                        String addr_str = decoded.addr.to_string();
+                        defer free(addr_str);
+                        io::printfn("[DHT]   Added IPv6 node %s", addr_str);
+                    }
                 }
             }
 
@@ -498,12 +599,11 @@ fn void rpc_response_callback(krpc::KrpcMessage* response, void* userdata) => @p
  * Send a ping query to a node
  *
  * @param target_id Target node ID
- * @param target_ip Target IP address
- * @param target_port Target port
+ * @param target_addr Target socket address
  * @return true if query was sent
  */
 fn bool DhtClient.send_ping(&self, common::NodeId target_id,
-                            common::Ipv4Addr target_ip, ushort target_port) @public => @pool()
+                            common::SocketAddress target_addr) @public => @pool()
 {
     // Create callback context from arena
     RpcCallbackContext* ctx = allocator::new(&self.arena, RpcCallbackContext);
@@ -521,8 +621,7 @@ fn bool DhtClient.send_ping(&self, common::NodeId target_id,
     char[2]? tid_opt = self.rpc_manager.create_transaction(
         krpc::QueryType.PING,
         target_id,
-        target_ip,
-        target_port,
+        target_addr,
         &rpc_response_callback,
         ctx
     );
@@ -544,11 +643,18 @@ fn bool DhtClient.send_ping(&self, common::NodeId target_id,
     defer free(message);
 
     // Send via UDP
-    String target_ip_str = ip_to_string(target_ip);
-    defer free(target_ip_str);
+    String target_addr_str = target_addr.to_string();
+    defer free(target_addr_str);
 
-    io::printfn("[DHT] Sending ping to %s:%d", target_ip_str, target_port);
-    self.socket.send(target_ip_str, (int)target_port,
+    io::printfn("[DHT] Sending ping to %s", target_addr_str);
+
+    // Extract IP string for socket.send
+    DString addr_builder;
+    addr_builder.appendf("%s", target_addr.addr);
+    String ip_str = addr_builder.copy_str(mem);
+    defer free(ip_str);
+
+    self.socket.send(ip_str, (int)target_addr.port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -558,13 +664,12 @@ fn bool DhtClient.send_ping(&self, common::NodeId target_id,
  * Send a find_node query to a node
  *
  * @param target_id Target node ID to query
- * @param target_ip Target IP address
- * @param target_port Target port
+ * @param target_addr Target socket address
  * @param search_id Node ID to search for
  * @return true if query was sent
  */
 fn bool DhtClient.send_find_node(&self, common::NodeId target_id,
-                                 common::Ipv4Addr target_ip, ushort target_port,
+                                 common::SocketAddress target_addr,
                                  common::NodeId search_id) @public => @pool()
 {
     // Create callback context from arena
@@ -583,8 +688,7 @@ fn bool DhtClient.send_find_node(&self, common::NodeId target_id,
     char[2]? tid_opt = self.rpc_manager.create_transaction(
         krpc::QueryType.FIND_NODE,
         target_id,
-        target_ip,
-        target_port,
+        target_addr,
         &rpc_response_callback,
         ctx
     );
@@ -601,16 +705,24 @@ fn bool DhtClient.send_find_node(&self, common::NodeId target_id,
     char[2] tid = tid_opt;
 
     // Encode the KRPC find_node query
+    // Request both IPv4 and IPv6 nodes (BEP 32)
     String tid_str = (String)((char*)&tid)[:2];
-    String message = krpc::encode_find_node_query(tid_str, self.our_id, search_id);
+    String message = krpc::encode_find_node_query(tid_str, self.our_id, search_id, true, true);
     defer free(message);
 
     // Send via UDP
-    String target_ip_str = ip_to_string(target_ip);
-    defer free(target_ip_str);
+    String target_addr_str = target_addr.to_string();
+    defer free(target_addr_str);
 
-    io::printfn("[DHT] Sending find_node to %s:%d", target_ip_str, target_port);
-    self.socket.send(target_ip_str, (int)target_port,
+    io::printfn("[DHT] Sending find_node to %s", target_addr_str);
+
+    // Extract IP string for socket.send
+    DString addr_builder;
+    addr_builder.appendf("%s", target_addr.addr);
+    String ip_str = addr_builder.copy_str(mem);
+    defer free(ip_str);
+
+    self.socket.send(ip_str, (int)target_addr.port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -627,7 +739,7 @@ fn bool DhtClient.send_find_node(&self, common::NodeId target_id,
  * @return true if query was sent
  */
 fn bool DhtClient.send_get_peers(&self, common::NodeId target_id,
-                                 common::Ipv4Addr target_ip, ushort target_port,
+                                 common::SocketAddress target_addr,
                                  common::InfoHash info_hash, void* search_context) @public => @pool()
 {
     // Create callback context from arena
@@ -646,8 +758,7 @@ fn bool DhtClient.send_get_peers(&self, common::NodeId target_id,
     char[2]? tid_opt = self.rpc_manager.create_transaction(
         krpc::QueryType.GET_PEERS,
         target_id,
-        target_ip,
-        target_port,
+        target_addr,
         &rpc_response_callback,
         ctx
     );
@@ -664,16 +775,24 @@ fn bool DhtClient.send_get_peers(&self, common::NodeId target_id,
     char[2] tid = tid_opt;
 
     // Encode the KRPC get_peers query
+    // Request both IPv4 and IPv6 nodes (BEP 32)
     String tid_str = (String)((char*)&tid)[:2];
-    String message = krpc::encode_get_peers_query(tid_str, self.our_id, info_hash);
+    String message = krpc::encode_get_peers_query(tid_str, self.our_id, info_hash, true, true);
     defer free(message);
 
     // Send via UDP
-    String target_ip_str = ip_to_string(target_ip);
-    defer free(target_ip_str);
+    String target_addr_str = target_addr.to_string();
+    defer free(target_addr_str);
 
-    io::printfn("[DHT] Sending get_peers to %s:%d", target_ip_str, target_port);
-    self.socket.send(target_ip_str, (int)target_port,
+    io::printfn("[DHT] Sending get_peers to %s", target_addr_str);
+
+    // Extract IP string for socket.send (TODO: Update UdpSocket to accept SocketAddress)
+    DString addr_builder;
+    addr_builder.appendf("%s", target_addr.addr);
+    String ip_str = addr_builder.copy_str(mem);
+    defer free(ip_str);
+
+    self.socket.send(ip_str, (int)target_addr.port,
               (char[])message, &on_udp_send, null);
 
     return true;
@@ -795,7 +914,7 @@ fn bool DhtClient.bootstrap(&self) @public
         for (int j = 0; j < 20; j++) dummy_id[j] = 0;
 
         // Send find_node query for our own ID
-        self.send_find_node(dummy_id, node.ip, node.port, self.our_id);
+        self.send_find_node(dummy_id, node.addr, self.our_id);
     }
 
     self.state = DhtState.RUNNING;

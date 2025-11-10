@@ -576,7 +576,7 @@ fn void test_encode_find_node_query() @test
     InfoHash target = create_test_node_id(0x50);
     char[2] tid = {0xAA, 0xBB};
 
-    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target);
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, false, false);
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
@@ -600,7 +600,7 @@ fn void test_encode_get_peers_query() @test
     InfoHash info_hash = create_test_node_id(0x90);
     char[2] tid = {0xCC, 0xDD};
 
-    String encoded = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash);
+    String encoded = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash, false, false);
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
@@ -712,7 +712,8 @@ fn void test_encode_find_node_response() @test
     node_info[24] = 0x1A; // Port: 6881 (big endian)
     node_info[25] = 0xE1;
 
-    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, node_info[..]);
+    char[] empty_nodes6 = {};
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, node_info[..], empty_nodes6);
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
@@ -735,7 +736,8 @@ fn void test_encode_find_node_response_multiple_nodes() @test
     char[78] nodes;
     for (usz i = 0; i < 78; i++) nodes[i] = (char)i;
 
-    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, nodes[..]);
+    char[] empty_nodes6 = {};
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, nodes[..], empty_nodes6);
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
@@ -801,8 +803,9 @@ fn void test_encode_get_peers_response_with_nodes() @test
     char[26] nodes;
     for (usz i = 0; i < 26; i++) nodes[i] = (char)(0x50 + i);
 
+    char[] empty_nodes6 = {};
     String encoded = krpc::encode_get_peers_response_with_nodes((String)tid[..], node_id,
-                                                                token, nodes[..]);
+                                                                token, nodes[..], empty_nodes6);
     defer free(encoded);
 
     BencodeValue* root = bencode::decode(encoded)!!;
@@ -1041,7 +1044,7 @@ fn void test_decode_find_node_query() @test
     InfoHash target = create_test_node_id(0x50);
     char[2] tid = {0xCC, 0xDD};
 
-    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target);
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, false, false);
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
@@ -1065,7 +1068,7 @@ fn void test_decode_get_peers_query() @test
     InfoHash info_hash = create_test_node_id(0x90);
     char[2] tid = {0xEE, 0xFF};
 
-    String encoded = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash);
+    String encoded = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash, false, false);
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
@@ -1176,7 +1179,8 @@ fn void test_decode_find_node_response() @test
     node_info[24] = 0x1A;
     node_info[25] = 0xE1;
 
-    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, node_info[..]);
+    char[] empty_nodes6 = {};
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, node_info[..], empty_nodes6);
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
@@ -1204,7 +1208,8 @@ fn void test_decode_find_node_response_multiple_nodes() @test
     char[78] nodes;
     for (usz i = 0; i < 78; i++) nodes[i] = (char)(i % 256);
 
-    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, nodes[..]);
+    char[] empty_nodes6 = {};
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, nodes[..], empty_nodes6);
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
@@ -1264,8 +1269,9 @@ fn void test_decode_get_peers_response_with_nodes() @test
     char[26] nodes;
     for (usz i = 0; i < 26; i++) nodes[i] = (char)(0x50 + i);
 
+    char[] empty_nodes6 = {};
     String encoded = krpc::encode_get_peers_response_with_nodes((String)tid[..], node_id,
-                                                                token, nodes[..]);
+                                                                token, nodes[..], empty_nodes6);
     defer free(encoded);
 
     krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.GET_PEERS)!!;
@@ -1557,7 +1563,7 @@ fn void test_roundtrip_find_node() @test
     char[2] tid = {0xCC, 0xDD};
 
     // Encode and decode query
-    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target);
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, false, false);
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
@@ -1580,7 +1586,7 @@ fn void test_roundtrip_get_peers() @test
     char[2] tid = {0xEE, 0xFF};
 
     // Encode and decode query
-    String encoded = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash);
+    String encoded = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash, false, false);
     defer free(encoded);
 
     krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
@@ -1646,4 +1652,666 @@ fn void test_roundtrip_error() @test
     assert(error.base.transaction_id[1] == tid[1], "Transaction ID byte 1 should match");
 
     io::printn("✓ Roundtrip: error message");
+}
+
+// ============================================================================
+// BEP 32: IPv6 Extension Tests ("want" parameter and "nodes6" field)
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// "want" Parameter Encoding Tests
+// ----------------------------------------------------------------------------
+
+fn void test_encode_find_node_query_want_ipv4_only() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+    char[2] tid = {0xAA, 0xBB};
+
+    // Request IPv4 only
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, true, false);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // Check "want" parameter
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* want_val = a_val.dict_get("want");
+    assert(want_val != null && want_val.type == bencode::BencodeType.LIST, "Should have 'want' list");
+    assert(want_val.list.len() == 1, "Should request 1 type (IPv4)");
+
+    BencodeValue* item = want_val.list.get(0);
+    assert(item.type == bencode::BencodeType.STRING, "Want item should be string");
+    assert((String)item.string == "n4", "Should request 'n4' (IPv4)");
+
+    io::printn("✓ Find node query with want IPv4 only");
+}
+
+fn void test_encode_find_node_query_want_ipv6_only() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+    char[2] tid = {0xCC, 0xDD};
+
+    // Request IPv6 only
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, false, true);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // Check "want" parameter
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* want_val = a_val.dict_get("want");
+    assert(want_val != null && want_val.type == bencode::BencodeType.LIST, "Should have 'want' list");
+    assert(want_val.list.len() == 1, "Should request 1 type (IPv6)");
+
+    BencodeValue* item = want_val.list.get(0);
+    assert((String)item.string == "n6", "Should request 'n6' (IPv6)");
+
+    io::printn("✓ Find node query with want IPv6 only");
+}
+
+fn void test_encode_find_node_query_want_both() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+    char[2] tid = {0xEE, 0xFF};
+
+    // Request both IPv4 and IPv6
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, true, true);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // Check "want" parameter
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* want_val = a_val.dict_get("want");
+    assert(want_val != null && want_val.type == bencode::BencodeType.LIST, "Should have 'want' list");
+    assert(want_val.list.len() == 2, "Should request 2 types (IPv4 + IPv6)");
+
+    BencodeValue* item0 = want_val.list.get(0);
+    BencodeValue* item1 = want_val.list.get(1);
+    assert((String)item0.string == "n4", "First item should be 'n4'");
+    assert((String)item1.string == "n6", "Second item should be 'n6'");
+
+    io::printn("✓ Find node query with want both IPv4 and IPv6");
+}
+
+fn void test_encode_find_node_query_want_neither() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+    char[2] tid = {0x11, 0x22};
+
+    // Request neither (backward compatible mode)
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, false, false);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // "want" parameter should be absent for backward compatibility
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* want_val = a_val.dict_get("want");
+    assert(want_val == null, "Should not have 'want' parameter when both false");
+
+    io::printn("✓ Find node query without want parameter (backward compatible)");
+}
+
+fn void test_encode_get_peers_query_want_both() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash info_hash = create_test_node_id(0x90);
+    char[2] tid = {0x33, 0x44};
+
+    // Request both IPv4 and IPv6
+    String encoded = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash, true, true);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // Check "want" parameter
+    BencodeValue* a_val = root.dict_get("a");
+    BencodeValue* want_val = a_val.dict_get("want");
+    assert(want_val != null && want_val.type == bencode::BencodeType.LIST, "Should have 'want' list");
+    assert(want_val.list.len() == 2, "Should request 2 types");
+
+    io::printn("✓ Get peers query with want parameter");
+}
+
+// ----------------------------------------------------------------------------
+// "want" Parameter Parsing Tests
+// ----------------------------------------------------------------------------
+
+fn void test_parse_find_node_args_want_default() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+
+    // Create query without "want" parameter (backward compatible)
+    char[20] node_id_bytes;
+    char[20] target_bytes;
+    for (usz i = 0; i < 20; i++) {
+        node_id_bytes[i] = node_id[i];
+        target_bytes[i] = target[i];
+    }
+
+    BencodeValue* args = bencode::@bdict(
+        "id", bencode::make_string((String)node_id_bytes[..]),
+        "target", bencode::make_string((String)target_bytes[..])
+    );
+    defer args.free();
+
+    krpc::FindNodeArgs* parsed = krpc::parse_find_node_args(args)!!;
+    defer free(parsed);
+
+    // Should default to IPv4 only for backward compatibility
+    assert(parsed.want_ipv4 == true, "Should default to wanting IPv4");
+    assert(parsed.want_ipv6 == false, "Should default to not wanting IPv6");
+
+    io::printn("✓ Parse find_node args: default want (IPv4 only)");
+}
+
+fn void test_parse_find_node_args_want_ipv4_only() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+
+    char[20] node_id_bytes;
+    char[20] target_bytes;
+    for (usz i = 0; i < 20; i++) {
+        node_id_bytes[i] = node_id[i];
+        target_bytes[i] = target[i];
+    }
+
+    BencodeValue* want_list = bencode::make_list();
+    want_list.list_append(bencode::make_string("n4"));
+
+    BencodeValue* args = bencode::@bdict(
+        "id", bencode::make_string((String)node_id_bytes[..]),
+        "target", bencode::make_string((String)target_bytes[..]),
+        "want", want_list
+    );
+    defer args.free();
+
+    krpc::FindNodeArgs* parsed = krpc::parse_find_node_args(args)!!;
+    defer free(parsed);
+
+    assert(parsed.want_ipv4 == true, "Should want IPv4");
+    assert(parsed.want_ipv6 == false, "Should not want IPv6");
+
+    io::printn("✓ Parse find_node args: want IPv4 only");
+}
+
+fn void test_parse_find_node_args_want_ipv6_only() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+
+    char[20] node_id_bytes;
+    char[20] target_bytes;
+    for (usz i = 0; i < 20; i++) {
+        node_id_bytes[i] = node_id[i];
+        target_bytes[i] = target[i];
+    }
+
+    BencodeValue* want_list = bencode::make_list();
+    want_list.list_append(bencode::make_string("n6"));
+
+    BencodeValue* args = bencode::@bdict(
+        "id", bencode::make_string((String)node_id_bytes[..]),
+        "target", bencode::make_string((String)target_bytes[..]),
+        "want", want_list
+    );
+    defer args.free();
+
+    krpc::FindNodeArgs* parsed = krpc::parse_find_node_args(args)!!;
+    defer free(parsed);
+
+    assert(parsed.want_ipv4 == false, "Should not want IPv4");
+    assert(parsed.want_ipv6 == true, "Should want IPv6");
+
+    io::printn("✓ Parse find_node args: want IPv6 only");
+}
+
+fn void test_parse_find_node_args_want_both() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+
+    char[20] node_id_bytes;
+    char[20] target_bytes;
+    for (usz i = 0; i < 20; i++) {
+        node_id_bytes[i] = node_id[i];
+        target_bytes[i] = target[i];
+    }
+
+    BencodeValue* want_list = bencode::make_list();
+    want_list.list_append(bencode::make_string("n4"));
+    want_list.list_append(bencode::make_string("n6"));
+
+    BencodeValue* args = bencode::@bdict(
+        "id", bencode::make_string((String)node_id_bytes[..]),
+        "target", bencode::make_string((String)target_bytes[..]),
+        "want", want_list
+    );
+    defer args.free();
+
+    krpc::FindNodeArgs* parsed = krpc::parse_find_node_args(args)!!;
+    defer free(parsed);
+
+    assert(parsed.want_ipv4 == true, "Should want IPv4");
+    assert(parsed.want_ipv6 == true, "Should want IPv6");
+
+    io::printn("✓ Parse find_node args: want both IPv4 and IPv6");
+}
+
+fn void test_parse_get_peers_args_want_both() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash info_hash = create_test_node_id(0x90);
+
+    char[20] node_id_bytes;
+    char[20] info_hash_bytes;
+    for (usz i = 0; i < 20; i++) {
+        node_id_bytes[i] = node_id[i];
+        info_hash_bytes[i] = info_hash[i];
+    }
+
+    BencodeValue* want_list = bencode::make_list();
+    want_list.list_append(bencode::make_string("n4"));
+    want_list.list_append(bencode::make_string("n6"));
+
+    BencodeValue* args = bencode::@bdict(
+        "id", bencode::make_string((String)node_id_bytes[..]),
+        "info_hash", bencode::make_string((String)info_hash_bytes[..]),
+        "want", want_list
+    );
+    defer args.free();
+
+    krpc::GetPeersArgs* parsed = krpc::parse_get_peers_args(args)!!;
+    defer free(parsed);
+
+    assert(parsed.want_ipv4 == true, "Should want IPv4");
+    assert(parsed.want_ipv6 == true, "Should want IPv6");
+
+    io::printn("✓ Parse get_peers args: want both");
+}
+
+// ----------------------------------------------------------------------------
+// "nodes6" Field Encoding Tests
+// ----------------------------------------------------------------------------
+
+fn void test_encode_find_node_response_with_nodes6_only() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0x55, 0x66};
+
+    // Create compact IPv6 node info (38 bytes: 20-byte ID + 16-byte IPv6 + 2-byte port)
+    char[38] node6_info;
+    // Node ID
+    for (usz i = 0; i < 20; i++) node6_info[i] = (char)(0x60 + i);
+    // IPv6 address: 2001:db8::1
+    node6_info[20] = 0x20;
+    node6_info[21] = 0x01;
+    node6_info[22] = 0x0d;
+    node6_info[23] = 0xb8;
+    for (usz i = 24; i < 34; i++) node6_info[i] = 0x00;
+    node6_info[34] = 0x00;
+    node6_info[35] = 0x01;
+    // Port: 6881 (big endian)
+    node6_info[36] = 0x1A;
+    node6_info[37] = 0xE1;
+
+    // Empty IPv4 nodes
+    char[] empty_nodes = {};
+
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, empty_nodes, node6_info[..]);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // Check response contains nodes6
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* nodes6_val = r_val.dict_get("nodes6");
+    assert(nodes6_val != null && nodes6_val.type == bencode::BencodeType.STRING, "Should have 'nodes6' field");
+    assert(nodes6_val.string.len == 38, "nodes6 should be 38 bytes");
+
+    io::printn("✓ Find node response with nodes6 only");
+}
+
+fn void test_encode_find_node_response_with_both_nodes_and_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0x77, 0x88};
+
+    // Create IPv4 node (26 bytes)
+    char[26] node4_info;
+    for (usz i = 0; i < 26; i++) node4_info[i] = (char)(0x40 + i);
+
+    // Create IPv6 node (38 bytes)
+    char[38] node6_info;
+    for (usz i = 0; i < 38; i++) node6_info[i] = (char)(0x60 + i);
+
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, node4_info[..], node6_info[..]);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // Check both nodes and nodes6 are present
+    BencodeValue* r_val = root.dict_get("r");
+
+    BencodeValue* nodes_val = r_val.dict_get("nodes");
+    assert(nodes_val != null && nodes_val.string.len == 26, "Should have 'nodes' (26 bytes)");
+
+    BencodeValue* nodes6_val = r_val.dict_get("nodes6");
+    assert(nodes6_val != null && nodes6_val.string.len == 38, "Should have 'nodes6' (38 bytes)");
+
+    io::printn("✓ Find node response with both nodes and nodes6");
+}
+
+fn void test_encode_find_node_response_with_multiple_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0x99, 0xAA};
+
+    // Create 3 IPv6 nodes (114 bytes total)
+    char[114] nodes6;
+    for (usz i = 0; i < 114; i++) nodes6[i] = (char)(i % 256);
+
+    char[] empty_nodes = {};
+
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, empty_nodes, nodes6[..]);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* nodes6_val = r_val.dict_get("nodes6");
+    assert(nodes6_val.string.len == 114, "Should have 114 bytes (3 IPv6 nodes)");
+
+    io::printn("✓ Find node response with multiple nodes6");
+}
+
+fn void test_encode_get_peers_response_with_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0xBB, 0xCC};
+    String token = "testtoken";
+
+    // Create IPv6 node (38 bytes)
+    char[38] nodes6;
+    for (usz i = 0; i < 38; i++) nodes6[i] = (char)(0x70 + i);
+
+    char[] empty_nodes = {};
+
+    String encoded = krpc::encode_get_peers_response_with_nodes((String)tid[..], node_id, token, empty_nodes, nodes6[..]);
+    defer free(encoded);
+
+    BencodeValue* root = bencode::decode(encoded)!!;
+    defer root.free();
+
+    // Check response contains nodes6
+    BencodeValue* r_val = root.dict_get("r");
+    BencodeValue* nodes6_val = r_val.dict_get("nodes6");
+    assert(nodes6_val != null && nodes6_val.string.len == 38, "Should have 'nodes6' (38 bytes)");
+
+    // Check token is present
+    BencodeValue* token_val = r_val.dict_get("token");
+    assert(token_val != null, "Token should be present");
+
+    io::printn("✓ Get peers response with nodes6");
+}
+
+// ----------------------------------------------------------------------------
+// "nodes6" Field Parsing Tests
+// ----------------------------------------------------------------------------
+
+fn void test_parse_find_node_response_with_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0xDD, 0xEE};
+
+    // Create IPv6 node (38 bytes)
+    char[38] node6_info;
+    for (usz i = 0; i < 38; i++) node6_info[i] = (char)(0x80 + i);
+
+    char[] empty_nodes = {};
+
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, empty_nodes, node6_info[..]);
+    defer free(encoded);
+
+    krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
+    defer response.free();
+
+    krpc::FindNodeResponse* data = (krpc::FindNodeResponse*)response.data;
+    assert(data.has_nodes6 == true, "Should have nodes6");
+    assert(data.nodes6.len == 38, "nodes6 should be 38 bytes");
+
+    // Verify content
+    for (usz i = 0; i < 38; i++)
+    {
+        assert(data.nodes6[i] == node6_info[i], "nodes6 content should match");
+    }
+
+    io::printn("✓ Parse find_node response with nodes6");
+}
+
+fn void test_parse_find_node_response_with_both_nodes_and_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0xFF, 0x00};
+
+    // Create IPv4 node (26 bytes)
+    char[26] node4_info;
+    for (usz i = 0; i < 26; i++) node4_info[i] = (char)(0x40 + i);
+
+    // Create IPv6 node (38 bytes)
+    char[38] node6_info;
+    for (usz i = 0; i < 38; i++) node6_info[i] = (char)(0x60 + i);
+
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, node4_info[..], node6_info[..]);
+    defer free(encoded);
+
+    krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
+    defer response.free();
+
+    krpc::FindNodeResponse* data = (krpc::FindNodeResponse*)response.data;
+
+    // Check IPv4 nodes
+    assert(data.nodes.len == 26, "Should have IPv4 nodes (26 bytes)");
+    for (usz i = 0; i < 26; i++)
+    {
+        assert(data.nodes[i] == node4_info[i], "IPv4 nodes should match");
+    }
+
+    // Check IPv6 nodes
+    assert(data.has_nodes6 == true, "Should have nodes6");
+    assert(data.nodes6.len == 38, "nodes6 should be 38 bytes");
+    for (usz i = 0; i < 38; i++)
+    {
+        assert(data.nodes6[i] == node6_info[i], "IPv6 nodes should match");
+    }
+
+    io::printn("✓ Parse find_node response with both nodes and nodes6");
+}
+
+fn void test_parse_find_node_response_invalid_nodes6_length() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0x11, 0x22};
+
+    char[20] node_id_bytes;
+    for (usz i = 0; i < 20; i++) node_id_bytes[i] = node_id[i];
+
+    // Create invalid nodes6 (37 bytes - not a multiple of 38)
+    char[37] invalid_nodes6;
+    for (usz i = 0; i < 37; i++) invalid_nodes6[i] = (char)i;
+
+    // Include valid nodes field (required for find_node response)
+    char[26] valid_nodes;
+    for (usz i = 0; i < 26; i++) valid_nodes[i] = (char)(0x50 + i);
+
+    BencodeValue* r_dict = bencode::@bdict(
+        "id", bencode::make_string((String)node_id_bytes[..]),
+        "nodes", bencode::make_string((String)valid_nodes[..]),
+        "nodes6", bencode::make_string((String)invalid_nodes6[..])
+    );
+
+    BencodeValue* root = bencode::@bdict(
+        "t", bencode::make_string((String)tid[..]),
+        "y", bencode::make_string("r"),
+        "r", r_dict
+    );
+    defer root.free();
+
+    String encoded = root.encode();
+    defer free(encoded);
+
+    krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
+    defer response.free();
+
+    krpc::FindNodeResponse* data = (krpc::FindNodeResponse*)response.data;
+
+    // Invalid length should be rejected, has_nodes6 should be false
+    assert(data.has_nodes6 == false, "Invalid nodes6 length should be rejected");
+
+    io::printn("✓ Parse find_node response: invalid nodes6 length is rejected");
+}
+
+fn void test_parse_get_peers_response_with_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0x33, 0x44};
+    String token = "aoeusnth";
+
+    // Create IPv6 node (38 bytes)
+    char[38] nodes6;
+    for (usz i = 0; i < 38; i++) nodes6[i] = (char)(0x90 + i);
+
+    char[] empty_nodes = {};
+
+    String encoded = krpc::encode_get_peers_response_with_nodes((String)tid[..], node_id, token, empty_nodes, nodes6[..]);
+    defer free(encoded);
+
+    krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.GET_PEERS)!!;
+    defer response.free();
+
+    krpc::GetPeersResponse* data = (krpc::GetPeersResponse*)response.data;
+    assert(data.has_nodes6 == true, "Should have nodes6");
+    assert(data.nodes6.len == 38, "nodes6 should be 38 bytes");
+    assert(data.token == token, "Token should match");
+
+    io::printn("✓ Parse get_peers response with nodes6");
+}
+
+// ----------------------------------------------------------------------------
+// IPv6 Roundtrip Tests
+// ----------------------------------------------------------------------------
+
+fn void test_roundtrip_find_node_with_want_parameter() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash target = create_test_node_id(0x50);
+    char[2] tid = {0x55, 0x66};
+
+    // Encode query with both IPv4 and IPv6 wanted
+    String encoded = krpc::encode_find_node_query((String)tid[..], node_id, target, true, true);
+    defer free(encoded);
+
+    // Decode query
+    krpc::KrpcQuery* query = krpc::decode_query(encoded)!!;
+    defer query.free();
+
+    // Verify want flags
+    krpc::FindNodeArgs* args = (krpc::FindNodeArgs*)query.args;
+    assert(args.want_ipv4 == true, "Should want IPv4");
+    assert(args.want_ipv6 == true, "Should want IPv6");
+
+    io::printn("✓ Roundtrip: find_node with want parameter");
+}
+
+fn void test_roundtrip_find_node_with_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x30);
+    char[2] tid = {0x77, 0x88};
+
+    // Create IPv4 and IPv6 nodes
+    char[26] nodes4;
+    for (usz i = 0; i < 26; i++) nodes4[i] = (char)(0x40 + i);
+
+    char[76] nodes6;  // 2 IPv6 nodes
+    for (usz i = 0; i < 76; i++) nodes6[i] = (char)(0x60 + i);
+
+    // Encode response
+    String encoded = krpc::encode_find_node_response((String)tid[..], node_id, nodes4[..], nodes6[..]);
+    defer free(encoded);
+
+    // Decode response
+    krpc::KrpcResponse* response = krpc::decode_response(encoded, QueryType.FIND_NODE)!!;
+    defer response.free();
+
+    // Verify both node types
+    krpc::FindNodeResponse* data = (krpc::FindNodeResponse*)response.data;
+    assert(data.nodes.len == 26, "Should have IPv4 nodes");
+    assert(data.has_nodes6 == true, "Should have nodes6 flag set");
+    assert(data.nodes6.len == 76, "Should have 2 IPv6 nodes (76 bytes)");
+
+    // Verify content matches
+    for (usz i = 0; i < 26; i++)
+    {
+        assert(data.nodes[i] == nodes4[i], "IPv4 nodes should match original");
+    }
+    for (usz i = 0; i < 76; i++)
+    {
+        assert(data.nodes6[i] == nodes6[i], "IPv6 nodes should match original");
+    }
+
+    io::printn("✓ Roundtrip: find_node response with nodes6");
+}
+
+fn void test_roundtrip_get_peers_with_want_and_nodes6() @test
+{
+    InfoHash node_id = create_test_node_id(0x10);
+    InfoHash info_hash = create_test_node_id(0x90);
+    char[2] tid = {0x99, 0xAA};
+
+    // Encode query with want parameter
+    String encoded_query = krpc::encode_get_peers_query((String)tid[..], node_id, info_hash, false, true);
+    defer free(encoded_query);
+
+    // Decode query and verify
+    krpc::KrpcQuery* query = krpc::decode_query(encoded_query)!!;
+    defer query.free();
+
+    krpc::GetPeersArgs* query_args = (krpc::GetPeersArgs*)query.args;
+    assert(query_args.want_ipv4 == false, "Should not want IPv4");
+    assert(query_args.want_ipv6 == true, "Should want IPv6");
+
+    // Encode response with nodes6
+    String token = "testtoken";
+    char[38] nodes6;
+    for (usz i = 0; i < 38; i++) nodes6[i] = (char)(0xA0 + i);
+    char[] empty_nodes = {};
+
+    String encoded_response = krpc::encode_get_peers_response_with_nodes((String)tid[..], node_id, token, empty_nodes, nodes6[..]);
+    defer free(encoded_response);
+
+    // Decode response and verify
+    krpc::KrpcResponse* response = krpc::decode_response(encoded_response, QueryType.GET_PEERS)!!;
+    defer response.free();
+
+    krpc::GetPeersResponse* response_data = (krpc::GetPeersResponse*)response.data;
+    assert(response_data.has_nodes6 == true, "Should have nodes6");
+    assert(response_data.nodes6.len == 38, "Should have 1 IPv6 node");
+    assert(response_data.token == token, "Token should match");
+
+    io::printn("✓ Roundtrip: get_peers with want parameter and nodes6");
 }

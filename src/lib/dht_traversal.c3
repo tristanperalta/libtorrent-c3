@@ -44,8 +44,7 @@ enum NodeState : char
 struct TraversalNode
 {
     common::NodeId id;           // Node ID
-    common::Ipv4Addr ip;         // IP address
-    ushort port;                 // Port number
+    common::SocketAddress addr;  // Socket address (IPv4 or IPv6)
     NodeState state;             // Current state
     int distance_exp;            // XOR distance exponent to target
 }
@@ -186,8 +185,7 @@ fn int Traversal.add_initial_nodes(&self, dht_routing_table::NodeEntry[] initial
 
         // Copy node data
         for (int j = 0; j < 20; j++) node.id[j] = initial_nodes[i].id[j];
-        for (int j = 0; j < 4; j++) node.ip[j] = initial_nodes[i].ip[j];
-        node.port = initial_nodes[i].port;
+        node.addr = initial_nodes[i].addr;
         node.state = NodeState.UNQUERIED;
         node.distance_exp = distance_exp(node.id, self.target);
 
@@ -202,11 +200,10 @@ fn int Traversal.add_initial_nodes(&self, dht_routing_table::NodeEntry[] initial
  * Add a discovered node to the traversal candidate list
  *
  * @param id Node ID
- * @param ip IP address
- * @param port Port number
+ * @param addr Socket address (IPv4 or IPv6)
  * @return true if node was added (not a duplicate)
  */
-fn bool Traversal.add_node(&self, common::NodeId id, common::Ipv4Addr ip, ushort port) @public
+fn bool Traversal.add_node(&self, common::NodeId id, common::SocketAddress addr) @public
 {
     // Check if node already exists
     if (find_node(self, id) >= 0) return false;
@@ -217,8 +214,7 @@ fn bool Traversal.add_node(&self, common::NodeId id, common::Ipv4Addr ip, ushort
     // Add node
     TraversalNode* node = &self.nodes[self.node_count];
     for (int i = 0; i < 20; i++) node.id[i] = id[i];
-    for (int i = 0; i < 4; i++) node.ip[i] = ip[i];
-    node.port = port;
+    node.addr = addr;
     node.state = NodeState.UNQUERIED;
     node.distance_exp = distance_exp(node.id, self.target);
 

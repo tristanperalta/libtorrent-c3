@@ -22,14 +22,16 @@ fn common::NodeId create_test_node_id(char seed)
 }
 
 // Helper function to create a test IP address
-fn common::Ipv4Addr create_test_ip(char a, char b, char c, char d)
+fn common::SocketAddress create_test_address(char a, char b, char c, char d, ushort port)
 {
-    common::Ipv4Addr ip;
-    ip[0] = a;
-    ip[1] = b;
-    ip[2] = c;
-    ip[3] = d;
-    return ip;
+    common::SocketAddress addr;
+    addr.addr.is_ipv6 = false;
+    addr.addr.ipv4.a = a;
+    addr.addr.ipv4.b = b;
+    addr.addr.ipv4.c = c;
+    addr.addr.ipv4.d = d;
+    addr.port = port;
+    return addr;
 }
 
 // ============================================================================
@@ -119,9 +121,9 @@ fn void test_add_single_node() @test
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress addr = create_test_address(192, 168, 1, 100, 6881);
 
-    bool added = table.add_node( node_id, ip, 6881, 100);
+    bool added = table.add_node(node_id, addr, 100);
     assert(added, "Should add first node successfully");
 
     int total, active;
@@ -142,8 +144,8 @@ fn void test_add_multiple_nodes() @test
     for (int i = 0; i < 5; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        bool added = table.add_node( node_id, ip, (ushort)(6881 + i), 100);
+        common::SocketAddress addr = create_test_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        bool added = table.add_node(node_id, addr, 100);
         assert(added, "Should add node successfully");
     }
 
@@ -161,15 +163,15 @@ fn void test_add_duplicate_node() @test
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
-    common::Ipv4Addr ip1 = create_test_ip(192, 168, 1, 100);
-    common::Ipv4Addr ip2 = create_test_ip(192, 168, 1, 200);
+    common::SocketAddress addr1 = create_test_address(192, 168, 1, 100, 6881);
+    common::SocketAddress addr2 = create_test_address(192, 168, 1, 200, 6882);
 
     // Add node first time
-    bool added1 = table.add_node( node_id, ip1, 6881, 100);
+    bool added1 = table.add_node(node_id, addr1, 100);
     assert(added1, "Should add node first time");
 
     // Add same node ID with different IP (update)
-    bool added2 = table.add_node( node_id, ip2, 6882, 150);
+    bool added2 = table.add_node(node_id, addr2, 150);
     assert(added2, "Should update existing node");
 
     int total, active;
@@ -185,10 +187,10 @@ fn void test_add_our_own_id() @test
     dht_routing_table::RoutingTable* table = dht_routing_table::create_routing_table(our_id, mem);
     defer table.free();
 
-    common::Ipv4Addr ip = create_test_ip(127, 0, 0, 1);
+    common::SocketAddress addr = create_test_address(127, 0, 0, 1, 6881);
 
     // Try to add our own ID
-    bool added = table.add_node( our_id, ip, 6881, 100);
+    bool added = table.add_node(our_id, addr, 100);
     assert(!added, "Should not add our own ID");
 
     int total, active;
@@ -213,8 +215,8 @@ fn void test_bucket_full() @test
         for (usz j = 0; j < 20; j++) node_id[j] = 0xFF;
         node_id[19] = (char)i;  // Make each unique
 
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        bool added = table.add_node( node_id, ip, (ushort)(6881 + i), 100);
+        common::SocketAddress addr = create_test_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        bool added = table.add_node(node_id, addr, 100);
         assert(added, "Should add node to bucket");
     }
 
@@ -227,8 +229,8 @@ fn void test_bucket_full() @test
     for (usz j = 0; j < 20; j++) node9[j] = 0xFF;
     node9[19] = 0x99;
 
-    common::Ipv4Addr ip9 = create_test_ip(192, 168, 1, 200);
-    bool added9 = table.add_node( node9, ip9, 6889, 100);
+    common::SocketAddress addr9 = create_test_address(192, 168, 1, 200, 6889);
+    bool added9 = table.add_node(node9, addr9, 100);
     assert(!added9, "Should not add 9th node (bucket full)");
 
     table.get_stats( &total, &active);
@@ -248,9 +250,9 @@ fn void test_node_failed() @test
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
+    common::SocketAddress addr = create_test_address(192, 168, 1, 100, 6881);
 
-    table.add_node( node_id, ip, 6881, 100);
+    table.add_node(node_id, addr, 100);
 
     // Mark node as failed
     table.node_failed( node_id);
@@ -278,8 +280,8 @@ fn void test_replace_failed_node() @test
         for (usz j = 0; j < 20; j++) node_id[j] = 0xFF;
         node_id[19] = (char)i;
 
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        table.add_node( node_id, ip, (ushort)(6881 + i), 100);
+        common::SocketAddress addr = create_test_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        table.add_node(node_id, addr, 100);
     }
 
     // Mark first node as failed 3 times (threshold)
@@ -297,8 +299,8 @@ fn void test_replace_failed_node() @test
     for (usz j = 0; j < 20; j++) new_node[j] = 0xFF;
     new_node[19] = 0xAA;
 
-    common::Ipv4Addr new_ip = create_test_ip(192, 168, 1, 250);
-    bool added = table.add_node( new_node, new_ip, 6899, 100);
+    common::SocketAddress new_addr = create_test_address(192, 168, 1, 250, 6899);
+    bool added = table.add_node(new_node, new_addr, 100);
     assert(added, "Should replace failed node");
 
     int total, active;
@@ -334,8 +336,8 @@ fn void test_find_closest_nodes_single() @test
     defer table.free();
 
     common::NodeId node_id = create_test_node_id(0x10);
-    common::Ipv4Addr ip = create_test_ip(192, 168, 1, 100);
-    table.add_node( node_id, ip, 6881, 100);
+    common::SocketAddress addr = create_test_address(192, 168, 1, 100, 6881);
+    table.add_node(node_id, addr, 100);
 
     common::NodeId target = create_test_node_id(0x50);
     dht_routing_table::NodeEntry[] closest = table.find_closest_nodes( target, 8);
@@ -356,8 +358,8 @@ fn void test_find_closest_nodes_multiple() @test
     for (int i = 0; i < 10; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        table.add_node( node_id, ip, (ushort)(6881 + i), 100);
+        common::SocketAddress addr = create_test_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        table.add_node(node_id, addr, 100);
     }
 
     common::NodeId target = create_test_node_id(0x50);
@@ -379,8 +381,8 @@ fn void test_find_closest_nodes_fewer_than_requested() @test
     for (int i = 0; i < 3; i++)
     {
         common::NodeId node_id = create_test_node_id((char)(0x10 + i * 10));
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        table.add_node( node_id, ip, (ushort)(6881 + i), 100);
+        common::SocketAddress addr = create_test_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i));
+        table.add_node(node_id, addr, 100);
     }
 
     common::NodeId target = create_test_node_id(0x50);
@@ -484,19 +486,19 @@ fn void test_routing_table_distance_coverage() @test
     common::NodeId node_0;
     for (usz i = 0; i < 20; i++) node_0[i] = 0;
     node_0[0] = 0x80;  // Flip bit 0
-    table.add_node(node_0, create_test_ip(192, 168, 1, 1), 6881, 100);
+    table.add_node(node_0, create_test_address(192, 168, 1, 1, 6881), 100);
 
     // Node at distance 2^5 (bit 5 differs)
     common::NodeId node_5;
     for (usz i = 0; i < 20; i++) node_5[i] = 0;
     node_5[0] = 0x04;  // Flip bit 5
-    table.add_node(node_5, create_test_ip(192, 168, 1, 2), 6882, 100);
+    table.add_node(node_5, create_test_address(192, 168, 1, 2, 6882), 100);
 
     // Node at distance 2^10 (bit 10 differs)
     common::NodeId node_10;
     for (usz i = 0; i < 20; i++) node_10[i] = 0;
     node_10[1] = 0x20;  // Flip bit 10 (byte 1, bit 2)
-    table.add_node(node_10, create_test_ip(192, 168, 1, 3), 6883, 100);
+    table.add_node(node_10, create_test_address(192, 168, 1, 3, 6883), 100);
 
     // Verify each added node is in the correct bucket
     int dist_0 = dht_routing_table::distance_exp(our_id, node_0);
@@ -536,8 +538,7 @@ fn void test_bucket_split_on_own_id_range() @test
         for (usz j = 0; j < 20; j++) node_id[j] = 0;
         node_id[19] = (char)(i + 1);  // Differ in last bits only
 
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        bool added = table.add_node(node_id, ip, (ushort)(6881 + i), 100);
+        bool added = table.add_node(node_id, create_test_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i)), 100);
         assert(added, "Should add node to our bucket");
     }
 
@@ -548,8 +549,7 @@ fn void test_bucket_split_on_own_id_range() @test
     for (usz j = 0; j < 20; j++) node_9[j] = 0;
     node_9[19] = 0x99;
 
-    common::Ipv4Addr ip_9 = create_test_ip(192, 168, 1, 250);
-    bool added_9 = table.add_node(node_9, ip_9, 6899, 100);
+    bool added_9 = table.add_node(node_9, create_test_address(192, 168, 1, 250, 6899), 100);
 
     int total, active;
     table.get_stats(&total, &active);
@@ -596,12 +596,12 @@ fn void test_bucket_maintains_lru_order() @test
     node_3[19] = 0x03;
 
     // Add in order: node_1, node_2, node_3
-    table.add_node(node_1, create_test_ip(192, 168, 1, 1), 6881, 100);
-    table.add_node(node_2, create_test_ip(192, 168, 1, 2), 6882, 100);
-    table.add_node(node_3, create_test_ip(192, 168, 1, 3), 6883, 100);
+    table.add_node(node_1, create_test_address(192, 168, 1, 1, 6881), 100);
+    table.add_node(node_2, create_test_address(192, 168, 1, 2, 6882), 100);
+    table.add_node(node_3, create_test_address(192, 168, 1, 3, 6883), 100);
 
     // Update node_1 (should move to end of LRU list - most recently seen)
-    table.add_node(node_1, create_test_ip(192, 168, 1, 1), 6881, 150);
+    table.add_node(node_1, create_test_address(192, 168, 1, 1, 6881), 150);
 
     // Find closest nodes - should return in some order
     // NOTE: This test documents expected LRU behavior but may not fail
@@ -638,8 +638,7 @@ fn void test_ping_before_eviction() @test
         for (usz j = 0; j < 20; j++) node_id[j] = 0xFF;
         node_id[19] = (char)i;
 
-        common::Ipv4Addr ip = create_test_ip(192, 168, 1, (char)(100 + i));
-        table.add_node(node_id, ip, (ushort)(6881 + i), 100);
+        table.add_node(node_id, create_test_address(192, 168, 1, (char)(100 + i), (ushort)(6881 + i)), 100);
     }
 
     // First node is the least-recently-seen (oldest)
@@ -658,7 +657,7 @@ fn void test_ping_before_eviction() @test
     for (usz j = 0; j < 20; j++) new_node[j] = 0xFF;
     new_node[19] = 0xAA;
 
-    bool added = table.add_node(new_node, create_test_ip(192, 168, 1, 250), 6899, 100);
+    bool added = table.add_node(new_node, create_test_address(192, 168, 1, 250, 6899), 100);
 
     // The paper says: PING least-recently-seen node, evict if fails to respond
     // Our implementation tracks failures via node_failed() calls

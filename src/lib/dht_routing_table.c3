@@ -4,6 +4,7 @@ import std::io;
 import std::time;
 import std::core::mem::allocator;
 import libtorrent::common;
+import libtorrent::dht_security;
 
 /**
  * DHT Routing Table Implementation (BEP 5)
@@ -43,12 +44,11 @@ faultdef DHT_INVALID_NODE;       // Invalid node data
  */
 struct NodeEntry {
     common::NodeId id;           // 20-byte Kademlia ID
-    common::Ipv4Addr ip;         // 4-byte IP address
-    ushort port;                 // Port number
+    common::SocketAddress addr;  // IPv4/IPv6 address and port
     long last_queried;           // Unix timestamp of last query
     ushort rtt_ms;               // Round-trip time in milliseconds
     char timeout_count;          // Number of consecutive failures (255 = never queried)
-    bool verified;               // Node ID verified (BEP 42 - not enforced yet)
+    bool verified;               // Node ID verified (BEP 42)
 }
 
 /**
@@ -68,6 +68,7 @@ struct RoutingTable {
     KBucket[NUM_BUCKETS] buckets;
     common::NodeId our_id;
     int num_active_buckets;      // Number of buckets with at least one node
+    bool enforce_bep42;          // Enable BEP 42 node ID verification (default: true)
 }
 
 // ============================================================================
@@ -170,9 +171,11 @@ fn int find_node_in_bucket(KBucket* bucket, common::NodeId id)
  *
  * @param our_id Our node ID (20 random bytes)
  * @param allocator Allocator to use for RoutingTable allocation (typically arena)
+ * @param enforce_bep42 Enable BEP 42 node ID verification (default: true)
  * @return Initialized routing table (allocated from allocator, caller manages lifetime)
  */
-fn RoutingTable* create_routing_table(common::NodeId our_id, Allocator allocator) @public
+fn RoutingTable* create_routing_table(common::NodeId our_id, Allocator allocator,
+                                      bool enforce_bep42 = true) @public
 {
     RoutingTable* table = allocator::new(allocator, RoutingTable);
 
@@ -190,6 +193,7 @@ fn RoutingTable* create_routing_table(common::NodeId our_id, Allocator allocator
     }
 
     table.num_active_buckets = 0;
+    table.enforce_bep42 = enforce_bep42;
 
     return table;
 }
@@ -214,13 +218,12 @@ fn void RoutingTable.free(&self) @public
  *
  * @param table Routing table
  * @param id Node ID
- * @param ip IP address
- * @param port Port number
+ * @param addr Socket address (IPv4 or IPv6)
  * @param rtt_ms Round-trip time in milliseconds
  * @return true if node was added/updated successfully
  */
-fn bool RoutingTable.add_node(&self, common::NodeId id, common::Ipv4Addr ip,
-                              ushort port, ushort rtt_ms) @public
+fn bool RoutingTable.add_node(&self, common::NodeId id, common::SocketAddress addr,
+                              ushort rtt_ms) @public
 {
     // Don't add ourselves
     bool is_our_id = true;
@@ -234,6 +237,21 @@ fn bool RoutingTable.add_node(&self, common::NodeId id, common::Ipv4Addr ip,
     }
     if (is_our_id) return false;
 
+    // BEP 42: Verify node ID (if enforcement enabled)
+    bool verified = false;
+    if (self.enforce_bep42)
+    {
+        // Verify node ID for both IPv4 and IPv6
+        verified = dht_security::verify_node_id_for_address(id, addr);
+        // Note: We mark as verified/unverified but still add the node
+        // Verified nodes are preferred during quality comparisons
+    }
+    else
+    {
+        // BEP 42 disabled - mark all nodes as verified
+        verified = true;
+    }
+
     // Find the appropriate bucket
     int bucket_idx = self.bucket_index(id);
     KBucket* bucket = &self.buckets[bucket_idx];
@@ -244,11 +262,11 @@ fn bool RoutingTable.add_node(&self, common::NodeId id, common::Ipv4Addr ip,
     {
         // Update existing node
         NodeEntry* node = &bucket.live_nodes[existing_idx];
-        for (int i = 0; i < 4; i++) node.ip[i] = ip[i];
-        node.port = port;
+        node.addr = addr;
         node.last_queried = (long)time::now().to_seconds();
         node.rtt_ms = rtt_ms;
         node.timeout_count = 0;  // Reset failures
+        node.verified = verified;  // Update verification status
         return true;
     }
 
@@ -258,12 +276,11 @@ fn bool RoutingTable.add_node(&self, common::NodeId id, common::Ipv4Addr ip,
         // Bucket has space
         NodeEntry* node = &bucket.live_nodes[bucket.live_count];
         for (int i = 0; i < 20; i++) node.id[i] = id[i];
-        for (int i = 0; i < 4; i++) node.ip[i] = ip[i];
-        node.port = port;
+        node.addr = addr;
         node.last_queried = (long)time::now().to_seconds();
         node.rtt_ms = rtt_ms;
         node.timeout_count = 0;
-        node.verified = false;
+        node.verified = verified;
 
         bucket.live_count++;
 
@@ -274,7 +291,7 @@ fn bool RoutingTable.add_node(&self, common::NodeId id, common::Ipv4Addr ip,
     }
 
     // Bucket is full - try to replace worst node
-    return try_replace_node(bucket, id, ip, port, rtt_ms);
+    return try_replace_node(bucket, id, addr, rtt_ms, verified);
 }
 
 /**
@@ -282,13 +299,13 @@ fn bool RoutingTable.add_node(&self, common::NodeId id, common::Ipv4Addr ip,
  *
  * @param bucket Full bucket
  * @param new_id New node ID
- * @param new_ip New IP
- * @param new_port New port
+ * @param new_addr New socket address
  * @param new_rtt New RTT
+ * @param verified BEP 42 verification status
  * @return true if replacement succeeded
  */
-fn bool try_replace_node(KBucket* bucket, common::NodeId new_id, common::Ipv4Addr new_ip,
-                         ushort new_port, ushort new_rtt)
+fn bool try_replace_node(KBucket* bucket, common::NodeId new_id, common::SocketAddress new_addr,
+                         ushort new_rtt, bool verified)
 {
     // Find the node with highest timeout_count
     int worst_idx = -1;
@@ -308,12 +325,11 @@ fn bool try_replace_node(KBucket* bucket, common::NodeId new_id, common::Ipv4Add
     {
         NodeEntry* node = &bucket.live_nodes[worst_idx];
         for (int i = 0; i < 20; i++) node.id[i] = new_id[i];
-        for (int i = 0; i < 4; i++) node.ip[i] = new_ip[i];
-        node.port = new_port;
+        node.addr = new_addr;
         node.last_queried = (long)time::now().to_seconds();
         node.rtt_ms = new_rtt;
         node.timeout_count = 0;
-        node.verified = false;
+        node.verified = verified;
         return true;
     }
 
@@ -322,12 +338,11 @@ fn bool try_replace_node(KBucket* bucket, common::NodeId new_id, common::Ipv4Add
     {
         NodeEntry* node = &bucket.replacements[bucket.replacement_count];
         for (int i = 0; i < 20; i++) node.id[i] = new_id[i];
-        for (int i = 0; i < 4; i++) node.ip[i] = new_ip[i];
-        node.port = new_port;
+        node.addr = new_addr;
         node.last_queried = (long)time::now().to_seconds();
         node.rtt_ms = new_rtt;
         node.timeout_count = 0;
-        node.verified = false;
+        node.verified = verified;
         bucket.replacement_count++;
     }
 

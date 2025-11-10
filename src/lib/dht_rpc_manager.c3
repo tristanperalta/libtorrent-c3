@@ -73,16 +73,15 @@ enum TransactionState : char
  */
 struct Transaction
 {
-    char[2] transaction_id;       // 2-byte transaction ID
-    krpc::QueryType query_type;   // Type of query (ping, find_node, etc.)
-    common::NodeId target_id;     // Target node ID
-    common::Ipv4Addr target_ip;   // Target IP address
-    ushort target_port;           // Target port
-    long sent_time;               // Unix timestamp when request was sent
-    TransactionCallback callback; // Callback to invoke on response/timeout
-    void* userdata;               // User data passed to callback
-    TransactionState state;       // Current transaction state
-    char retry_count;             // Number of retries attempted
+    char[2] transaction_id;          // 2-byte transaction ID
+    krpc::QueryType query_type;      // Type of query (ping, find_node, etc.)
+    common::NodeId target_id;        // Target node ID
+    common::SocketAddress target_addr;  // Target socket address (IPv4 or IPv6)
+    long sent_time;                  // Unix timestamp when request was sent
+    TransactionCallback callback;    // Callback to invoke on response/timeout
+    void* userdata;                  // User data passed to callback
+    TransactionState state;          // Current transaction state
+    char retry_count;                // Number of retries attempted
 }
 
 /**
@@ -199,15 +198,14 @@ fn int RpcManager.find_transaction(&self, String tid)
  * @param mgr RPC manager
  * @param query_type Type of query
  * @param target_id Target node ID
- * @param target_ip Target IP address
- * @param target_port Target port
+ * @param target_addr Target socket address
  * @param callback Callback to invoke on response/timeout
  * @param userdata User data passed to callback
  * @return Transaction ID (2 bytes), or fault if table is full
  */
 fn char[2]? RpcManager.create_transaction(&self, krpc::QueryType query_type,
-                                          common::NodeId target_id, common::Ipv4Addr target_ip,
-                                          ushort target_port, TransactionCallback callback,
+                                          common::NodeId target_id, common::SocketAddress target_addr,
+                                          TransactionCallback callback,
                                           void* userdata) @public
 {
     // Check if transaction table is full
@@ -226,8 +224,7 @@ fn char[2]? RpcManager.create_transaction(&self, krpc::QueryType query_type,
     txn.transaction_id[1] = tid[1];
     txn.query_type = query_type;
     for (int i = 0; i < 20; i++) txn.target_id[i] = target_id[i];
-    for (int i = 0; i < 4; i++) txn.target_ip[i] = target_ip[i];
-    txn.target_port = target_port;
+    txn.target_addr = target_addr;
     txn.sent_time = (long)time::now().to_seconds();
     txn.callback = callback;
     txn.userdata = userdata;

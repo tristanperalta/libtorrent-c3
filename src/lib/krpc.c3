@@ -41,10 +41,15 @@ faultdef KRPC_INVALID_TRANSACTION;  // Invalid transaction ID
 
 const usz TRANSACTION_ID_LEN = 2;    // Transaction IDs are typically 2 bytes
 const usz NODE_ID_LEN = 20;          // Node IDs are 160 bits (20 bytes)
-const usz NODE_INFO_LEN = 26;        // Compact node info: 20-byte ID + 6-byte address
+const usz NODE_INFO_LEN = 26;        // Compact node info: 20-byte ID + 4-byte IPv4 + 2-byte port
+const usz NODE_INFO_IPV6_LEN = 38;   // Compact IPv6 node info: 20-byte ID + 16-byte IPv6 + 2-byte port
 const usz PEER_INFO_LEN = 6;         // Compact peer info: 4-byte IP + 2-byte port
 
 const String CLIENT_VERSION = "LC01";  // "LC" = libtorrent-c3, version 01
+
+// BEP 32: IPv6 DHT extension - "want" parameter values
+const String WANT_IPV4 = "n4";       // Request IPv4 nodes in "nodes" field
+const String WANT_IPV6 = "n6";       // Request IPv6 nodes in "nodes6" field
 
 // ============================================================================
 // Type Aliases
@@ -138,6 +143,8 @@ struct KrpcError {
  */
 struct FindNodeArgs {
     InfoHash target;           // ID of node being sought
+    bool want_ipv4;           // Request IPv4 nodes (default: true)
+    bool want_ipv6;           // Request IPv6 nodes (default: false)
 }
 
 /**
@@ -145,6 +152,8 @@ struct FindNodeArgs {
  */
 struct GetPeersArgs {
     InfoHash info_hash;        // Torrent info hash
+    bool want_ipv4;           // Request IPv4 nodes (default: true)
+    bool want_ipv6;           // Request IPv6 nodes (default: false)
 }
 
 /**
@@ -165,7 +174,9 @@ struct AnnouncePeerArgs {
  * find_node response data
  */
 struct FindNodeResponse {
-    char[] nodes;              // Compact node info (26 bytes per node)
+    char[] nodes;              // Compact IPv4 node info (26 bytes per node)
+    char[] nodes6;             // Compact IPv6 node info (38 bytes per node)
+    bool has_nodes6;           // True if nodes6 field is present
 }
 
 /**
@@ -175,9 +186,11 @@ struct FindNodeResponse {
 struct GetPeersResponse {
     String token;              // Opaque token (required for announce_peer)
     char[] values;             // Compact peer info (6 bytes per peer) - empty if no peers
-    char[] nodes;              // Compact node info (26 bytes per node) - empty if no nodes
+    char[] nodes;              // Compact IPv4 node info (26 bytes per node) - empty if no nodes
+    char[] nodes6;             // Compact IPv6 node info (38 bytes per node)
     bool has_values;           // True if values field is present
     bool has_nodes;            // True if nodes field is present
+    bool has_nodes6;           // True if nodes6 field is present
 }
 
 // ============================================================================
@@ -253,12 +266,14 @@ fn void KrpcResponse.free(&self) @public
             case QueryType.FIND_NODE:
                 FindNodeResponse* data = (FindNodeResponse*)self.data;
                 if (data.nodes.len > 0) free(data.nodes);
+                if (data.has_nodes6 && data.nodes6.len > 0) free(data.nodes6);
                 free(data);
             case QueryType.GET_PEERS:
                 GetPeersResponse* data = (GetPeersResponse*)self.data;
                 if (data.token.len > 0) free(data.token);
                 if (data.values.len > 0) free(data.values);
                 if (data.nodes.len > 0) free(data.nodes);
+                if (data.has_nodes6 && data.nodes6.len > 0) free(data.nodes6);
                 free(data);
             default:
                 // ping and announce_peer have no additional data
@@ -601,13 +616,30 @@ fn String encode_ping_query(String transaction_id, InfoHash node_id) @public
  * @param target Target node ID being sought (20 bytes)
  * @return Bencode-encoded query message (caller must free)
  */
-fn String encode_find_node_query(String transaction_id, InfoHash node_id, InfoHash target) @public
+fn String encode_find_node_query(String transaction_id, InfoHash node_id, InfoHash target,
+                                 bool want_ipv4, bool want_ipv6) @public
 {
-    BencodeValue* msg = bencode::@bdict_wrap(
-        "a", bencode::@bdict_wrap(
+    // Build "want" list based on flags (ownership transferred to args_dict)
+    BencodeValue* args_dict;
+    if (want_ipv4 || want_ipv6) {
+        BencodeValue* want_list = bencode::make_list();
+        if (want_ipv4) want_list.list_append(bencode::make_string(WANT_IPV4));
+        if (want_ipv6) want_list.list_append(bencode::make_string(WANT_IPV6));
+
+        args_dict = bencode::@bdict_wrap(
+            "id", bencode::make_string((String)node_id[..]),
+            "target", bencode::make_string((String)target[..]),
+            "want", want_list  // Ownership transferred, no need to free
+        );
+    } else {
+        args_dict = bencode::@bdict_wrap(
             "id", bencode::make_string((String)node_id[..]),
             "target", bencode::make_string((String)target[..])
-        ),
+        );
+    }
+
+    BencodeValue* msg = bencode::@bdict_wrap(
+        "a", args_dict,
         "q", "find_node",
         "t", bencode::make_string(transaction_id),
         "v", CLIENT_VERSION,
@@ -625,13 +657,30 @@ fn String encode_find_node_query(String transaction_id, InfoHash node_id, InfoHa
  * @param info_hash Torrent info hash (20 bytes)
  * @return Bencode-encoded query message (caller must free)
  */
-fn String encode_get_peers_query(String transaction_id, InfoHash node_id, InfoHash info_hash) @public
+fn String encode_get_peers_query(String transaction_id, InfoHash node_id, InfoHash info_hash,
+                                 bool want_ipv4, bool want_ipv6) @public
 {
-    BencodeValue* msg = bencode::@bdict_wrap(
-        "a", bencode::@bdict_wrap(
+    // Build "want" list based on flags (ownership transferred to args_dict)
+    BencodeValue* args_dict;
+    if (want_ipv4 || want_ipv6) {
+        BencodeValue* want_list = bencode::make_list();
+        if (want_ipv4) want_list.list_append(bencode::make_string(WANT_IPV4));
+        if (want_ipv6) want_list.list_append(bencode::make_string(WANT_IPV6));
+
+        args_dict = bencode::@bdict_wrap(
+            "id", bencode::make_string((String)node_id[..]),
+            "info_hash", bencode::make_string((String)info_hash[..]),
+            "want", want_list  // Ownership transferred, no need to free
+        );
+    } else {
+        args_dict = bencode::@bdict_wrap(
             "id", bencode::make_string((String)node_id[..]),
             "info_hash", bencode::make_string((String)info_hash[..])
-        ),
+        );
+    }
+
+    BencodeValue* msg = bencode::@bdict_wrap(
+        "a", args_dict,
         "q", "get_peers",
         "t", bencode::make_string(transaction_id),
         "v", CLIENT_VERSION,
@@ -702,13 +751,26 @@ fn String encode_ping_response(String transaction_id, InfoHash node_id) @public
  * @param nodes Compact node info (26 bytes per node: 20-byte ID + 6-byte address)
  * @return Bencode-encoded response message (caller must free)
  */
-fn String encode_find_node_response(String transaction_id, InfoHash node_id, char[] nodes) @public
+fn String encode_find_node_response(String transaction_id, InfoHash node_id, char[] nodes, char[] nodes6) @public
 {
-    BencodeValue* msg = bencode::@bdict_wrap(
-        "r", bencode::@bdict_wrap(
+    BencodeValue* r_dict;
+    if (nodes6.len > 0) {
+        // Include both nodes and nodes6
+        r_dict = bencode::@bdict_wrap(
+            "id", bencode::make_string((String)node_id[..]),
+            "nodes", bencode::make_string((String)nodes),
+            "nodes6", bencode::make_string((String)nodes6)
+        );
+    } else {
+        // IPv4 only
+        r_dict = bencode::@bdict_wrap(
             "id", bencode::make_string((String)node_id[..]),
             "nodes", bencode::make_string((String)nodes)
-        ),
+        );
+    }
+
+    BencodeValue* msg = bencode::@bdict_wrap(
+        "r", r_dict,
         "t", bencode::make_string(transaction_id),
         "v", CLIENT_VERSION,
         "y", "r"
@@ -769,14 +831,28 @@ fn String encode_get_peers_response_with_values(String transaction_id, InfoHash 
  * @return Bencode-encoded response message (caller must free)
  */
 fn String encode_get_peers_response_with_nodes(String transaction_id, InfoHash node_id,
-                                               String token, char[] nodes) @public
+                                               String token, char[] nodes, char[] nodes6) @public
 {
-    BencodeValue* msg = bencode::@bdict_wrap(
-        "r", bencode::@bdict_wrap(
+    BencodeValue* r_dict;
+    if (nodes6.len > 0) {
+        // Include both nodes and nodes6
+        r_dict = bencode::@bdict_wrap(
+            "id", bencode::make_string((String)node_id[..]),
+            "nodes", bencode::make_string((String)nodes),
+            "nodes6", bencode::make_string((String)nodes6),
+            "token", bencode::make_string(token)
+        );
+    } else {
+        // IPv4 only
+        r_dict = bencode::@bdict_wrap(
             "id", bencode::make_string((String)node_id[..]),
             "nodes", bencode::make_string((String)nodes),
             "token", bencode::make_string(token)
-        ),
+        );
+    }
+
+    BencodeValue* msg = bencode::@bdict_wrap(
+        "r", r_dict,
         "t", bencode::make_string(transaction_id),
         "v", CLIENT_VERSION,
         "y", "r"
@@ -890,6 +966,29 @@ fn FindNodeArgs*? parse_find_node_args(BencodeValue* args_dict)
     FindNodeArgs* args = mem::new(FindNodeArgs);
     foreach (i, c : target_val.string) args.target[i] = c;
 
+    // Parse "want" parameter (BEP 32)
+    // Default: IPv4 only (for backward compatibility)
+    args.want_ipv4 = true;
+    args.want_ipv6 = false;
+
+    BencodeValue* want_val = args_dict.dict_get("want");
+    if (want_val != null && want_val.type == bencode::BencodeType.LIST)
+    {
+        // Reset defaults - will be set based on list contents
+        args.want_ipv4 = false;
+        args.want_ipv6 = false;
+
+        for (usz i = 0; i < want_val.list.len(); i++)
+        {
+            BencodeValue* item = want_val.list.get(i);
+            if (item.type == bencode::BencodeType.STRING)
+            {
+                if (item.string == WANT_IPV4) args.want_ipv4 = true;
+                if (item.string == WANT_IPV6) args.want_ipv6 = true;
+            }
+        }
+    }
+
     return args;
 }
 
@@ -908,6 +1007,29 @@ fn GetPeersArgs*? parse_get_peers_args(BencodeValue* args_dict)
 
     GetPeersArgs* args = mem::new(GetPeersArgs);
     foreach (i, c : info_hash_val.string) args.info_hash[i] = c;
+
+    // Parse "want" parameter (BEP 32)
+    // Default: IPv4 only (for backward compatibility)
+    args.want_ipv4 = true;
+    args.want_ipv6 = false;
+
+    BencodeValue* want_val = args_dict.dict_get("want");
+    if (want_val != null && want_val.type == bencode::BencodeType.LIST)
+    {
+        // Reset defaults - will be set based on list contents
+        args.want_ipv4 = false;
+        args.want_ipv6 = false;
+
+        for (usz i = 0; i < want_val.list.len(); i++)
+        {
+            BencodeValue* item = want_val.list.get(i);
+            if (item.type == bencode::BencodeType.STRING)
+            {
+                if (item.string == WANT_IPV4) args.want_ipv4 = true;
+                if (item.string == WANT_IPV6) args.want_ipv6 = true;
+            }
+        }
+    }
 
     return args;
 }
@@ -964,10 +1086,25 @@ fn FindNodeResponse*? parse_find_node_response(BencodeValue* r_dict)
 
     FindNodeResponse* response = mem::new(FindNodeResponse);
 
-    // Copy nodes data
+    // Copy IPv4 nodes data
     char[] nodes_copy = mem::new_array(char, nodes_val.string.len);
     foreach (i, c : nodes_val.string) nodes_copy[i] = c;
     response.nodes = nodes_copy;
+
+    // Parse "nodes6" field (BEP 32) - optional
+    response.has_nodes6 = false;
+    BencodeValue* nodes6_val = r_dict.dict_get("nodes6");
+    if (nodes6_val != null && nodes6_val.type == bencode::BencodeType.STRING)
+    {
+        // Validate nodes6 length is multiple of 38
+        if (nodes6_val.string.len % NODE_INFO_IPV6_LEN == 0)
+        {
+            char[] nodes6_copy = mem::new_array(char, nodes6_val.string.len);
+            foreach (i, c : nodes6_val.string) nodes6_copy[i] = c;
+            response.nodes6 = nodes6_copy;
+            response.has_nodes6 = true;
+        }
+    }
 
     return response;
 }
@@ -1022,10 +1159,12 @@ fn GetPeersResponse*? parse_get_peers_response(BencodeValue* r_dict)
         response.values = values_copy;
         response.has_values = true;
         response.has_nodes = false;
+        response.has_nodes6 = false;
         return response;
     }
 
-    // Check for nodes (node list)
+    // Check for nodes (IPv4 node list)
+    response.has_nodes = false;
     BencodeValue* nodes_val = r_dict.dict_get("nodes");
     if (nodes_val != null && nodes_val.type == bencode::BencodeType.STRING)
     {
@@ -1041,12 +1180,31 @@ fn GetPeersResponse*? parse_get_peers_response(BencodeValue* r_dict)
         response.nodes = nodes_copy;
         response.has_values = false;
         response.has_nodes = true;
-        return response;
     }
 
-    // Must have either values or nodes
-    free(response);
-    return KRPC_INVALID_MESSAGE?;
+    // Check for nodes6 (IPv6 node list) - BEP 32
+    response.has_nodes6 = false;
+    BencodeValue* nodes6_val = r_dict.dict_get("nodes6");
+    if (nodes6_val != null && nodes6_val.type == bencode::BencodeType.STRING)
+    {
+        // Validate nodes6 length is multiple of 38
+        if (nodes6_val.string.len % NODE_INFO_IPV6_LEN == 0)
+        {
+            char[] nodes6_copy = mem::new_array(char, nodes6_val.string.len);
+            foreach (i, c : nodes6_val.string) nodes6_copy[i] = c;
+            response.nodes6 = nodes6_copy;
+            response.has_nodes6 = true;
+        }
+    }
+
+    // Must have either values, nodes, or nodes6
+    if (!response.has_nodes && !response.has_nodes6)
+    {
+        free(response);
+        return KRPC_INVALID_MESSAGE?;
+    }
+
+    return response;
 }
 
 /**

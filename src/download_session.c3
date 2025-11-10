@@ -1496,8 +1496,7 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
     {
         ctx.dht_client.send_get_peers(
             nodes[i].id,
-            nodes[i].ip,
-            nodes[i].port,
+            nodes[i].addr,
             ctx.torrent.info_hash,
             ctx.dht_search
         );
