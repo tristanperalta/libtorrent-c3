@@ -788,6 +788,17 @@ fn void PeerPool.add_peers_from_dht(&self, common::SocketAddress[] peers) @publi
 }
 
 <*
+ Convenience wrapper for add_peers() with LSD source.
+ Used by BEP 14 (Local Service Discovery) to add discovered peers.
+
+ @param peers : "Array of peer addresses from LSD"
+*>
+fn void PeerPool.add_peers_from_lsd(&self, common::SocketAddress[] peers) @public
+{
+    self.add_peers(peers, common::PeerSource.LSD);
+}
+
+<*
  Find peer by address:port (BEP 7: dual-stack).
 
  @param addr : "Peer address (IPv4 or IPv6)"

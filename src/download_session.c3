@@ -23,6 +23,7 @@ import async::timer;
 import libtorrent::peer_pool;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
+import libtorrent::lsd;
 import libtorrent::webseed;
 import libtorrent::httpseed;
 import libtorrent::event_bus;
@@ -118,6 +119,11 @@ struct DownloadContext
     async::timer::Timer* dht_check_timer;   // One-shot timer for checking DHT results
     async::timer::Timer* dht_tick_timer;    // RPC timeout processing timer
     bool dht_enabled;
+
+    // LSD peer discovery (BEP 14)
+    libtorrent::lsd::LsdManager* lsd_mgr;   // Local Service Discovery manager
+    async::timer::Timer* lsd_timer;         // Periodic LSD announcements (every 5 minutes)
+    bool lsd_enabled;
 
     // Web seeding (BEP 19)
     webseed::WebSeedManager* webseed_mgr;   // HTTP/FTP web seed manager
@@ -313,6 +319,14 @@ fn void on_complete_download(DownloadContext* ctx) @public
         ctx.dht_search.free();
         ctx.dht_search = null;
     }
+
+    // Stop LSD announcements (no longer needed in seeding mode)
+    if (ctx.lsd_timer)
+    {
+        ctx.lsd_timer.close();
+        ctx.lsd_timer = null;
+    }
+    // Keep LSD manager active to respond to announcements from other peers
 
     // Event loop continues running - client now seeds until user presses Ctrl+C
 }
@@ -1656,6 +1670,101 @@ fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @publi
 }
 
 <*
+ Callback for LSD peer discovery.
+ Called when LSD discovers peers on the local network.
+
+ @param infohash : "Info hash of the torrent"
+ @param peers : "Array of discovered peer addresses"
+ @param user_data : "DownloadContext pointer"
+*>
+fn void on_lsd_peers_discovered(common::InfoHash* infohash, common::SocketAddress[] peers, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    io::printfn("[LSD] Discovered %d peer(s) on local network", peers.len);
+
+    // Add peers to the peer pool
+    ctx.peer_pool.add_peers_from_lsd(peers);
+
+    // Try to connect to new peers
+    ctx.peer_pool.connect_to_peers();
+}
+
+<*
+ Timer callback for periodic LSD announcements (every 5 minutes).
+
+ @param timer : "Timer that fired"
+ @param user_data : "DownloadContext pointer"
+*>
+fn void on_lsd_timer_tick(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (!ctx.lsd_enabled || !ctx.lsd_mgr) return;
+
+    // Announce this torrent on the LAN
+    // Note: Port should be the BitTorrent listening port (6881 is typical)
+    // In a real implementation, this should come from configuration
+    ushort bt_port = 6881;
+
+    ctx.lsd_mgr.announce(&ctx.torrent.info_hash, bt_port);
+
+    io::printfn("[LSD] Announced torrent on local network");
+}
+
+<*
+ Initialize LSD (Local Service Discovery) for peer discovery.
+ BEP 14: Discovers peers on the local network via UDP multicast.
+
+ @param ctx : "Download context"
+*>
+fn void init_lsd(download_session::DownloadContext* ctx) @public
+{
+    // Check if torrent is private (BEP 27: private torrents must not use LSD)
+    if (ctx.torrent.info.private)
+    {
+        io::printfn("[LSD] Torrent is private - LSD disabled per BEP 27");
+        ctx.lsd_enabled = false;
+        return;
+    }
+
+    // Create LSD manager
+    lsd::LsdManager*? mgr_opt = lsd::create(&on_lsd_peers_discovered, ctx);
+    if (catch err = mgr_opt)
+    {
+        io::eprintfn("[LSD] Failed to create LSD manager");
+        ctx.lsd_enabled = false;
+        return;
+    }
+
+    ctx.lsd_mgr = mgr_opt;
+    ctx.lsd_enabled = true;
+
+    io::printfn("[LSD] Starting Local Service Discovery (BEP 14)");
+
+    // Start LSD
+    ctx.lsd_mgr.start(ctx.loop);
+
+    // Set up periodic announce timer (every 5 minutes per BEP 14)
+    async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
+    if (catch err = timer_opt)
+    {
+        io::eprintfn("[LSD] Warning: Failed to create LSD timer");
+    }
+    else
+    {
+        ctx.lsd_timer = timer_opt;
+        // 300000ms = 5 minutes (BEP 14 spec)
+        ctx.lsd_timer.start(300000, 300000, &on_lsd_timer_tick, ctx);
+    }
+
+    // Do initial announce
+    ushort bt_port = 6881;
+    ctx.lsd_mgr.announce(&ctx.torrent.info_hash, bt_port);
+    io::printfn("[LSD] Initial announce sent");
+}
+
+<*
  Callback for torrent file load completion.
 *>
 fn void on_download_load_complete(String data, int status, void* user_data) @public
@@ -1840,6 +1949,11 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         io::printfn("[DHT] Skipping DHT initialization for private torrent (BEP 27)");
         ctx.dht_enabled = false;
     }
+    io::printfn("");
+
+    // Initialize LSD for local peer discovery (BEP 14)
+    // Also skipped for private torrents per BEP 27
+    init_lsd(ctx);
     io::printfn("");
 
     // Initialize web seeding (BEP 19)
