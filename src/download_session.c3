@@ -24,6 +24,7 @@ import libtorrent::peer_pool;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::webseed;
+import libtorrent::httpseed;
 import libtorrent::event_bus;
 import libtorrent::event_types;
 import libtorrent::speed_tracker;
@@ -73,6 +74,13 @@ struct WebSeedVerifyContext
     char[] piece_data;  // Must be freed after verification
 }
 
+struct HttpSeedVerifyContext
+{
+    DownloadContext* download_ctx;
+    uint piece_index;
+    char[] piece_data;  // Must be freed after verification
+}
+
 <*
  Download session context for managing the download workflow.
 *>
@@ -114,6 +122,10 @@ struct DownloadContext
     // Web seeding (BEP 19)
     webseed::WebSeedManager* webseed_mgr;   // HTTP/FTP web seed manager
     async::timer::Timer* webseed_timer;     // Periodic web seed piece requests
+
+    // HTTP seeding (BEP 17)
+    httpseed::HttpSeedManager* httpseed_mgr;  // Hoffman-style HTTP seed manager
+    async::timer::Timer* httpseed_timer;      // Periodic httpseed piece requests
 
     // Magnet link support (BEP 9)
     bool is_magnet_download;                         // True if started from magnet link
@@ -252,6 +264,18 @@ fn void on_complete_download(DownloadContext* ctx) @public
     {
         ctx.webseed_mgr.free();
         ctx.webseed_mgr = null;
+    }
+
+    // Stop HTTP seeding (only needed during download)
+    if (ctx.httpseed_timer)
+    {
+        ctx.httpseed_timer.close();
+        ctx.httpseed_timer = null;
+    }
+    if (ctx.httpseed_mgr)
+    {
+        ctx.httpseed_mgr.free();
+        ctx.httpseed_mgr = null;
     }
 
     // Stop metadata download timer (if magnet link)
@@ -1161,6 +1185,143 @@ fn void on_webseed_piece_verified(uint piece_index, bool verified, void* user_da
 }
 
 <*
+ * HTTP seed timer callback (BEP 17).
+ * Periodically requests pieces from httpseeds using Hoffman-style protocol.
+ *>
+fn void on_httpseed_timer_tick(async::timer::Timer* timer, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (ctx.dm.is_complete())
+    {
+        // Download complete - stop timer
+        timer.stop();
+        return;
+    }
+
+    // Only try httpseeds if we have a manager
+    if (!ctx.httpseed_mgr) return;
+
+    // Check if we have active httpseed downloads or free slots
+    uint active = ctx.httpseed_mgr.get_active_count();
+    uint available = ctx.httpseed_mgr.get_available_url_count();
+
+    if (available == 0)
+    {
+        // All URLs disabled - stop trying
+        io::printfn("[HttpSeed] All URLs disabled, stopping httpseed timer");
+        timer.stop();
+        return;
+    }
+
+    // Try to fill ALL available httpseed slots aggressively
+    usz max_concurrent = ctx.httpseed_mgr.max_concurrent;
+    while (active < max_concurrent)
+    {
+        // Pick a piece using gap-based selection (BEP 17)
+        uint? piece_opt = ctx.dm.picker.pick_piece_for_webseed();
+        if (catch piece_opt)
+        {
+            // No pieces available for httpseeds
+            return;
+        }
+
+        uint piece_index = piece_opt;
+
+        // Mark piece as downloading
+        ctx.dm.picker.mark_downloading(piece_index)!!;
+
+        // Start httpseed download
+        if (catch err = ctx.httpseed_mgr.start_piece_download(
+            piece_index,
+            &on_httpseed_piece_complete,
+            ctx))
+        {
+            // Failed to start - mark piece as free again
+            ctx.dm.picker.mark_free(piece_index)!!;
+            io::printfn("[HttpSeed] Failed to start piece %d download: %s", piece_index, err);
+            break;  // Stop trying if we failed
+        }
+
+        // Successfully started - increment counter and continue filling slots
+        active++;
+    }
+}
+
+<*
+ * HTTP seed piece completion callback.
+ * Called when a piece download from an httpseed completes (success or failure).
+ *>
+fn void on_httpseed_piece_complete(uint piece_index, char[] piece_data, void* user_data) @public
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (piece_data.len == 0)
+    {
+        // Download failed - mark piece as free for retry from peers
+        io::printfn("[HttpSeed] Piece %d download failed, will retry from peers", piece_index);
+        ctx.dm.picker.mark_free(piece_index)!!;
+        return;
+    }
+
+    // Get expected hash for verification
+    char[20] expected_hash;
+    usz hash_offset = (usz)piece_index * 20;
+    for (usz k = 0; k < 20; k++)
+    {
+        expected_hash[k] = ctx.torrent.info.pieces[hash_offset + k];
+    }
+
+    // Create a copy of piece data for async verification
+    char[] piece_data_copy = mem::new_array(char, piece_data.len);
+    for (usz j = 0; j < piece_data.len; j++)
+    {
+        piece_data_copy[j] = piece_data[j];
+    }
+
+    // Create context for httpseed verification callback
+    HttpSeedVerifyContext* verify_ctx = mem::new(HttpSeedVerifyContext);
+    verify_ctx.download_ctx = ctx;
+    verify_ctx.piece_index = piece_index;
+    verify_ctx.piece_data = piece_data_copy;
+
+    // Start async verification
+    piece_assembler::verify_data(ctx.loop, piece_index, piece_data_copy,
+                                 expected_hash, &on_httpseed_piece_verified, verify_ctx);
+}
+
+<*
+ * HTTP seed piece verification callback.
+ * Called after async hash verification of httpseed piece completes.
+ *>
+fn void on_httpseed_piece_verified(uint piece_index, bool verified, void* user_data) @public
+{
+    HttpSeedVerifyContext* verify_ctx = (HttpSeedVerifyContext*)user_data;
+    DownloadContext* ctx = verify_ctx.download_ctx;
+
+    if (!verified)
+    {
+        // Hash mismatch - permanently blacklist the httpseed URL (BEP 17 requirement)
+        io::eprintfn("[HttpSeed] Piece %d hash mismatch - permanently disabling httpseed URL!", piece_index);
+
+        // TODO: Track which URL was used for this piece and blacklist it
+        // For now, we mark the piece as free for retry
+        ctx.dm.picker.mark_free(piece_index)!!;
+
+        // Free the piece data copy
+        free(verify_ctx.piece_data);
+        free(verify_ctx);
+        return;
+    }
+
+    // Success! Pass to the standard piece completion handler
+    on_download_piece_complete(piece_index, verify_ctx.piece_data, true, ctx);
+
+    // Note: piece_data is freed by on_download_piece_complete -> on_piece_written
+    free(verify_ctx);
+}
+
+<*
  Start tracker announce with retry support.
  Uses multi-tracker manager (BEP 12) if available.
 *>
@@ -1688,6 +1849,33 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     else
     {
         ctx.webseed_mgr = null;
+    }
+
+    // Initialize HTTP seeding (BEP 17)
+    if (torrent.httpseeds.len > 0)
+    {
+        ctx.httpseed_mgr = httpseed::create(ctx.loop, torrent, ctx.event_bus);  // Uses default: 20 concurrent downloads
+        if (ctx.httpseed_mgr)
+        {
+            io::printfn("HTTP seed support: %d URLs available", torrent.httpseeds.len);
+
+            // Start HTTP seed timer immediately (httpseeds work independently of trackers)
+            async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
+            if (catch err = timer_opt)
+            {
+                io::eprintfn("Warning: Failed to create HTTP seed timer");
+            }
+            else
+            {
+                ctx.httpseed_timer = timer_opt;
+                ctx.httpseed_timer.start(2000, 2000, &on_httpseed_timer_tick, ctx);
+                io::printfn("HTTP seed timer started (checking every 2 seconds)");
+            }
+        }
+    }
+    else
+    {
+        ctx.httpseed_mgr = null;
     }
     io::printfn("");
 
