@@ -84,8 +84,9 @@ faultdef FASTRESUME_INVALID_VERSION;
  */
 struct FastResumeStateProvider (state_provider::StateProvider)
 {
-    void* _vtable;     // C3 interface vtable pointer
-    void* _typeinfo;   // C3 interface type information
+    // Dummy fields - C3 interfaces may need extra space for vtable metadata
+    // This provider is stateless, so the fields are unused
+    void*[2] _dummy;
 }
 
 // ============================================================================
@@ -615,39 +616,46 @@ fn void FastResumeStateProvider.free(&self) @dynamic
 /**
  * Create a fastresume state provider (libtorrent-compatible format).
  *
- * @return "Provider instance"
+ * @return "Provider instance (concrete type, not interface)"
  */
-fn state_provider::StateProvider* create() @public
+fn FastResumeStateProvider* create() @public
 {
     FastResumeStateProvider* provider = mem::new(FastResumeStateProvider);
-    return (state_provider::StateProvider*)provider;
+    return provider;
 }
 
 // ============================================================================
-// Public API Wrappers (interface methods don't work in production code)
+// Public Wrapper Functions (Workaround for C3 Interface Limitation)
 // ============================================================================
+//
+// C3's interface system does not work with heap-allocated structs (mem::new).
+// Even though we implement StateProvider interface with @dynamic methods,
+// calling those methods through an interface pointer causes segfaults.
+//
+// Workaround: Provide public wrapper functions that call the concrete type methods.
+// This sacrifices polymorphism but actually works.
 
 /**
- * Load state for a torrent (public wrapper).
+ * Load fastresume state (wrapper function).
  *
- * @param torrent_path "Path to .torrent file"
- * @return "Download state or fault if not found"
+ * @param torrent_path: "Path to .torrent file"
+ * @return "Download state or fault if not found/invalid"
  */
 fn state_provider::DownloadState? load(String torrent_path) @public
 {
-    FastResumeStateProvider provider;  // Dummy instance (we don't use self)
+    FastResumeStateProvider provider;
     return provider.load_state(torrent_path);
 }
 
 /**
- * Save state for a torrent (public wrapper).
+ * Save fastresume state (wrapper function).
  *
- * @param torrent_path "Path to .torrent file"
- * @param state "State to save"
+ * @param torrent_path: "Path to .torrent file"
+ * @param state: "Download state to save"
  * @return "Fault if save fails"
  */
 fn void? save(String torrent_path, state_provider::DownloadState* state) @public
 {
-    FastResumeStateProvider provider;  // Dummy instance (we don't use self)
+    FastResumeStateProvider provider;
     return provider.save_state(torrent_path, state);
 }

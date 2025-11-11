@@ -19,7 +19,6 @@ import libtorrent::storage_manager;
 import libtorrent::file_selection;
 import libtorrent::ports::state_provider;
 import libtorrent::adapters::resume_data_state_provider;
-import libtorrent::adapters::fastresume_state_provider;
 import libtorrent::upload_manager;
 import libtorrent::upload_handler;
 import libtorrent::bitfield;
@@ -154,7 +153,9 @@ struct DownloadContext
     bool is_partial_seed;       // BEP 21: We are a partial seed (multi-file, selective download)
     int exit_code;
     String torrent_path;        // Path to .torrent file (for resume data)
-    state_provider::StateProvider* state_provider;  // BEP 21: Pluggable state persistence
+    // Note: Using concrete type instead of interface due to C3 limitation
+    // (interfaces don't work with heap-allocated structs)
+    fastresume_state_provider::FastResumeStateProvider* state_provider;  // BEP 21: FastResume state persistence
 
     // Download statistics
     ulong total_bytes_downloaded;       // Total bytes downloaded (all sources)
@@ -349,12 +350,12 @@ fn void on_partial_seed_complete(DownloadContext* ctx) @public
 
     // FastResume: Only save if partial seed (BEP 21 - selective file download)
     // No point saving resume data for complete downloads - nothing to resume!
-    if (ctx.is_partial_seed && ctx.torrent_path.len > 0)
+    if (ctx.is_partial_seed && ctx.state_provider && ctx.torrent_path.len > 0)
     {
         state_provider::DownloadState state = build_download_state(ctx);
         defer state.free();
 
-        // Call public module function directly (interface methods don't work)
+        // Use wrapper function instead of interface method
         if (catch err = fastresume_state_provider::save(ctx.torrent_path, &state))
         {
             io::eprintfn("Warning: Failed to save fastresume data: %s", err);
@@ -1171,8 +1172,22 @@ fn state_provider::DownloadState build_download_state(download_session::Download
     // Unfinished pieces - TODO: Implement when download_manager supports it
     state.unfinished = {};
 
+    // File priority: Convert from storage_manager file selection to priority array
+    // Priority 0 = don't download (unselected), Priority 4 = normal (selected)
+    if (ctx.sm && ctx.sm.files.len > 0)
+    {
+        state.file_priority = mem::new_array(char, ctx.sm.files.len);
+        for (usz i = 0; i < ctx.sm.files.len; i++)
+        {
+            state.file_priority[i] = ctx.sm.files[i].is_selected ? (char)4 : (char)0;
+        }
+    }
+    else
+    {
+        state.file_priority = {};
+    }
+
     // Optional fields (use defaults for now)
-    state.file_priority = {};
     state.upload_rate_limit = 0;
     state.download_rate_limit = 0;
     state.max_connections = 0;
@@ -1201,12 +1216,11 @@ fn state_provider::DownloadState build_download_state(download_session::Download
 *>
 fn bool try_load_fastresume_data(download_session::DownloadContext* ctx) @public
 {
-    if (ctx.torrent_path.len == 0) return false;
+    if (!ctx.state_provider || ctx.torrent_path.len == 0) return false;
 
     io::printfn("  Torrent path: %s", ctx.torrent_path);
 
-    // Call the public module function directly (interface methods don't work)
-    // If no file exists, load will return a fault which we handle
+    // Load state using wrapper function (not interface - C3 interfaces don't work with heap allocation)
     state_provider::DownloadState? state_opt = fastresume_state_provider::load(ctx.torrent_path);
     if (catch err = state_opt)
     {
@@ -1544,14 +1558,14 @@ fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
     }
 
     // Save fastresume data periodically (allows resume even if client crashes)
-    if (ctx.torrent_path.len > 0)
+    if (ctx.state_provider && ctx.torrent_path.len > 0)
     {
         state_provider::DownloadState state = build_download_state(ctx);
         defer state.free();
 
         // Silently save - don't spam logs every flush
         // Ignore errors to avoid log spam
-        // Call public module function directly (interface methods don't work)
+        // Use wrapper function instead of interface method
         (void)fastresume_state_provider::save(ctx.torrent_path, &state);
     }
 }
@@ -1895,11 +1909,12 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
 
         // Save initial fastresume after verification completes
         // This captures verified pieces so we can skip verification on next run
-        if (ctx.torrent_path.len > 0)
+        if (ctx.state_provider && ctx.torrent_path.len > 0)
         {
             state_provider::DownloadState state = build_download_state(ctx);
             defer state.free();
 
+            // Use wrapper function instead of interface method
             if (catch err = fastresume_state_provider::save(ctx.torrent_path, &state))
             {
                 io::printfn("  Warning: Failed to save initial fastresume: %s", err);
@@ -2461,6 +2476,29 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
                 file_sel_to_apply = state.file_selection;
                 loaded_from_resume = true;
                 io::printfn("[BEP 21] Loaded file selection from resume data: %s", file_sel_to_apply);
+            }
+            // Also check file_priority if file_selection is empty (standard fastresume format)
+            else if (state.file_priority.len > 0)
+            {
+                // Convert file_priority to file_selection string
+                // Priority 0 = unselected, Priority > 0 = selected
+                DString file_sel_buf;
+                bool first = true;
+                for (usz i = 0; i < state.file_priority.len; i++)
+                {
+                    if (state.file_priority[i] > 0)  // Any priority > 0 means selected
+                    {
+                        if (!first) file_sel_buf.append(",");
+                        file_sel_buf.appendf("%d", i);
+                        first = false;
+                    }
+                }
+                if (file_sel_buf.str_view().len > 0)
+                {
+                    file_sel_to_apply = file_sel_buf.copy_str(mem);
+                    loaded_from_resume = true;
+                    io::printfn("[BEP 21] Loaded file selection from file_priority (%d files)", state.file_priority.len);
+                }
             }
         }
     }

@@ -42,8 +42,7 @@ struct ResumeData
  */
 struct ResumeDataProvider (state_provider::StateProvider)
 {
-    void* _vtable;     // Space for interface vtable pointer
-    void* _typeinfo;   // Space for interface type information
+    void*[2] _dummy;  // C3 interfaces may need extra space for vtable metadata
 }
 
 /**

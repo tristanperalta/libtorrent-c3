@@ -113,9 +113,7 @@ import libtorrent::ports::state_provider;
  */
 struct SQLiteStateProvider (state_provider::StateProvider)
 {
-    void* _vtable;     // C3 interface vtable pointer
-    void* _typeinfo;   // C3 interface type information
-
+    void*[2] _dummy;  // C3 interfaces may need extra space for vtable metadata
     // TODO: Add database connection handle when SQLite bindings available
     // void* db_connection;
 }
