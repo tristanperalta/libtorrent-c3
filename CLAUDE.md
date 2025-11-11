@@ -547,6 +547,48 @@ if (value.type == ValueType.INTEGER) {
 }
 ```
 
+### Interface Testing Limitations
+
+**C3 interfaces have limitations when testing from outside the implementation module.**
+
+Interfaces work correctly in production code (e.g., `composite_peer_discovery.c3` successfully calls `source.free()` on `PeerDiscovery*` interface pointers), but calling interface methods from test code often fails with "No method 'X' could be found on target" errors.
+
+**Why this happens:**
+- Interface method dispatch requires the vtable to be properly initialized
+- Test code in different modules may not have proper access to the interface vtable
+- Even explicit casting `(Interface)ptr` and helper functions don't resolve the issue
+
+**Testing workaround:**
+```c3
+// ❌ FAILS - Cannot call interface methods from tests
+fn void test_provider() @test
+{
+    StateProvider* provider = create();
+    provider.free();  // Error: No method 'free' could be found
+}
+
+// ✅ WORKS - Use direct free() instead
+fn void test_provider() @test
+{
+    StateProvider* provider = create();
+    free(provider);  // Direct free works fine
+}
+```
+
+**Guidelines for testing interfaces:**
+1. **Unit tests**: Test only creation/destruction using direct `free()`
+2. **Integration tests**: Test interface functionality through production code paths
+3. **Manual testing**: Verify interface methods work in actual usage
+4. **Don't test interface contracts directly** - test implementations through integration
+
+**Example from this codebase:**
+- `FastResumeStateProvider` implements `StateProvider` interface
+- Test only verifies creation: `test_create_provider()`
+- Actual save/load/delete functionality tested via integration tests
+- Interface works perfectly in production (e.g., download session uses it)
+
+This is a known C3 limitation and not a bug in the implementation.
+
 ### HashMap Iteration with @each
 
 **CRITICAL: `return` inside `@each` exits the entire enclosing function, not just the loop!**

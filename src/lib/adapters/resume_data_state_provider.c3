@@ -191,6 +191,9 @@ fn void ResumeData.free(&self) @public
 
 /**
  * Load state implementation.
+ *
+ * NOTE: This is currently a minimal implementation that only loads file_selection.
+ * Full implementation of all DownloadState fields will be done in future phases.
  */
 fn state_provider::DownloadState? ResumeDataProvider.load_state(&self, String torrent_path) @dynamic
 {
@@ -205,8 +208,41 @@ fn state_provider::DownloadState? ResumeDataProvider.load_state(&self, String to
 
     // Convert to DownloadState
     state_provider::DownloadState state;
+
+    // Currently only file_selection is persisted
     state.file_selection = resume.file_selection.copy(mem);
-    state.version = resume.version;
+    state.version = state_provider::STATE_VERSION;
+
+    // TODO: Implement full bencode serialization for all fields
+    // For now, initialize all other fields to defaults
+    state.have_pieces = {};
+    state.total_downloaded = 0;
+    state.total_uploaded = 0;
+    state.added_time = 0;
+    state.completed_time = 0;
+    state.active_time = 0;
+    state.seeding_time = 0;
+    state.last_seen_complete = 0;
+    state.unfinished = {};
+    state.file_priority = {};
+    state.upload_rate_limit = 0;
+    state.download_rate_limit = 0;
+    state.max_connections = 0;
+    state.max_uploads = 0;
+    state.paused = false;
+    state.auto_managed = false;
+    state.sequential_download = false;
+    state.seed_mode = false;
+    state.save_path = "";
+
+    // Transmission-specific fields
+    state.activity_date = 0;
+    state.corrupt = 0;
+    state.bandwidth_priority = 0;
+    state.ratio_limit = 0.0;
+    state.idle_limit = 0;
+    state.speed_limit_up_enabled = false;
+    state.speed_limit_down_enabled = false;
 
     return state;
 }
@@ -240,6 +276,12 @@ fn void? ResumeDataProvider.delete_state(&self, String torrent_path) @dynamic
     {
         return state_provider::STATE_SAVE_ERROR?;
     }
+}
+
+fn void ResumeDataProvider.free(&self) @dynamic
+{
+    // Free the provider itself
+    free(self);
 }
 
 /**

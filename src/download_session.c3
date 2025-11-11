@@ -19,6 +19,7 @@ import libtorrent::storage_manager;
 import libtorrent::file_selection;
 import libtorrent::ports::state_provider;
 import libtorrent::adapters::resume_data_state_provider;
+import libtorrent::adapters::fastresume_state_provider;
 import libtorrent::upload_manager;
 import libtorrent::upload_handler;
 import libtorrent::bitfield;
@@ -346,20 +347,21 @@ fn void on_partial_seed_complete(DownloadContext* ctx) @public
         ctx.tracker_coord.start_announce("completed");
     }
 
-    // BEP 21: Save resume data with file selection
-    if (ctx.state_provider && ctx.torrent_path.len > 0 && ctx.select_files_str.len > 0)
+    // FastResume: Only save if partial seed (BEP 21 - selective file download)
+    // No point saving resume data for complete downloads - nothing to resume!
+    if (ctx.is_partial_seed && ctx.torrent_path.len > 0)
     {
-        state_provider::DownloadState state;
-        state.file_selection = ctx.select_files_str;
-        state.version = 1;
+        state_provider::DownloadState state = build_download_state(ctx);
+        defer state.free();
 
-        if (catch err = ctx.state_provider.save_state(ctx.torrent_path, &state))
+        // Call public module function directly (interface methods don't work)
+        if (catch err = fastresume_state_provider::save(ctx.torrent_path, &state))
         {
-            io::eprintfn("[BEP 21] Warning: Failed to save resume data");
+            io::eprintfn("Warning: Failed to save fastresume data: %s", err);
         }
         else
         {
-            io::printfn("[BEP 21] Saved file selection to resume data");
+            io::printfn("Saved partial seed state to fastresume file");
         }
     }
 
@@ -1032,9 +1034,24 @@ fn void on_storage_initialized(int status, void* user_data) @public
         ctx.speed_tracker = speed_tracker::create();
     }
 
-    // Now we can safely verify existing pieces (resume support)
-    io::printfn("Checking for existing pieces...");
-    verify_all_existing_pieces_async(ctx);
+    // Try loading fastresume data first to skip verification
+    io::printfn("Checking for resume data...");
+    bool resume_loaded = try_load_fastresume_data(ctx);
+
+    if (resume_loaded)
+    {
+        io::printfn("Resume data loaded - skipping verification!");
+        io::printfn("  Verified pieces loaded from fastresume file");
+
+        // Skip verification, go straight to download
+        on_all_pieces_verified(ctx);
+    }
+    else
+    {
+        // No resume data - verify all pieces
+        io::printfn("No resume data found - verifying existing pieces...");
+        verify_all_existing_pieces_async(ctx);
+    }
 }
 
 <*
@@ -1114,6 +1131,158 @@ fn void start_piece_verification(download_session::DownloadContext* ctx, uint pi
 
     // Verify piece asynchronously
     ctx.sm.verify_piece(piece_index, expected_hash, &on_verify_existing_piece, ctx);
+}
+
+<*
+ Build DownloadState from current download context for saving.
+ Caller must call state.free() when done.
+*>
+fn state_provider::DownloadState build_download_state(download_session::DownloadContext* ctx) @public
+{
+    state_provider::DownloadState state;
+    state.version = state_provider::STATE_VERSION;
+
+    // Build have_pieces bitfield
+    uint num_bytes = (ctx.num_pieces + 7) / 8;
+    state.have_pieces = mem::new_array(char, num_bytes);
+
+    for (uint i = 0; i < ctx.num_pieces; i++)
+    {
+        if (ctx.dm.have_piece(i))
+        {
+            uint byte_index = i / 8;
+            uint bit_index = i % 8;
+            state.have_pieces[byte_index] |= (char)(1 << bit_index);
+        }
+    }
+
+    // File selection
+    state.file_selection = ctx.select_files_str.len > 0 ? ctx.select_files_str.copy(mem) : "";
+
+    // Statistics
+    state.total_downloaded = ctx.total_bytes_downloaded;
+    state.total_uploaded = 0;  // TODO: Track upload stats when upload manager supports it
+    state.added_time = 0;  // TODO: Track when torrent was added
+    state.completed_time = ctx.download_complete ? (long)time::now() : 0;
+    state.active_time = 0;  // TODO: Track active time
+    state.seeding_time = 0;
+    state.last_seen_complete = 0;
+
+    // Unfinished pieces - TODO: Implement when download_manager supports it
+    state.unfinished = {};
+
+    // Optional fields (use defaults for now)
+    state.file_priority = {};
+    state.upload_rate_limit = 0;
+    state.download_rate_limit = 0;
+    state.max_connections = 0;
+    state.max_uploads = 0;
+    state.paused = false;
+    state.auto_managed = false;
+    state.sequential_download = false;
+    state.seed_mode = false;
+    state.save_path = ctx.save_path.copy(mem);
+
+    // Transmission-specific fields
+    state.activity_date = (long)time::now();
+    state.corrupt = 0;
+    state.bandwidth_priority = 0;
+    state.ratio_limit = 0.0;
+    state.idle_limit = 0;
+    state.speed_limit_up_enabled = false;
+    state.speed_limit_down_enabled = false;
+
+    return state;
+}
+
+<*
+ Try to load fastresume data and restore verified pieces.
+ Returns true if resume data was successfully loaded and pieces restored.
+*>
+fn bool try_load_fastresume_data(download_session::DownloadContext* ctx) @public
+{
+    if (ctx.torrent_path.len == 0) return false;
+
+    io::printfn("  Torrent path: %s", ctx.torrent_path);
+
+    // Call the public module function directly (interface methods don't work)
+    // If no file exists, load will return a fault which we handle
+    state_provider::DownloadState? state_opt = fastresume_state_provider::load(ctx.torrent_path);
+    if (catch err = state_opt)
+    {
+        io::printfn("  Warning: Failed to load resume data: %s", err);
+        return false;
+    }
+
+    state_provider::DownloadState state = state_opt;
+    defer state.free();
+
+    // Validate version
+    if (state.version != state_provider::STATE_VERSION)
+    {
+        io::printfn("  Warning: Resume data version mismatch (expected %d, got %d)",
+                   state_provider::STATE_VERSION, state.version);
+        return false;
+    }
+
+    // Check if we have piece data
+    if (state.have_pieces.len == 0)
+    {
+        io::printfn("  Warning: Resume data has no piece information");
+        return false;
+    }
+
+    // Validate piece bitfield size
+    uint expected_bytes = (ctx.num_pieces + 7) / 8;
+    if (state.have_pieces.len != expected_bytes)
+    {
+        io::printfn("  Warning: Resume data piece bitfield size mismatch (expected %d bytes, got %d bytes)",
+                   expected_bytes, state.have_pieces.len);
+        return false;
+    }
+
+    // Restore verified pieces to download manager
+    uint pieces_restored = 0;
+    for (uint i = 0; i < ctx.num_pieces; i++)
+    {
+        // Check if piece bit is set
+        uint byte_index = i / 8;
+        uint bit_index = i % 8;
+        bool has_piece = (state.have_pieces[byte_index] & (1 << bit_index)) != 0;
+
+        if (has_piece)
+        {
+            ctx.dm.picker.mark_complete(i)!!;
+            pieces_restored++;
+        }
+    }
+
+    io::printfn("  Restored %d verified pieces from resume data", pieces_restored);
+
+    // Restore statistics
+    if (state.total_downloaded > 0)
+    {
+        ctx.total_bytes_downloaded = state.total_downloaded;
+        io::printfn("  Restored download stats: %s downloaded",
+                   format_size((long)state.total_downloaded));
+    }
+
+    if (state.total_uploaded > 0)
+    {
+        // TODO: Restore upload stats when upload manager supports it
+        io::printfn("  Note: Resume data contains upload stats: %s uploaded",
+                   format_size((long)state.total_uploaded));
+    }
+
+    // Restore unfinished pieces (partially downloaded)
+    if (state.unfinished.len > 0)
+    {
+        io::printfn("  Note: %d partially downloaded pieces found (will be re-downloaded)", state.unfinished.len);
+        // TODO: Restore block bitmask to download manager
+        // This requires download_manager API enhancement to support partial piece resume
+    }
+
+    return true;
 }
 
 <*
@@ -1355,6 +1524,7 @@ fn void on_keepalive_timer_tick(async::timer::Timer* timer, void* user_data) @pu
 <*
  File flush timer callback - syncs all downloaded data to disk.
  Runs at configurable interval (default: every 5 seconds) to ensure data persistence.
+ Also saves fastresume data periodically.
 *>
 fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
@@ -1371,6 +1541,18 @@ fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
     if (ctx.sm)
     {
         ctx.sm.sync_all_files();
+    }
+
+    // Save fastresume data periodically (allows resume even if client crashes)
+    if (ctx.torrent_path.len > 0)
+    {
+        state_provider::DownloadState state = build_download_state(ctx);
+        defer state.free();
+
+        // Silently save - don't spam logs every flush
+        // Ignore errors to avoid log spam
+        // Call public module function directly (interface methods don't work)
+        (void)fastresume_state_provider::save(ctx.torrent_path, &state);
     }
 }
 
@@ -1710,6 +1892,23 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
     {
         double percent = (complete * 100.0) / total;
         io::printfn("  Found %d/%d existing pieces (%.1f%%)", complete, total, percent);
+
+        // Save initial fastresume after verification completes
+        // This captures verified pieces so we can skip verification on next run
+        if (ctx.torrent_path.len > 0)
+        {
+            state_provider::DownloadState state = build_download_state(ctx);
+            defer state.free();
+
+            if (catch err = fastresume_state_provider::save(ctx.torrent_path, &state))
+            {
+                io::printfn("  Warning: Failed to save initial fastresume: %s", err);
+            }
+            else
+            {
+                io::printfn("  Saved initial fastresume (%d pieces verified)", complete);
+            }
+        }
     }
     else
     {
