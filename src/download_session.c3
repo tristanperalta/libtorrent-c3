@@ -26,6 +26,12 @@ import libtorrent::peer_pool;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::lsd;
+import libtorrent::ports::peer_discovery;
+import libtorrent::adapters::tracker_peer_discovery;
+import libtorrent::adapters::dht_peer_discovery;
+import libtorrent::adapters::lsd_peer_discovery;
+import libtorrent::adapters::pex_peer_discovery;
+import libtorrent::adapters::composite_peer_discovery;
 import libtorrent::webseed;
 import libtorrent::httpseed;
 import libtorrent::event_bus;
@@ -114,17 +120,18 @@ struct DownloadContext
     upload_manager::UploadManager* upload_mgr;  // Upload request queue manager
     async::timer::Timer* upload_timer;          // Upload request processor (every 1s)
 
-    // DHT peer discovery
-    dht_client::DhtClient* dht_client;
-    dht_get_peers::GetPeersSearch* dht_search;
-    async::timer::Timer* dht_timer;         // Periodic DHT peer discovery
-    async::timer::Timer* dht_check_timer;   // One-shot timer for checking DHT results
-    async::timer::Timer* dht_tick_timer;    // RPC timeout processing timer
-    bool dht_enabled;
+    // Hexagonal Architecture: Peer Discovery (replaces old tracker/DHT/LSD code)
+    peer_discovery::PeerDiscovery* peer_discovery;  // Unified peer discovery interface
 
-    // LSD peer discovery (BEP 14)
-    libtorrent::lsd::LsdManager* lsd_mgr;   // Local Service Discovery manager
-    async::timer::Timer* lsd_timer;         // Periodic LSD announcements (every 5 minutes)
+    // Keep original instances for creating adapters (still needed for other functionality)
+    dht_client::DhtClient* dht_client;      // DHT client (also used for announce_peer)
+    libtorrent::lsd::LsdManager* lsd_mgr;   // LSD manager
+    dht_get_peers::GetPeersSearch* dht_search;  // Keep for backward compatibility
+    async::timer::Timer* dht_timer;         // Keep for DHT maintenance
+    async::timer::Timer* dht_check_timer;
+    async::timer::Timer* dht_tick_timer;    // RPC timeout processing timer
+    async::timer::Timer* lsd_timer;
+    bool dht_enabled;
     bool lsd_enabled;
 
     // Web seeding (BEP 19)
@@ -1138,6 +1145,51 @@ fn void verify_all_existing_pieces_async(download_session::DownloadContext* ctx)
 }
 
 // ============================================================================
+// Peer Discovery Callbacks (Hexagonal Architecture)
+// ============================================================================
+
+<*
+ Callback when peer discovery finds peers.
+ Called by any discovery source (tracker, DHT, LSD, PEX).
+*>
+fn void on_peer_discovery_peers(common::SocketAddress[] peers, String discovery_source, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    io::printfn("[PeerDiscovery] Discovered %d peers from %s", peers.len, discovery_source);
+
+    // Determine peer source based on discovery source name
+    common::PeerSource source;
+    switch (discovery_source)
+    {
+        case "tracker": source = common::PeerSource.TRACKER;
+        case "dht":     source = common::PeerSource.DHT;
+        case "lsd":     source = common::PeerSource.LSD;
+        case "pex":     source = common::PeerSource.PEX;
+        default:        source = common::PeerSource.TRACKER;  // Fallback
+    }
+
+    // Add peers to peer pool
+    ctx.peer_pool.add_peers(peers, source);
+
+    // Trigger connection attempts
+    ctx.peer_pool.connect_to_peers();
+}
+
+<*
+ Callback when peer discovery completes (or fails).
+*>
+fn void on_peer_discovery_complete(bool success, String error_message, void* user_data)
+{
+    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+
+    if (!success)
+    {
+        io::printfn("[PeerDiscovery] Discovery failed: %s", error_message);
+    }
+}
+
+// ============================================================================
 // Tracker Coordinator Callbacks
 // ============================================================================
 
@@ -1897,6 +1949,77 @@ fn void on_dht_peers_found(download_session::DownloadContext* ctx) @public
     ctx.peer_pool.connect_to_peers();
 }
 
+// ============================================================================
+// Peer Discovery Composite Builder (Hexagonal Architecture)
+// ============================================================================
+
+<*
+ Build a CompositePeerDiscovery that aggregates all available discovery sources.
+ Respects BEP 27 (private torrents should not use DHT/LSD/PEX).
+
+ @param ctx : "Download context"
+ @return "CompositePeerDiscovery instance with all applicable sources"
+*>
+fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(download_session::DownloadContext* ctx)
+{
+    // Create composite
+    composite_peer_discovery::CompositePeerDiscovery* composite =
+        (composite_peer_discovery::CompositePeerDiscovery*)composite_peer_discovery::create();
+
+    // Always add tracker discovery (works for both private and public torrents)
+    if (ctx.tracker_mgr)
+    {
+        peer_discovery::PeerDiscovery* tracker_disc =
+            tracker_peer_discovery::create(ctx.loop, ctx.torrent, ctx.tracker_mgr);
+        composite.add_source(tracker_disc);
+        io::printfn("[PeerDiscovery] Added tracker discovery");
+    }
+
+    // Only add DHT/LSD/PEX for non-private torrents (BEP 27)
+    if (!ctx.torrent.info.private)
+    {
+        // Add DHT discovery if DHT client is available
+        if (ctx.dht_client)
+        {
+            peer_discovery::PeerDiscovery* dht_disc =
+                dht_peer_discovery::create(ctx.dht_client, ctx.loop);
+            composite.add_source(dht_disc);
+            io::printfn("[PeerDiscovery] Added DHT discovery");
+        }
+
+        // Add LSD discovery if LSD manager is available
+        if (ctx.lsd_mgr)
+        {
+            peer_discovery::PeerDiscovery* lsd_disc =
+                lsd_peer_discovery::create(ctx.lsd_mgr, ctx.loop);
+            composite.add_source(lsd_disc);
+            io::printfn("[PeerDiscovery] Added LSD discovery");
+        }
+
+        // Add PEX discovery if peer pool is available
+        if (ctx.peer_pool)
+        {
+            peer_discovery::PeerDiscovery* pex_disc =
+                pex_peer_discovery::create(ctx.peer_pool);
+            composite.add_source(pex_disc);
+            io::printfn("[PeerDiscovery] Added PEX discovery");
+        }
+    }
+    else
+    {
+        io::printfn("[PeerDiscovery] Skipping DHT/LSD/PEX for private torrent (BEP 27)");
+    }
+
+    usz source_count = composite.get_source_count();
+    io::printfn("[PeerDiscovery] Composite initialized with %d sources", source_count);
+
+    return (peer_discovery::PeerDiscovery*)composite;
+}
+
+// ============================================================================
+// DHT Initialization
+// ============================================================================
+
 <*
  Initialize DHT client for peer discovery.
 *>
@@ -2302,6 +2425,21 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Initialize LSD for local peer discovery (BEP 14)
     // Also skipped for private torrents per BEP 27
     init_lsd(ctx);
+    io::printfn("");
+
+    // Initialize unified peer discovery (Hexagonal Architecture)
+    io::printfn("Initializing peer discovery...");
+    ctx.peer_discovery = build_peer_discovery_composite(ctx);
+
+    // Start peer discovery with default options
+    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    ctx.peer_discovery.start_discovery(
+        &ctx.torrent.info_hash,
+        &options,
+        &on_peer_discovery_peers,
+        &on_peer_discovery_complete,
+        ctx
+    );
     io::printfn("");
 
     // Initialize web seeding (BEP 19)

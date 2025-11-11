@@ -1,0 +1,341 @@
+module libtorrent::adapters::composite_peer_discovery;
+
+import libtorrent::ports::peer_discovery;
+import libtorrent::common;
+import libtorrent::logger;
+import std::collections::list;
+import std::time;
+
+<*
+ * CompositePeerDiscovery Adapter
+ * ===============================
+ * Aggregates multiple peer discovery sources into a unified interface.
+ *
+ * Features:
+ * - Combines multiple discovery mechanisms (Tracker, DHT, LSD, PEX)
+ * - Forwards callbacks from all sources to single callback
+ * - Aggregates statistics across all sources
+ * - Manages lifecycle of all child discovery instances
+ *
+ * Architecture:
+ * - Composite pattern (hexagonal architecture)
+ * - Contains multiple PeerDiscovery adapters
+ * - Implements PeerDiscovery port interface
+ *
+ * Usage:
+ *   CompositePeerDiscovery* composite = create();
+ *   composite.add_source(tracker_discovery);
+ *   composite.add_source(dht_discovery);
+ *   composite.start_discovery(...);
+ *>
+
+// CompositePeerDiscovery aggregator struct
+struct CompositePeerDiscovery (peer_discovery::PeerDiscovery)
+{
+    // Child discovery sources
+    List{peer_discovery::PeerDiscovery*} sources;
+
+    // Configuration
+    peer_discovery::DiscoveryOptions options;
+
+    // State
+    bool active;
+    common::InfoHash current_info_hash;
+
+    // Callbacks
+    peer_discovery::PeerDiscoveredCallback peer_callback;
+    peer_discovery::DiscoveryCompleteCallback complete_callback;
+    void* user_data;
+
+    // Aggregated statistics
+    peer_discovery::DiscoveryStats aggregated_stats;
+}
+
+// ============================================================================
+// Factory
+// ============================================================================
+
+<*
+ * Create a CompositePeerDiscovery aggregator.
+ *
+ * @return "CompositePeerDiscovery aggregator instance"
+ *>
+fn peer_discovery::PeerDiscovery* create() @public
+{
+    CompositePeerDiscovery* composite = mem::new(CompositePeerDiscovery);
+
+    composite.sources.init(mem);
+
+    composite.options = peer_discovery::default_options();
+
+    composite.active = false;
+    composite.peer_callback = null;
+    composite.complete_callback = null;
+    composite.user_data = null;
+
+    // Initialize aggregated stats
+    composite.aggregated_stats.total_peers_discovered = 0;
+    composite.aggregated_stats.total_discovery_attempts = 0;
+    composite.aggregated_stats.successful_attempts = 0;
+    composite.aggregated_stats.failed_attempts = 0;
+    composite.aggregated_stats.last_discovery_time = 0;
+    composite.aggregated_stats.average_response_time_ms = 0.0;
+    composite.aggregated_stats.active_peers = 0;
+
+    logger::logf(logger::LogLevel.INFO, "[CompositeDiscovery] Created aggregator");
+
+    return (peer_discovery::PeerDiscovery*)composite;
+}
+
+// ============================================================================
+// Source Management
+// ============================================================================
+
+<*
+ * Add a discovery source to the composite.
+ *
+ * @param source : "PeerDiscovery adapter to add"
+ *>
+fn void CompositePeerDiscovery.add_source(&self, peer_discovery::PeerDiscovery* source) @public
+{
+    if (!source) return;
+
+    self.sources.push(source);
+
+    String name = source.get_name();
+    logger::logf(logger::LogLevel.INFO,
+                 "[CompositeDiscovery] Added source: %s (total: %d)",
+                 name, self.sources.len());
+}
+
+<*
+ * Get the number of discovery sources.
+ *
+ * @return "Number of sources"
+ *>
+fn usz CompositePeerDiscovery.get_source_count(&self) @public
+{
+    return self.sources.len();
+}
+
+// ============================================================================
+// Internal Callback Forwarding
+// ============================================================================
+
+// Context for forwarding callbacks from child sources
+struct CallbackContext
+{
+    CompositePeerDiscovery* composite;
+    String source_name;  // Name of the child source
+}
+
+// Forward peer discovered callback
+fn void on_source_peers_discovered(common::SocketAddress[] peers,
+                                     String discovery_source,
+                                     void* user_data)
+{
+    CallbackContext* ctx = (CallbackContext*)user_data;
+    CompositePeerDiscovery* self = ctx.composite;
+
+    if (!self.active) return;
+
+    logger::logf(logger::LogLevel.DEBUG,
+                 "[CompositeDiscovery] Forwarding %d peers from %s",
+                 peers.len, discovery_source);
+
+    // Forward to user callback
+    if (self.peer_callback)
+    {
+        self.peer_callback(peers, discovery_source, self.user_data);
+    }
+}
+
+// Forward discovery complete callback
+fn void on_source_discovery_complete(bool success,
+                                       String error_message,
+                                       void* user_data)
+{
+    CallbackContext* ctx = (CallbackContext*)user_data;
+    CompositePeerDiscovery* self = ctx.composite;
+
+    if (!self.active) return;
+
+    if (!success)
+    {
+        logger::logf(logger::LogLevel.DEBUG,
+                     "[CompositeDiscovery] Source %s failed: %s",
+                     ctx.source_name, error_message);
+    }
+
+    // Composite doesn't fail unless all sources fail
+    // Individual source failures are logged but not propagated
+}
+
+// ============================================================================
+// PeerDiscovery Interface Implementation
+// ============================================================================
+
+fn void CompositePeerDiscovery.start_discovery(
+    &self,
+    common::InfoHash* info_hash,
+    peer_discovery::DiscoveryOptions* options,
+    peer_discovery::PeerDiscoveredCallback peer_callback,
+    peer_discovery::DiscoveryCompleteCallback complete_callback,
+    void* user_data
+) @dynamic
+{
+    if (self.active)
+    {
+        logger::logf(logger::LogLevel.WARN,
+                     "[CompositeDiscovery] Discovery already active");
+        return;
+    }
+
+    if (self.sources.len() == 0)
+    {
+        logger::logf(logger::LogLevel.WARN,
+                     "[CompositeDiscovery] No discovery sources configured");
+        if (complete_callback)
+        {
+            complete_callback(false, "No discovery sources", user_data);
+        }
+        return;
+    }
+
+    logger::logf(logger::LogLevel.INFO,
+                 "[CompositeDiscovery] Starting discovery across %d sources",
+                 self.sources.len());
+
+    self.active = true;
+    self.options = *options;
+    self.current_info_hash = *info_hash;
+    self.peer_callback = peer_callback;
+    self.complete_callback = complete_callback;
+    self.user_data = user_data;
+
+    // Start all child sources
+    int started = 0;
+    for (usz i = 0; i < self.sources.len(); i++)
+    {
+        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+
+        // Create callback context for this source
+        CallbackContext* ctx = mem::new(CallbackContext);
+        ctx.composite = self;
+        ctx.source_name = source.get_name();
+
+        // Start discovery on this source
+        source.start_discovery(
+            info_hash,
+            options,
+            &on_source_peers_discovered,
+            &on_source_discovery_complete,
+            ctx
+        );
+
+        started++;
+    }
+
+    logger::logf(logger::LogLevel.INFO,
+                 "[CompositeDiscovery] Started %d discovery sources",
+                 started);
+
+    // Notify completion (composite starts all sources immediately)
+    if (self.complete_callback)
+    {
+        self.complete_callback(true, "", self.user_data);
+    }
+}
+
+fn void CompositePeerDiscovery.stop_discovery(&self) @dynamic
+{
+    if (!self.active) return;
+
+    logger::logf(logger::LogLevel.INFO,
+                 "[CompositeDiscovery] Stopping discovery across %d sources",
+                 self.sources.len());
+
+    self.active = false;
+
+    // Stop all child sources
+    for (usz i = 0; i < self.sources.len(); i++)
+    {
+        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+        source.stop_discovery();
+    }
+}
+
+fn peer_discovery::DiscoveryStats CompositePeerDiscovery.get_stats(&self) @dynamic
+{
+    // Aggregate stats from all sources
+    self.aggregated_stats.total_peers_discovered = 0;
+    self.aggregated_stats.total_discovery_attempts = 0;
+    self.aggregated_stats.successful_attempts = 0;
+    self.aggregated_stats.failed_attempts = 0;
+    self.aggregated_stats.last_discovery_time = 0;
+    self.aggregated_stats.average_response_time_ms = 0.0;
+    self.aggregated_stats.active_peers = 0;
+
+    int source_count = 0;
+    double total_avg_response_time = 0.0;
+
+    for (usz i = 0; i < self.sources.len(); i++)
+    {
+        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+        peer_discovery::DiscoveryStats stats = source.get_stats();
+
+        self.aggregated_stats.total_peers_discovered += stats.total_peers_discovered;
+        self.aggregated_stats.total_discovery_attempts += stats.total_discovery_attempts;
+        self.aggregated_stats.successful_attempts += stats.successful_attempts;
+        self.aggregated_stats.failed_attempts += stats.failed_attempts;
+
+        // Track latest discovery time
+        if (stats.last_discovery_time > self.aggregated_stats.last_discovery_time)
+        {
+            self.aggregated_stats.last_discovery_time = stats.last_discovery_time;
+        }
+
+        // Accumulate average response times
+        if (stats.average_response_time_ms > 0.0)
+        {
+            total_avg_response_time += (double)stats.average_response_time_ms;
+            source_count++;
+        }
+
+        self.aggregated_stats.active_peers += stats.active_peers;
+    }
+
+    // Calculate overall average response time
+    if (source_count > 0)
+    {
+        self.aggregated_stats.average_response_time_ms =
+            (float)(total_avg_response_time / (double)source_count);
+    }
+
+    return self.aggregated_stats;
+}
+
+fn bool CompositePeerDiscovery.is_active(&self) @dynamic
+{
+    return self.active;
+}
+
+fn String CompositePeerDiscovery.get_name(&self) @dynamic
+{
+    return "composite";
+}
+
+fn void CompositePeerDiscovery.free(&self) @dynamic
+{
+    self.stop_discovery();
+
+    // Free all child sources
+    for (usz i = 0; i < self.sources.len(); i++)
+    {
+        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+        source.free();
+    }
+
+    self.sources.free();
+    free(self);
+}
