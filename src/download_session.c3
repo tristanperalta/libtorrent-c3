@@ -18,7 +18,6 @@ import libtorrent::piece_assembler;
 import libtorrent::storage_manager;
 import libtorrent::file_selection;
 import libtorrent::ports::state_provider;
-import libtorrent::adapters::resume_data_state_provider;
 import libtorrent::upload_manager;
 import libtorrent::upload_handler;
 import libtorrent::bitfield;
@@ -575,16 +574,9 @@ fn void toggle_file_selection(DownloadContext* ctx, usz file_index, bool selecte
     // Update storage manager
     ctx.sm.files[file_index].is_selected = selected;
 
-    // Save to resume data
-    if (ctx.state_provider && ctx.torrent_path.len > 0)
-    {
-        // Build new file selection string
-        String selection_str = build_file_selection_string(ctx.sm);
-        defer free(selection_str);
-
-        // Save via resume_data_state_provider module directly (workaround for interface issue)
-        (void)resume_data_state_provider::save_resume_data(ctx.torrent_path, selection_str);
-    }
+    // Save to fastresume (file selection will be saved via file_priority in next periodic save)
+    // Note: We don't trigger an immediate save here to avoid excessive I/O on rapid file selection changes
+    // The periodic save in on_event_tick() will capture the updated file selection
 
     // Publish selection change event
     event_types::FileProgressEvent evt = event_types::create_file_progress_event(

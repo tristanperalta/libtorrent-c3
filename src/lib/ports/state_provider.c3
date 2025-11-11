@@ -14,9 +14,8 @@ import std::io;
  * partial piece data, statistics, and timing information.
  *
  * Implementations:
- * - ResumeDataProvider (bencode files, current format)
- * - FastResumeStateProvider (libtorrent-compatible fastresume)
- * - SQLiteStateProvider (database backend for scalability)
+ * - FastResumeStateProvider (libtorrent-compatible fastresume format)
+ * - SQLiteStateProvider (database backend for scalability - planned)
  * - NoOpStateProvider (stateless mode)
  * - MockStateProvider (testing)
  */
