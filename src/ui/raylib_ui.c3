@@ -6,6 +6,7 @@ import async::event_loop;
 import libtorrent::logger;
 import libtorrent::peer_pool;
 import libtorrent::tracker_manager;
+import libtorrent::piece_picker;
 import std::io;
 
 // ============================================================================
@@ -75,6 +76,7 @@ struct UIState
     uint pieces_total;
     uint pieces_complete;
     uint pieces_downloading;
+    piece_picker::PieceState[] piece_states;  // For piece-by-piece visualization
 
     // Torrent info
     String save_path;
@@ -326,6 +328,72 @@ fn String format_size(long bytes) @private
 }
 
 <*
+ Render piece-by-piece progress bar showing download fragmentation.
+
+ Groups pieces into vertical bars (1 pixel wide) for efficient rendering:
+ - Blue: Complete pieces (verified)
+ - Light blue: Downloading pieces (in progress)
+ - Light gray: Not started
+
+ For large torrents (9,150 pieces), groups ~10 pieces per pixel.
+*>
+fn void render_piece_bar(UIState* state, int x, int y, int width, int height) @private
+{
+    if (state.piece_states.len == 0) return;
+
+    // Calculate how many pieces per pixel
+    int bar_width = width;
+    int pieces_per_bar = (state.pieces_total + bar_width - 1) / bar_width;
+
+    // Draw each vertical bar
+    for (int bar = 0; bar < bar_width; bar++)
+    {
+        uint start_piece = bar * pieces_per_bar;
+        uint end_piece = ((bar + 1) * pieces_per_bar);
+        if (end_piece > state.pieces_total) end_piece = state.pieces_total;
+
+        // Count states in this bar's piece range
+        uint complete = 0;
+        uint downloading = 0;
+
+        for (uint i = start_piece; i < end_piece; i++)
+        {
+            switch (state.piece_states[i])
+            {
+                case piece_picker::PieceState.COMPLETE:
+                    complete++;
+                case piece_picker::PieceState.DOWNLOADING:
+                    downloading++;
+                default:
+                    // FREE state - not started
+            }
+        }
+
+        // Determine bar color (majority wins)
+        rl::Color color;
+        uint pieces_in_bar = end_piece - start_piece;
+        if (complete > pieces_in_bar / 2)
+        {
+            // Blue - majority complete
+            color = (rl::Color){0, 120, 215, 255};
+        }
+        else if (downloading > 0)
+        {
+            // Light blue - some downloading
+            color = (rl::Color){100, 150, 255, 255};
+        }
+        else
+        {
+            // Light gray - not started
+            color = (rl::Color){220, 220, 220, 255};
+        }
+
+        // Draw 1-pixel wide vertical bar
+        rl::drawRectangle(x + bar, y, 1, height, color);
+    }
+}
+
+<*
  Render the Overview tab.
 *>
 fn void render_overview_tab(UIState* state, int content_y, int content_height) @private
@@ -351,7 +419,13 @@ fn void render_overview_tab(UIState* state, int content_y, int content_height) @
     DString progress_label;
     progress_label.appendf("%.1f%%", progress * 100.0);
     rg::guiProgressBar(progress_rect, null, progress_label.zstr_view(), &progress, progress_min, progress_max);
-    y += 60;
+    y += 50;
+
+    // Piece-by-piece fragmentation bar
+    int piece_bar_width = state.window_width - margin * 2;
+    int piece_bar_height = 20;
+    render_piece_bar(state, margin, y, piece_bar_width, piece_bar_height);
+    y += piece_bar_height + 20;
 
     // Two-column layout: Statistics (left) | Torrent Info (right)
     int column_width = (state.window_width - margin * 3) / 2;
@@ -960,6 +1034,22 @@ fn void update_progress(UIState* state, uint pieces_complete, uint pieces_downlo
 }
 
 <*
+ Update piece states for visualization.
+ Called from progress event handler with current piece states.
+*>
+fn void update_piece_states(UIState* state, piece_picker::PieceState[] states) @public
+{
+    // Free old piece states
+    if (state.piece_states.len > 0)
+    {
+        mem::free(state.piece_states.ptr);
+    }
+
+    // Store new piece states
+    state.piece_states = states;
+}
+
+<*
  Update peer stats.
  Called from peer connection callbacks.
 *>
@@ -1241,6 +1331,12 @@ fn void free(UIState* state) @public
     if (state.log_messages.len > 0)
     {
         mem::free(state.log_messages.ptr);
+    }
+
+    // Free piece states
+    if (state.piece_states.len > 0)
+    {
+        mem::free(state.piece_states.ptr);
     }
 
     // Close raylib window

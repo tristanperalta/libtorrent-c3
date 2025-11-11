@@ -381,6 +381,23 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
         case peer_wire::MessageType.CHOKE:
             io::printfn("  Peer %s choked us", addr);
 
+            // Cancel all pending block requests from this peer
+            // Reset REQUESTED blocks back to FREE so other peers can request them
+            uint total_reset = 0;
+            for (usz i = 0; i < ctx.dm.max_concurrent_pieces; i++)
+            {
+                if (ctx.dm.active_downloads[i].active)
+                {
+                    uint reset = ctx.dm.active_downloads[i].blocks.reset_requested_blocks();
+                    total_reset += reset;
+                }
+            }
+
+            if (total_reset > 0)
+            {
+                io::printfn("    Reset %d requested blocks due to choke", total_reset);
+            }
+
         default:
             // Ignore other message types for now
     }
@@ -436,6 +453,7 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
                 // We can only request if:
                 // 1. Peer is not choking us, OR
                 // 2. Peer is choking but piece is in allowed_fast set
+                bool can_request = true;
                 if (peer_info.connection.peer_choking)
                 {
                     // Check if piece is in allowed_fast set
@@ -452,24 +470,28 @@ fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @publi
                     if (!is_allowed)
                     {
                         // Skip this peer - choked and piece not in allowed_fast set
-                        return; // Continue to next peer (was continue)
+                        can_request = false;
                     }
                     // else: proceed to request (choked but piece IS in allowed_fast set)
                 }
 
-                // Send REQUEST message
-                peer_info.connection.send_request(req.piece_index, req.offset, req.length)!!;
-
-                // Mark block as requested (handle race where piece completes)
-                if (catch excuse = ctx.dm.mark_block_requested(req.piece_index, req.offset))
+                // Send request if allowed
+                if (can_request)
                 {
-                    // Piece no longer downloading (race condition) - ignore this request
-                    return; // Exit @each early (was break)
-                }
+                    // Send REQUEST message
+                    peer_info.connection.send_request(req.piece_index, req.offset, req.length)!!;
 
-                requests_sent++;
-                requested = true;
-                return; // Exit @each early (was break)
+                    // Mark block as requested (handle race where piece completes)
+                    if (catch excuse = ctx.dm.mark_block_requested(req.piece_index, req.offset))
+                    {
+                        // Piece no longer downloading (race condition) - ignore this request
+                        return; // Exit @each early (was break)
+                    }
+
+                    requests_sent++;
+                    requested = true;
+                    return; // Exit @each early (was break) - found a peer who accepted request
+                }
             }
         };
 

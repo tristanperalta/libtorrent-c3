@@ -133,6 +133,32 @@ fn BlockManager create(uint piece_index, uint piece_length) @public
 }
 
 <*
+ Reset all REQUESTED blocks back to FREE state.
+
+ Used when a peer chokes us - we need to cancel all pending
+ requests and make those blocks available for requesting again
+ from other peers.
+
+ @return "Number of blocks reset"
+*>
+fn uint BlockManager.reset_requested_blocks(&self) @public
+{
+    uint reset_count = 0;
+
+    for (usz i = 0; i < self.num_blocks; i++)
+    {
+        if (self.blocks[i].state == BlockState.REQUESTED)
+        {
+            self.blocks[i].state = BlockState.FREE;
+            self.blocks[i].request_time = 0;
+            reset_count++;
+        }
+    }
+
+    return reset_count;
+}
+
+<*
  Free a block manager.
 *>
 fn void BlockManager.free(&self) @public

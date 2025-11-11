@@ -1242,6 +1242,18 @@ fn void on_progress_updated_event(String event_type, void* event_data, void* use
                                 (long)evt.bytes_downloaded, evt.download_speed, evt.upload_speed);
     raylib_gui::update_peers(ctx.gui_state, (int)connected_peers, (int)total_peers);
 
+    // Update piece states for visualization
+    if (ctx.dm)
+    {
+        // Extract current piece states from picker
+        piece_picker::PieceState[] piece_states = mem::new_array(piece_picker::PieceState, ctx.dm.picker.num_pieces);
+        for (uint i = 0; i < ctx.dm.picker.num_pieces; i++)
+        {
+            piece_states[i] = ctx.dm.picker.pieces[i].state;
+        }
+        raylib_gui::update_piece_states(ctx.gui_state, piece_states);
+    }
+
     // Phase 1 removed: update_gui_file_list(ctx) moved to dedicated event handler
 }
 

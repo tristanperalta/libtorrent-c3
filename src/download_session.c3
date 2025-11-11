@@ -747,7 +747,7 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
             if (catch excuse = ctx.dm.start_piece_download(peer_pieces))
             {
                 // No more slots available or no pieces this peer has that we need
-                return; // Exit @each early (was break)
+                // Continue to try with other peers instead of exiting @each
             }
             else
             {

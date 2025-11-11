@@ -367,9 +367,15 @@ fn void test_complete_piece_success() @test
     for (usz i = 0; i < data.len; i++) data[i] = (char)(i & 0xFF);
     char[20] hash = sha1::hash(data[..]);
 
-    // Create manager with correct hash
+    // Create manager with correct hash for all 3 pieces
     char[60] hashes;
-    for (usz i = 0; i < 20; i++) hashes[i] = hash[i];
+    for (usz i = 0; i < 3; i++)
+    {
+        for (usz j = 0; j < 20; j++)
+        {
+            hashes[i * 20 + j] = hash[j];
+        }
+    }
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);
@@ -713,8 +719,15 @@ fn void test_have_piece() @test
     for (usz i = 0; i < 16384; i++) piece_data[i] = (char)i;
     char[20] piece_hash = sha1::hash(piece_data[..]);
 
+    // Create hashes for all 3 pieces
     char[60] hashes;
-    for (usz i = 0; i < 20; i++) hashes[i] = piece_hash[i];
+    for (usz i = 0; i < 3; i++)
+    {
+        for (usz j = 0; j < 20; j++)
+        {
+            hashes[i * 20 + j] = piece_hash[j];
+        }
+    }
 
     download_manager::DownloadManager manager = download_manager::create(
         &loop, 3, 16384, 16384, hashes[..], 1, 16384);

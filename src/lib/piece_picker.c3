@@ -2,6 +2,7 @@ module libtorrent::piece_picker;
 
 import std::io;
 import std::collections::list;
+import std::math::random;
 import libtorrent::storage_manager;
 
 <*
@@ -181,7 +182,9 @@ fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces, storage_manager::Stor
     }
 
     // Find rarest piece the peer has that we need
-    uint best_piece_index = 0;
+    // Use two-pass algorithm to randomize selection among equally-rare pieces
+
+    // Pass 1: Find the minimum availability
     uint lowest_availability = uint.max;
     bool found = false;
 
@@ -196,11 +199,10 @@ fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces, storage_manager::Stor
         // BEP 21: Skip if piece not wanted for selected files
         if (storage != null && !storage.is_piece_wanted((uint)i)) continue;
 
-        // Check if this is rarer than current best
+        // Track minimum availability
         if (self.pieces[i].availability < lowest_availability)
         {
             lowest_availability = self.pieces[i].availability;
-            best_piece_index = (uint)i;
             found = true;
         }
     }
@@ -212,7 +214,46 @@ fn uint? PiecePicker.pick_piece(&self, bool[] peer_pieces, storage_manager::Stor
         return NO_PIECES_AVAILABLE?;
     }
 
-    return best_piece_index;
+    // Pass 2: Collect all pieces at minimum availability
+    List{uint} candidates;
+    candidates.init(mem);
+    defer candidates.free();
+
+    for (usz i = 0; i < self.num_pieces; i++)
+    {
+        // Skip if peer doesn't have this piece
+        if (!peer_pieces[i]) continue;
+
+        // Skip if we already have or are downloading
+        if (self.pieces[i].state != PieceState.FREE) continue;
+
+        // BEP 21: Skip if piece not wanted for selected files
+        if (storage != null && !storage.is_piece_wanted((uint)i)) continue;
+
+        // Collect all pieces at minimum availability
+        if (self.pieces[i].availability == lowest_availability)
+        {
+            candidates.push((uint)i);
+        }
+    }
+
+    // Randomly select from candidates to break ties
+    if (candidates.len() == 0)
+    {
+        // Should never happen, but handle gracefully
+        return NO_PIECES_AVAILABLE?;
+    }
+    else if (candidates.len() == 1)
+    {
+        // Only one candidate, return it
+        return candidates.get(0);
+    }
+    else
+    {
+        // Multiple candidates with equal rarity - randomly select
+        usz random_index = random::rand((uint)candidates.len());
+        return candidates.get(random_index);
+    }
 }
 
 <*
