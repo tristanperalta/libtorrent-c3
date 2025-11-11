@@ -1,4 +1,4 @@
-module libtorrent::download_state_provider;
+module libtorrent::ports::state_provider;
 
 import std::io;
 

@@ -1,10 +1,10 @@
-module libtorrent::resume_data;
+module libtorrent::adapters::resume_data_state_provider;
 
 import std::io;
 import std::core::mem;
 import libtorrent::bencode;
 import libtorrent::file_selection;
-import libtorrent::download_state_provider;
+import libtorrent::ports::state_provider;
 import async::file;
 
 /**
@@ -40,7 +40,7 @@ struct ResumeData
  * ResumeDataProvider - File-based implementation of StateProvider interface.
  * Implements state persistence using bencode files (.torrent.resume).
  */
-struct ResumeDataProvider (download_state_provider::StateProvider)
+struct ResumeDataProvider (state_provider::StateProvider)
 {
     void* _vtable;     // Space for interface vtable pointer
     void* _typeinfo;   // Space for interface type information
@@ -192,19 +192,19 @@ fn void ResumeData.free(&self) @public
 /**
  * Load state implementation.
  */
-fn download_state_provider::DownloadState? ResumeDataProvider.load_state(&self, String torrent_path) @dynamic
+fn state_provider::DownloadState? ResumeDataProvider.load_state(&self, String torrent_path) @dynamic
 {
     // Load resume data
     ResumeData? resume_opt = load_resume_data(torrent_path);
     if (catch err = resume_opt)
     {
-        return download_state_provider::STATE_LOAD_ERROR?;
+        return state_provider::STATE_LOAD_ERROR?;
     }
     ResumeData resume = resume_opt;
     defer resume.free();
 
     // Convert to DownloadState
-    download_state_provider::DownloadState state;
+    state_provider::DownloadState state;
     state.file_selection = resume.file_selection.copy(mem);
     state.version = resume.version;
 
@@ -214,12 +214,12 @@ fn download_state_provider::DownloadState? ResumeDataProvider.load_state(&self, 
 /**
  * Save state implementation.
  */
-fn void? ResumeDataProvider.save_state(&self, String torrent_path, download_state_provider::DownloadState* state) @dynamic
+fn void? ResumeDataProvider.save_state(&self, String torrent_path, state_provider::DownloadState* state) @dynamic
 {
     // Save resume data
     if (catch err = save_resume_data(torrent_path, state.file_selection))
     {
-        return download_state_provider::STATE_SAVE_ERROR?;
+        return state_provider::STATE_SAVE_ERROR?;
     }
 }
 
@@ -238,7 +238,7 @@ fn void? ResumeDataProvider.delete_state(&self, String torrent_path) @dynamic
 {
     if (catch err = delete_resume_data(torrent_path))
     {
-        return download_state_provider::STATE_SAVE_ERROR?;
+        return state_provider::STATE_SAVE_ERROR?;
     }
 }
 
@@ -247,8 +247,8 @@ fn void? ResumeDataProvider.delete_state(&self, String torrent_path) @dynamic
  *
  * @return "Provider instance (can be used as StateProvider interface)"
  */
-fn download_state_provider::StateProvider* create_resume_data_provider() @public
+fn state_provider::StateProvider* create_resume_data_provider() @public
 {
     ResumeDataProvider* provider = mem::new(ResumeDataProvider);
-    return (download_state_provider::StateProvider*)provider;
+    return (state_provider::StateProvider*)provider;
 }

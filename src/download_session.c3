@@ -17,7 +17,8 @@ import libtorrent::block_manager;
 import libtorrent::piece_assembler;
 import libtorrent::storage_manager;
 import libtorrent::file_selection;
-import libtorrent::download_state_provider;
+import libtorrent::ports::state_provider;
+import libtorrent::adapters::resume_data_state_provider;
 import libtorrent::upload_manager;
 import libtorrent::upload_handler;
 import libtorrent::bitfield;
@@ -152,7 +153,7 @@ struct DownloadContext
     bool is_partial_seed;       // BEP 21: We are a partial seed (multi-file, selective download)
     int exit_code;
     String torrent_path;        // Path to .torrent file (for resume data)
-    download_state_provider::StateProvider* state_provider;  // BEP 21: Pluggable state persistence
+    state_provider::StateProvider* state_provider;  // BEP 21: Pluggable state persistence
 
     // Download statistics
     ulong total_bytes_downloaded;       // Total bytes downloaded (all sources)
@@ -348,7 +349,7 @@ fn void on_partial_seed_complete(DownloadContext* ctx) @public
     // BEP 21: Save resume data with file selection
     if (ctx.state_provider && ctx.torrent_path.len > 0 && ctx.select_files_str.len > 0)
     {
-        download_state_provider::DownloadState state;
+        state_provider::DownloadState state;
         state.file_selection = ctx.select_files_str;
         state.version = 1;
 
@@ -578,8 +579,8 @@ fn void toggle_file_selection(DownloadContext* ctx, usz file_index, bool selecte
         String selection_str = build_file_selection_string(ctx.sm);
         defer free(selection_str);
 
-        // Save via resume_data module directly (workaround for interface issue)
-        (void)resume_data::save_resume_data(ctx.torrent_path, selection_str);
+        // Save via resume_data_state_provider module directly (workaround for interface issue)
+        (void)resume_data_state_provider::save_resume_data(ctx.torrent_path, selection_str);
     }
 
     // Publish selection change event
@@ -2246,14 +2247,14 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Try loading from resume data if no CLI selection
     if (file_sel_to_apply.len == 0 && ctx.state_provider && ctx.torrent_path.len > 0 && torrent.info.is_multi_file)
     {
-        download_state_provider::DownloadState? state_opt = ctx.state_provider.load_state(ctx.torrent_path);
+        state_provider::DownloadState? state_opt = ctx.state_provider.load_state(ctx.torrent_path);
         if (catch err = state_opt)
         {
             // No resume data - that's fine
         }
         else
         {
-            download_state_provider::DownloadState state = state_opt;
+            state_provider::DownloadState state = state_opt;
             defer state.free();
 
             if (state.file_selection.len > 0)

@@ -28,7 +28,7 @@ import libtorrent::file_selection;
 import torrent_client::log_outputs;
 import torrent_client::download_session;
 import torrent_client::magnet_download_session;
-import libtorrent::resume_data;
+import libtorrent::adapters::resume_data_state_provider;
 import raylib_gui;
 
 // ============================================================================
@@ -1568,7 +1568,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.event_bus = libtorrent::event_bus::create(loop);
 
     // BEP 21: Create download state provider (file-based resume data)
-    ctx.state_provider = resume_data::create_resume_data_provider();
+    ctx.state_provider = resume_data_state_provider::create_resume_data_provider();
 
     // Subscribe GUI event handlers to EventBus
     ctx.event_bus.subscribe(event_types::EVENT_PROGRESS_UPDATED, &on_progress_updated_event, &ctx);
@@ -1988,7 +1988,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.event_bus = libtorrent::event_bus::create(loop);
 
     // BEP 21: Create download state provider (file-based resume data)
-    ctx.state_provider = resume_data::create_resume_data_provider();
+    ctx.state_provider = resume_data_state_provider::create_resume_data_provider();
 
     // Start periodic log flush timer (every 2 seconds) if logging is enabled
     async::timer::Timer* flush_timer = null;
