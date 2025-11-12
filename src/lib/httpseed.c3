@@ -85,6 +85,7 @@ struct HttpSeedManager
     usz next_url_index;                 // Round-robin index for URL selection
     event_bus::EventBus* event_bus;     // Event bus for publishing HttpSeed events (can be null)
     ulong total_bytes_downloaded;       // Track total bytes downloaded from all URLs
+    bool shutting_down;                 // Prevents callback execution after .free()
 }
 
 <*
@@ -117,6 +118,7 @@ fn HttpSeedManager* create(event_loop::EventLoop* loop,
     mgr.next_url_index = 0;
     mgr.event_bus = event_bus;
     mgr.total_bytes_downloaded = 0;
+    mgr.shutting_down = false;
 
     // Initialize URL list
     mgr.urls = mem::new_array(HttpSeedUrl, torrent.httpseeds.len);
@@ -144,6 +146,9 @@ fn HttpSeedManager* create(event_loop::EventLoop* loop,
  *>
 fn void HttpSeedManager.free(&self) @public
 {
+    // Set shutdown flag FIRST to prevent callbacks from accessing freed memory
+    self.shutting_down = true;
+
     // Free URL strings
     foreach (url : self.urls)
     {
@@ -459,6 +464,19 @@ fn fault? HttpSeedManager.start_piece_download(&self, uint piece_index,
 fn void on_http_piece_received(http::HttpResponse* response, int status, void* user_data)
 {
     HttpSeedDownload* download = (HttpSeedDownload*)user_data;
+
+    // Check if manager is shutting down (freed while HTTP request was in-flight)
+    if (download.manager && download.manager.shutting_down)
+    {
+        io::printfn("[HttpSeed] Callback received after shutdown, ignoring piece %d", download.piece_index);
+
+        // Cleanup response body and return early
+        if (response && response.body.len > 0)
+        {
+            libc::free((void*)response.body.ptr);
+        }
+        return;
+    }
 
     // Check if request failed
     if (status != 0 || !response)

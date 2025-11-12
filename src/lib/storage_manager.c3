@@ -4,8 +4,10 @@ import async::file;
 import async::work;
 import async::event_loop;
 import libtorrent::metainfo;
+import libtorrent::ports::state_provider;
 import std::io;
 import std::hash::sha1;
+import libc;
 
 <*
  Storage Manager - Persistent Storage Layer
@@ -1193,4 +1195,73 @@ fn bool StorageManager.is_piece_wanted(&self, uint piece_index) @public
 
     // No selected files touched by this piece
     return false;
+}
+
+/**
+ * Get file validation data for FastResume.
+ * Returns mtime and size for each file to detect changes.
+ *
+ * @return "Array of FileResumeData (mtime + size per file)"
+ */
+fn state_provider::FileResumeData[] StorageManager.get_file_validation_data(&self) @public
+{
+    state_provider::FileResumeData[] data = mem::new_array(state_provider::FileResumeData, self.files.len);
+
+    foreach (i, file_info : self.files)
+    {
+        // Get file stats using libc stat()
+        libc::Stat file_stat;
+        int result = libc::stat((ZString)file_info.path.ptr, &file_stat);
+
+        if (result == 0)
+        {
+            // File exists - capture mtime and size
+            data[i].mtime = (long)file_stat.st_mtime;
+            data[i].size = (ulong)file_stat.st_size;
+        }
+        else
+        {
+            // File doesn't exist or stat failed - use sentinels
+            data[i].mtime = 0;
+            data[i].size = 0;
+        }
+    }
+
+    return data;
+}
+
+/**
+ * Validate files against saved resume data.
+ * Compares current mtime and size with saved values.
+ *
+ * @param saved_data : "FileResumeData from previous session"
+ * @return "Bool array: true if file unchanged, false if modified/missing"
+ */
+fn bool[] StorageManager.validate_files(&self, state_provider::FileResumeData[] saved_data) @public
+{
+    bool[] valid = mem::new_array(bool, self.files.len);
+
+    // If saved_data length doesn't match, mark all as invalid (torrent structure changed)
+    if (saved_data.len != self.files.len)
+    {
+        for (usz i = 0; i < valid.len; i++)
+        {
+            valid[i] = false;
+        }
+        return valid;
+    }
+
+    // Get current file stats
+    state_provider::FileResumeData[] current = self.get_file_validation_data();
+    defer free(current);
+
+    // Compare each file
+    for (usz i = 0; i < valid.len; i++)
+    {
+        // File is valid if both mtime AND size match
+        valid[i] = (current[i].mtime == saved_data[i].mtime &&
+                   current[i].size == saved_data[i].size);
+    }
+
+    return valid;
 }

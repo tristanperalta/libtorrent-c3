@@ -198,6 +198,20 @@ fn BencodeValue* encode_fastresume(state_provider::DownloadState* state)
         dict.dict_set("file_priority", file_prio_list);
     }
 
+    // File resume data for validation (libtorrent-rasterbar compatible)
+    if (state.file_resume.len > 0)
+    {
+        BencodeValue* file_resume_list = bencode::make_list();
+        foreach (resume_data : state.file_resume)
+        {
+            BencodeValue* file_dict = bencode::make_dict();
+            file_dict.dict_set("mtime", bencode::make_integer(resume_data.mtime));
+            file_dict.dict_set("size", bencode::make_integer((long)resume_data.size));
+            file_resume_list.list_append(file_dict);
+        }
+        dict.dict_set("file_resume", file_resume_list);
+    }
+
     if (state.idle_limit > 0)
     {
         dict.dict_set("idle_limit", bencode::make_integer((long)state.idle_limit));
@@ -442,6 +456,43 @@ fn state_provider::DownloadState? decode_fastresume(BencodeValue* root)
     else
     {
         state.file_priority = {};
+    }
+
+    // File resume data for validation (libtorrent-rasterbar compatible)
+    BencodeValue* file_resume = root.dict_get("file_resume");
+    if (file_resume && file_resume.type == bencode::BencodeType.LIST)
+    {
+        usz count = file_resume.list.size;
+        if (count > 0)
+        {
+            state.file_resume = mem::new_array(state_provider::FileResumeData, count);
+            foreach (i, file_dict : file_resume.list.array_view())
+            {
+                if (file_dict.type == bencode::BencodeType.DICT)
+                {
+                    BencodeValue* mtime_val = file_dict.dict_get("mtime");
+                    BencodeValue* size_val = file_dict.dict_get("size");
+
+                    if (mtime_val && mtime_val.type == bencode::BencodeType.INTEGER)
+                    {
+                        state.file_resume[i].mtime = mtime_val.integer;
+                    }
+
+                    if (size_val && size_val.type == bencode::BencodeType.INTEGER)
+                    {
+                        state.file_resume[i].size = (ulong)size_val.integer;
+                    }
+                }
+            }
+        }
+        else
+        {
+            state.file_resume = {};
+        }
+    }
+    else
+    {
+        state.file_resume = {};
     }
 
     BencodeValue* upload_rate_limit = root.dict_get("upload_rate_limit");

@@ -1337,6 +1337,16 @@ fn state_provider::DownloadState build_download_state(Session* ctx) @public
         state.file_priority = {};
     }
 
+    // File validation data (mtime + size for FastResume validation)
+    if (ctx.sm)
+    {
+        state.file_resume = ctx.sm.get_file_validation_data();
+    }
+    else
+    {
+        state.file_resume = {};
+    }
+
     // Optional fields (use defaults for now)
     state.upload_rate_limit = 0;
     state.download_rate_limit = 0;
@@ -1402,6 +1412,44 @@ fn bool try_load_fastresume_data(Session* ctx) @public
     {
         io::printfn("  Warning: Resume data piece bitfield size mismatch (expected %d bytes, got %d bytes)",
                    expected_bytes, state.have_pieces.len);
+        return false;
+    }
+
+    // Validate files (libtorrent-rasterbar compatible mtime + size checking)
+    if (state.file_resume.len > 0)
+    {
+        io::printfn("  Validating files (mtime + size check)...");
+
+        bool[] file_valid = ctx.sm.validate_files(state.file_resume);
+        defer free(file_valid);
+
+        bool all_files_valid = true;
+        uint files_changed = 0;
+
+        for (usz i = 0; i < file_valid.len; i++)
+        {
+            if (!file_valid[i])
+            {
+                io::printfn("  Warning: File %d changed (mtime/size mismatch)", i);
+                all_files_valid = false;
+                files_changed++;
+            }
+        }
+
+        if (!all_files_valid)
+        {
+            io::printfn("  %d file(s) changed since resume - full verification required", files_changed);
+            return false;  // Trigger full piece verification
+        }
+
+        io::printfn("  All files unchanged - trusting FastResume");
+    }
+    else
+    {
+        // Backward compatibility: Old resume files without file_resume data
+        // For safety, require full verification
+        io::printfn("  Warning: Resume data has no file validation metadata");
+        io::printfn("  Full verification required for safety");
         return false;
     }
 
@@ -2866,7 +2914,8 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     io::printfn("");
 
     // Initialize web seeding (BEP 19)
-    if (torrent.url_list.len > 0)
+    // Only create if download is not already complete (optimization + prevents race conditions)
+    if (torrent.url_list.len > 0 && !ctx.download_complete)
     {
         ctx.webseed_mgr = webseed::create(ctx.get_loop(), torrent, ctx.event_bus);  // Uses default: 20 concurrent downloads
         if (ctx.webseed_mgr)
@@ -2893,7 +2942,8 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     }
 
     // Initialize HTTP seeding (BEP 17)
-    if (torrent.httpseeds.len > 0)
+    // Only create if download is not already complete (optimization + prevents race conditions)
+    if (torrent.httpseeds.len > 0 && !ctx.download_complete)
     {
         ctx.httpseed_mgr = httpseed::create(ctx.get_loop(), torrent, ctx.event_bus);  // Uses default: 20 concurrent downloads
         if (ctx.httpseed_mgr)

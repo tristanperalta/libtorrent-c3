@@ -50,6 +50,17 @@ fn void UnfinishedPiece.free(&self)
 }
 
 /**
+ * File resume data for validation (per-file).
+ * Used to detect file changes since last session.
+ * Follows libtorrent-rasterbar's approach (mtime + size checking).
+ */
+struct FileResumeData
+{
+    long mtime;      // File modification timestamp (Unix time)
+    ulong size;      // File size in bytes
+}
+
+/**
  * Download state structure.
  * Contains all resumable state for a torrent download.
  *
@@ -110,6 +121,9 @@ struct DownloadState
     // Network data (for quick reconnection)
     String save_path;               // Download directory
 
+    // File validation data (libtorrent-rasterbar compatible)
+    FileResumeData[] file_resume;   // Per-file mtime+size for validation
+
     // ===== TRANSMISSION-SPECIFIC FIELDS =====
     // Fields used by Transmission BitTorrent client
 
@@ -141,6 +155,7 @@ fn void DownloadState.free(&self)
     // Optional fields
     if (self.file_priority.len > 0) free(self.file_priority);
     if (self.save_path.len > 0) free(self.save_path);
+    if (self.file_resume.len > 0) free(self.file_resume);
 }
 
 /**
