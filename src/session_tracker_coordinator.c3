@@ -6,7 +6,7 @@ import async::timer;
 import libtorrent::tracker;
 import libtorrent::tracker_manager;
 import libtorrent::metainfo;
-import torrent_client::download_session;
+import torrent_client::session;
 
 /**
  * Session Tracker Coordinator

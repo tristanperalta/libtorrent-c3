@@ -8,7 +8,7 @@ import libtorrent::download_manager;
 import libtorrent::block_manager;
 import libtorrent::bitfield;
 import libtorrent::peer_pool;
-import torrent_client::download_session;
+import torrent_client::session;
 
 /**
  * Session Message Handler
@@ -26,14 +26,14 @@ import torrent_client::download_session;
  * @param peer : "Peer connection that sent the message"
  * @param msg : "Decoded message"
  * @param addr : "Peer address (IPv4 or IPv6)"
- * @param user_data : "DownloadContext pointer"
+ * @param user_data : "Session pointer"
  */
 fn void handle_peer_message(peer_connection::PeerConnection* peer,
                              peer_wire::Message* msg,
                              common::SocketAddress* addr,
                              void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
 
     // Get peer from pool
     peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(addr);
@@ -222,7 +222,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
             else if (received_blocks == total_blocks)
             {
                 // Piece complete - verify and write to disk
-                ctx.dm.complete_piece(piece_msg.index, &download_session::on_download_piece_complete, ctx);
+                ctx.dm.complete_piece(piece_msg.index, &session::on_download_piece_complete, ctx);
             }
 
             // Keep the request pipeline full
@@ -411,7 +411,7 @@ fn void handle_peer_message(peer_connection::PeerConnection* peer,
  *
  * @param ctx : "Download context"
  */
-fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @public
+fn void request_blocks_from_peers(session::Session* ctx) @public
 {
     // Try to fill the pipeline with block requests
     int requests_sent = 0;

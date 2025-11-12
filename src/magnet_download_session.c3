@@ -16,7 +16,7 @@ import libtorrent::peer_connection;
 import libtorrent::bencode;
 import libtorrent::storage_manager;
 import libtorrent::download_manager;
-import torrent_client::download_session;
+import torrent_client::session;
 
 /**
  * Magnet Download Session (BEP 9)
@@ -40,7 +40,7 @@ import torrent_client::download_session;
  * @param ctx : "Download context"
  * @param magnet_uri : "Magnet URI to download from"
  */
-fn void start_magnet_download(download_session::DownloadContext* ctx, String magnet_uri) @public
+fn void start_magnet_download(session::Session* ctx, String magnet_uri) @public
 {
     io::printfn("Parsing magnet link...");
 
@@ -144,7 +144,7 @@ fn void start_magnet_download(download_session::DownloadContext* ctx, String mag
  *
  * @param ctx : "Download context"
  */
-fn void start_tracker_announce(download_session::DownloadContext* ctx) @private
+fn void start_tracker_announce(session::Session* ctx) @private
 {
     // Get next tracker from tracker manager
     String tracker_url = ctx.tracker_mgr.get_next_tracker();
@@ -188,7 +188,7 @@ fn void start_tracker_announce(download_session::DownloadContext* ctx) @private
  */
 fn void on_announce_complete(tracker::TrackerResponse* response, int status, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
 
     if (status != 0)
     {
@@ -242,7 +242,7 @@ fn void on_announce_complete(tracker::TrackerResponse* response, int status, voi
  *
  * @param ctx : "Download context"
  */
-fn void on_metadata_complete(download_session::DownloadContext* ctx) @private
+fn void on_metadata_complete(session::Session* ctx) @private
 {
     io::printfn("[Metadata] Parsing downloaded metadata...");
 
@@ -290,7 +290,7 @@ fn void on_metadata_complete(download_session::DownloadContext* ctx) @private
     }
 
     io::printfn("[Metadata] Successfully parsed! Name: %s, Size: %s",
-                real_torrent.info.name, download_session::format_size(real_torrent.info.length));
+                real_torrent.info.name, session::format_size(real_torrent.info.length));
 
     // Free fake torrent and replace with real one
     free(ctx.torrent);
@@ -301,7 +301,7 @@ fn void on_metadata_complete(download_session::DownloadContext* ctx) @private
     uint last_piece_length = (uint)(real_torrent.info.length % real_torrent.info.piece_length);
     if (last_piece_length == 0) last_piece_length = (uint)real_torrent.info.piece_length;
 
-    io::printfn("[Metadata] Pieces: %d x %s", num_pieces, download_session::format_size(real_torrent.info.piece_length));
+    io::printfn("[Metadata] Pieces: %d x %s", num_pieces, session::format_size(real_torrent.info.piece_length));
     io::printfn("");
 
     // Build storage path (for multi-file torrents, append torrent name)
@@ -355,7 +355,7 @@ fn void on_metadata_complete(download_session::DownloadContext* ctx) @private
     // Initialize storage (will trigger on_storage_initialized callback)
     io::printfn("[Metadata] Starting storage initialization and piece verification...");
     io::printfn("");
-    ctx.sm.initialize(&download_session::on_storage_initialized, ctx);
+    ctx.sm.initialize(&session::on_storage_initialized, ctx);
 }
 
 // ============================================================================
@@ -369,7 +369,7 @@ fn void on_metadata_message(peer_connection::PeerConnection* peer,
                             peer_connection::MetadataMessage* metadata_msg,
                             void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
 
     // Only handle metadata messages if we're doing a magnet download
     if (!ctx.is_magnet_download || !ctx.metadata_dl)
@@ -431,7 +431,7 @@ fn void on_metadata_message(peer_connection::PeerConnection* peer,
  */
 fn void on_metadata_timer(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
 
     if (!ctx.is_magnet_download || !ctx.metadata_dl || ctx.metadata_dl.is_complete())
     {

@@ -26,7 +26,7 @@ import libtorrent::event_bus;
 import libtorrent::event_types;
 import libtorrent::file_selection;
 import torrent_client::log_outputs;
-import torrent_client::download_session;
+import torrent_client::session;
 import torrent_client::magnet_download_session;
 import libtorrent::adapters::fastresume_state_provider;
 import raylib_gui;
@@ -351,7 +351,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
     // Basic info
     io::printfn("Name: %s", torrent.info.name);
 
-    String size_str = download_session::format_size(torrent.info.length);
+    String size_str = session::format_size(torrent.info.length);
     defer free(size_str);
     io::printfn("Size: %s (%d bytes)", size_str, torrent.info.length);
 
@@ -395,7 +395,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
                 if (i > 0) path.append_char('/');
                 path.append(component);
             }
-            String file_size_str = download_session::format_size(file.length);
+            String file_size_str = session::format_size(file.length);
             defer free(file_size_str);
             io::printfn("    [%d] %s (%s)", idx + 1, path.str_view(), file_size_str);
         }
@@ -408,7 +408,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
 
     // Piece info
     io::printfn("Piece Info:");
-    String piece_length_str = download_session::format_size(torrent.info.piece_length);
+    String piece_length_str = session::format_size(torrent.info.piece_length);
     defer free(piece_length_str);
     io::printfn("  Piece length: %s", piece_length_str);
     long num_pieces = torrent.info.pieces.len / 20;
@@ -693,7 +693,7 @@ fn int cmd_announce(event_loop::EventLoop* loop, String torrent_path)
         else if (ctx.tracker_status != 0)
         {
             // Show descriptive error based on status code
-            String error_desc = download_session::tracker_error_string(ctx.tracker_status);
+            String error_desc = session::tracker_error_string(ctx.tracker_status);
             io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, ctx.tracker_status);
         }
         else
@@ -831,7 +831,7 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
         // Show descriptive error based on status code
         if (status != 0)
         {
-            String error_desc = download_session::tracker_error_string(status);
+            String error_desc = session::tracker_error_string(status);
             io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, status);
         }
         else
@@ -1163,7 +1163,7 @@ fn int cmd_connect(event_loop::EventLoop* loop, String torrent_path)
  * Build and update file list for GUI display (BEP 21).
  * Called to initialize or refresh the Files tab.
  */
-fn void update_gui_file_list(download_session::DownloadContext* ctx)
+fn void update_gui_file_list(session::Session* ctx)
 {
     if (!ctx.gui_state) return;  // No GUI
     if (!ctx.sm) return;  // No storage manager yet
@@ -1212,8 +1212,8 @@ fn void update_gui_file_list(download_session::DownloadContext* ctx)
  */
 fn void on_file_selection_toggled(usz file_index, bool selected, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
-    download_session::toggle_file_selection(ctx, file_index, selected);
+    session::Session* ctx = (session::Session*)user_data;
+    session::toggle_file_selection(ctx, file_index, selected);
 
     // Refresh GUI file list to reflect the change
     update_gui_file_list(ctx);
@@ -1229,7 +1229,7 @@ fn void on_file_selection_toggled(usz file_index, bool selected, void* user_data
  */
 fn void on_progress_updated_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;  // No GUI to update
 
     event_types::ProgressEvent* evt = (event_types::ProgressEvent*)event_data;
@@ -1263,7 +1263,7 @@ fn void on_progress_updated_event(String event_type, void* event_data, void* use
  */
 fn void on_file_progress_updated_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;  // No GUI to update
 
     // Rebuild and update the entire file list
@@ -1277,7 +1277,7 @@ fn void on_file_progress_updated_event(String event_type, void* event_data, void
  */
 fn void on_file_completed_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::FileProgressEvent* evt = (event_types::FileProgressEvent*)event_data;
@@ -1300,7 +1300,7 @@ fn void on_file_completed_event(String event_type, void* event_data, void* user_
  */
 fn void on_tracker_announce_failed_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::TrackerEvent* evt = (event_types::TrackerEvent*)event_data;
@@ -1313,7 +1313,7 @@ fn void on_tracker_announce_failed_event(String event_type, void* event_data, vo
  */
 fn void on_tracker_no_peers_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     raylib_gui::update_tracker_status(ctx.gui_state, "No peers available");
@@ -1325,7 +1325,7 @@ fn void on_tracker_no_peers_event(String event_type, void* event_data, void* use
  */
 fn void on_tracker_announce_success_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::TrackerEvent* evt = (event_types::TrackerEvent*)event_data;
@@ -1342,7 +1342,7 @@ fn void on_tracker_announce_success_event(String event_type, void* event_data, v
  */
 fn void on_peer_stats_updated_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::PeerEvent* evt = (event_types::PeerEvent*)event_data;
@@ -1355,7 +1355,7 @@ fn void on_peer_stats_updated_event(String event_type, void* event_data, void* u
  */
 fn void on_tracker_status_changed_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::TrackerEvent* evt = (event_types::TrackerEvent*)event_data;
@@ -1369,7 +1369,7 @@ fn void on_tracker_status_changed_event(String event_type, void* event_data, voi
  */
 fn void on_dht_started_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     raylib_gui::add_log(ctx.gui_state, "[DHT] Started");
@@ -1381,7 +1381,7 @@ fn void on_dht_started_event(String event_type, void* event_data, void* user_dat
  */
 fn void on_dht_bootstrapped_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::DhtEvent* evt = (event_types::DhtEvent*)event_data;
@@ -1397,7 +1397,7 @@ fn void on_dht_bootstrapped_event(String event_type, void* event_data, void* use
  */
 fn void on_dht_peers_found_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::DhtEvent* evt = (event_types::DhtEvent*)event_data;
@@ -1413,7 +1413,7 @@ fn void on_dht_peers_found_event(String event_type, void* event_data, void* user
  */
 fn void on_dht_query_complete_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::DhtEvent* evt = (event_types::DhtEvent*)event_data;
@@ -1429,7 +1429,7 @@ fn void on_dht_query_complete_event(String event_type, void* event_data, void* u
  */
 fn void on_webseed_download_started_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
@@ -1445,7 +1445,7 @@ fn void on_webseed_download_started_event(String event_type, void* event_data, v
  */
 fn void on_webseed_download_complete_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
@@ -1462,7 +1462,7 @@ fn void on_webseed_download_complete_event(String event_type, void* event_data, 
  */
 fn void on_webseed_download_failed_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
@@ -1485,7 +1485,7 @@ fn void on_webseed_download_failed_event(String event_type, void* event_data, vo
  */
 fn void on_webseed_url_disabled_event(String event_type, void* event_data, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    session::Session* ctx = (session::Session*)user_data;
     if (!ctx.gui_state) return;
 
     event_types::WebSeedEvent* evt = (event_types::WebSeedEvent*)event_data;
@@ -1538,7 +1538,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     log_outputs::LogSink* log_sink = log_outputs::setup_gui_logging(ui);
 
     // Create download context
-    DownloadContext ctx;
+    Session ctx;
     ctx.loop = loop;
     ctx.torrent = torrent;
     ctx.dm = null;
@@ -1564,7 +1564,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.next_piece_to_verify = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
-    ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
+    ctx.max_concurrent_pieces = session::DEFAULT_MAX_CONCURRENT_PIECES;
     ctx.torrent_path = torrent_path;  // BEP 21: Torrent file path for resume data
     ctx.select_files_str = "";  // BEP 21: File selection loaded from resume data if available
     ctx.gui_state = ui;
@@ -1640,8 +1640,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.tracker_coord = session_tracker_coordinator::create(
         loop, torrent, ctx.tracker_mgr, ctx.current_tracker_url
     );
-    ctx.tracker_coord.set_peers_received_callback(&download_session::on_tracker_peers_received, &ctx);
-    ctx.tracker_coord.set_failed_callback(&download_session::on_tracker_failed, &ctx);
+    ctx.tracker_coord.set_peers_received_callback(&session::on_tracker_peers_received, &ctx);
+    ctx.tracker_coord.set_failed_callback(&session::on_tracker_failed, &ctx);
 
     // Build storage path (for multi-file torrents, append torrent name)
     String storage_path = save_path;
@@ -1697,15 +1697,15 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
 
     // Set peer pool callbacks
     ctx.peer_pool.set_callbacks(
-        &download_session::on_download_peer_connected,
-        &download_session::on_download_peer_message,
-        &download_session::on_download_peer_disconnected,
+        &session::on_download_peer_connected,
+        &session::on_download_peer_message,
+        &session::on_download_peer_disconnected,
         &ctx
     );
 
     // Initialize DHT for peer discovery
     raylib_gui::add_log(ui, "Starting DHT on port 6881...");
-    download_session::init_dht(&ctx, 6881);
+    session::init_dht(&ctx, 6881);
 
     // Initialize web seeding (BEP 19)
     if (torrent.url_list.len > 0)
@@ -1726,7 +1726,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
             else
             {
                 ctx.webseed_timer = timer_opt;
-                ctx.webseed_timer.start(2000, 2000, &download_session::on_webseed_timer_tick, &ctx);
+                ctx.webseed_timer.start(2000, 2000, &session::on_webseed_timer_tick, &ctx);
                 raylib_gui::add_log(ui, "Web seed timer started");
             }
         }
@@ -1734,7 +1734,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
 
     // Initialize storage manager (create directories, open files)
     raylib_gui::add_log(ui, "Initializing storage...");
-    ctx.sm.initialize(&download_session::on_storage_initialized, &ctx);
+    ctx.sm.initialize(&session::on_storage_initialized, &ctx);
 
     // Main GUI loop - run until window closes
     // Continue running after download completes for seeding
@@ -1963,7 +1963,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Set up console logging (file and/or stderr)
     log_outputs::LogSink*? log_sink = log_outputs::setup_console_logging(log_file_path, debug_mode);
 
-    DownloadContext ctx;
+    Session ctx;
     ctx.loop = loop;
     ctx.torrent = null;
     ctx.dm = null;
@@ -1984,7 +1984,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.next_piece_to_verify = 0;
     ctx.numwant = numwant;
     ctx.save_path = save_path;
-    ctx.max_concurrent_pieces = download_session::DEFAULT_MAX_CONCURRENT_PIECES;
+    ctx.max_concurrent_pieces = session::DEFAULT_MAX_CONCURRENT_PIECES;
     ctx.torrent_path = torrent_path;          // BEP 21: Torrent file path for resume data
     ctx.select_files_str = select_files_str;  // BEP 21: File selection for partial seeds
     ctx.gui_state = null;  // Console mode has no GUI
@@ -2036,7 +2036,7 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     {
         // Load torrent file async
         torrent_loader::load_file_async(loop, torrent_path,
-                                         &download_session::on_download_load_complete, &ctx);
+                                         &session::on_download_load_complete, &ctx);
     }
 
     // Run event loop - blocks until user interrupts (Ctrl+C) or error

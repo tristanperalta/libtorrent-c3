@@ -1,4 +1,4 @@
-module torrent_client::download_session;
+module torrent_client::session;
 
 import std::io;
 import std::time;
@@ -61,15 +61,92 @@ const int BLOCK_TIMEOUT_CHECK_INTERVAL_MS = 10000;
 // Default maximum concurrent piece downloads
 // Default: 30 pieces - good balance for typical torrents (256KB-1MB pieces)
 // Allows full utilization of available peers while avoiding excessive memory usage
-// Library users can override this via DownloadContext.max_concurrent_pieces
+// Library users can override this via Session.max_concurrent_pieces
 const int DEFAULT_MAX_CONCURRENT_PIECES = 30;
+
+// ============================================================================
+// Event Type Constants (for EventBus)
+// ============================================================================
+
+// Session state events
+const String SESSION_STARTED = "session.started";
+const String SESSION_PAUSED = "session.paused";
+const String SESSION_RESUMED = "session.resumed";
+const String SESSION_COMPLETED = "session.completed";
+const String SESSION_STOPPED = "session.stopped";
+const String SESSION_ERROR = "session.error";
+
+// Progress events
+const String PIECE_COMPLETED = "piece.completed";
+const String PIECE_HASH_FAILED = "piece.hash_failed";
+
+// Peer events
+const String PEER_CONNECTED = "peer.connected";
+const String PEER_DISCONNECTED = "peer.disconnected";
+
+// Tracker events
+const String TRACKER_ANNOUNCE_SUCCESS = "tracker.success";
+const String TRACKER_ANNOUNCE_FAILED = "tracker.failed";
+
+// Statistics events
+const String STATS_UPDATE = "stats.update";
+
+// ============================================================================
+// Event Data Structures (for EventBus)
+// ============================================================================
+
+// Session state change event data
+struct SessionStateEvent {
+    common::InfoHash info_hash;
+    String message;  // Optional description
+}
+
+// Piece completion event data
+struct PieceCompletedEvent {
+    uint piece_index;
+    usz piece_size;
+    uint pieces_complete;
+    uint total_pieces;
+}
+
+// Peer connection event data
+struct PeerEvent {
+    common::SocketAddress peer_addr;
+}
+
+// Tracker event data
+struct TrackerEvent {
+    String tracker_url;
+    int peer_count;      // For success
+    String error_message;  // For failure
+}
+
+// Statistics update event data
+struct StatsUpdateEvent {
+    long downloaded;
+    long uploaded;
+    int download_rate;
+    int upload_rate;
+    int connected_peers;
+    float progress;
+}
+
+// Session error event data
+struct SessionErrorEvent {
+    String error_message;
+    int error_code;
+}
+
+// ============================================================================
+// Helper Structures
+// ============================================================================
 
 <*
  Context for async piece write operations.
 *>
 struct PieceWriteContext
 {
-    DownloadContext* download_ctx;
+    Session* session;
     char[] piece_data;  // Must be freed after write completes
 }
 
@@ -78,14 +155,14 @@ struct PieceWriteContext
 *>
 struct WebSeedVerifyContext
 {
-    DownloadContext* download_ctx;
+    Session* session;
     uint piece_index;
     char[] piece_data;  // Must be freed after verification
 }
 
 struct HttpSeedVerifyContext
 {
-    DownloadContext* download_ctx;
+    Session* session;
     uint piece_index;
     char[] piece_data;  // Must be freed after verification
 }
@@ -93,7 +170,7 @@ struct HttpSeedVerifyContext
 <*
  Download session context for managing the download workflow.
 *>
-struct DownloadContext
+struct Session
 {
     event_loop::EventLoop* loop;
     libtorrent::metainfo::TorrentFile* torrent;
@@ -258,7 +335,7 @@ fn String format_size(long bytes) @public
  * @param ctx "Download context"
  * @param piece_index "Piece that was just written"
  *>
-fn void check_file_completion(DownloadContext* ctx, uint piece_index)
+fn void check_file_completion(Session* ctx, uint piece_index)
 {
     if (!ctx.torrent.info.is_multi_file) return;  // Single file torrents handled differently
 
@@ -299,7 +376,7 @@ fn void check_file_completion(DownloadContext* ctx, uint piece_index)
  * @param file_index "File index to check"
  * @return "True if all pieces for this file are complete"
  *>
-fn bool is_file_complete_now(DownloadContext* ctx, usz file_index)
+fn bool is_file_complete_now(Session* ctx, usz file_index)
 {
     // Get file byte range
     ulong file_start = ctx.sm.files[file_index].offset;
@@ -324,7 +401,7 @@ fn bool is_file_complete_now(DownloadContext* ctx, usz file_index)
  *
  * @param ctx "Download context"
  *>
-fn void on_partial_seed_complete(DownloadContext* ctx) @public
+fn void on_partial_seed_complete(Session* ctx) @public
 {
     io::printfn("");
     io::printfn("=== Selected Files Complete! ===");
@@ -441,7 +518,7 @@ fn void on_partial_seed_complete(DownloadContext* ctx) @public
  Called when download is complete - enters seeding mode.
  Keeps peer connections and upload manager running to serve pieces.
 *>
-fn void on_complete_download(DownloadContext* ctx) @public
+fn void on_complete_download(Session* ctx) @public
 {
     io::printfn("");
     io::printfn("=== Download Complete! ===");
@@ -451,6 +528,16 @@ fn void on_complete_download(DownloadContext* ctx) @public
 
     // Mark download as complete
     ctx.download_complete = true;
+
+    // Publish SESSION_COMPLETED event
+    if (ctx.event_bus)
+    {
+        SessionStateEvent evt = {
+            .info_hash = ctx.torrent.info_hash,
+            .message = "Download completed"
+        };
+        ctx.event_bus.publish(SESSION_COMPLETED, &evt, SessionStateEvent.sizeof);
+    }
 
     // Send "completed" event to tracker (announces we're now seeding)
     if (ctx.tracker_coord)
@@ -567,7 +654,7 @@ fn String build_file_selection_string(storage_manager::StorageManager* sm) @priv
  * @param file_index : "Index of file to toggle"
  * @param selected : "New selection state"
  *>
-fn void toggle_file_selection(DownloadContext* ctx, usz file_index, bool selected) @public
+fn void toggle_file_selection(Session* ctx, usz file_index, bool selected) @public
 {
     if (!ctx.sm || file_index >= ctx.sm.files.len) return;
 
@@ -595,7 +682,7 @@ fn void toggle_file_selection(DownloadContext* ctx, usz file_index, bool selecte
 *>
 fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool success, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (!success)
     {
@@ -667,8 +754,8 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
 
     // Write piece to disk via storage_manager
     // Create context to manage piece_data lifecycle
-    download_session::PieceWriteContext* write_ctx = mem::new(download_session::PieceWriteContext);
-    write_ctx.download_ctx = ctx;
+    PieceWriteContext* write_ctx = mem::new(PieceWriteContext);
+    write_ctx.session = ctx;
     write_ctx.piece_data = piece_data;
     ctx.sm.write_piece(piece_index, piece_data, &on_piece_written, write_ctx);
 
@@ -779,7 +866,7 @@ fn void on_download_peer_message(peer_connection::PeerConnection* peer,
  * Request blocks from ready peers.
  * Delegates to session_message_handler module.
  */
-fn void request_blocks_from_peers(download_session::DownloadContext* ctx) @public
+fn void request_blocks_from_peers(Session* ctx) @public
 {
     session_message_handler::request_blocks_from_peers(ctx);
 }
@@ -791,10 +878,19 @@ fn void on_download_peer_connected(peer_connection::PeerConnection* peer,
                                     common::SocketAddress* addr,
                                     void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     // Peer connected and ready (BEP 7: dual-stack)
     io::printfn("  Peer %s connected and ready", addr);
+
+    // Publish PEER_CONNECTED event
+    if (ctx.event_bus)
+    {
+        PeerEvent evt = {
+            .peer_addr = *addr
+        };
+        ctx.event_bus.publish(PEER_CONNECTED, &evt, PeerEvent.sizeof);
+    }
 
     // Get peer from pool
     peer_pool::TorrentPeer*? peer_opt = ctx.peer_pool.find_peer(addr);
@@ -860,12 +956,21 @@ fn void on_download_peer_disconnected(common::SocketAddress* addr,
                                        bool was_error,
                                        void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     // Peer disconnected (BEP 7: dual-stack)
     io::printfn("  Peer %s disconnected%s",
                 addr,
                 was_error ? " (error)" : "");
+
+    // Publish PEER_DISCONNECTED event
+    if (ctx.event_bus)
+    {
+        PeerEvent evt = {
+            .peer_addr = *addr
+        };
+        ctx.event_bus.publish(PEER_DISCONNECTED, &evt, PeerEvent.sizeof);
+    }
 
     // Log state before completion check
     int shutting_down_val = ctx.peer_pool ? (int)ctx.peer_pool.shutting_down : -1;
@@ -909,13 +1014,13 @@ fn void on_download_peer_disconnected(common::SocketAddress* addr,
 *>
 fn void on_download_tracker_complete(tracker::TrackerResponse* response, int status, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
     ctx.tracker_completed = true;
     // Note: Don't save response pointer - it becomes invalid after this callback returns
 
     if (status != 0 || !response)
     {
-        String error_desc = download_session::tracker_error_string(status);
+        String error_desc = tracker_error_string(status);
         io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, status);
 
         // Publish tracker error event
@@ -1008,7 +1113,7 @@ fn void on_download_tracker_complete(tracker::TrackerResponse* response, int sta
 *>
 fn void on_storage_initialized(int status, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (status < 0)
     {
@@ -1052,8 +1157,8 @@ fn void on_storage_initialized(int status, void* user_data) @public
 *>
 fn void on_piece_written(uint piece_index, int status, void* user_data) @public
 {
-    download_session::PieceWriteContext* write_ctx = (download_session::PieceWriteContext*)user_data;
-    download_session::DownloadContext* ctx = write_ctx.download_ctx;
+    PieceWriteContext* write_ctx = (PieceWriteContext*)user_data;
+    Session* ctx = write_ctx.session;
 
     if (status == 0)
     {
@@ -1061,6 +1166,21 @@ fn void on_piece_written(uint piece_index, int status, void* user_data) @public
 
         // BEP 21: Check if this piece completes any files
         check_file_completion(ctx, piece_index);
+
+        // Publish PIECE_COMPLETED event
+        if (ctx.event_bus)
+        {
+            usz total, complete, downloading;
+            ctx.dm.get_progress(&total, &complete, &downloading);
+
+            PieceCompletedEvent evt = {
+                .piece_index = piece_index,
+                .piece_size = (usz)ctx.torrent.info.piece_length,
+                .pieces_complete = (uint)complete,
+                .total_pieces = (uint)total
+            };
+            ctx.event_bus.publish(PIECE_COMPLETED, &evt, PieceCompletedEvent.sizeof);
+        }
     }
     else
     {
@@ -1079,7 +1199,7 @@ fn void on_piece_written(uint piece_index, int status, void* user_data) @public
 *>
 fn void on_verify_existing_piece(uint piece_index, bool verified, int status, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
     ctx.pieces_verified_count++;
 
     if (status == 0 && verified)
@@ -1112,7 +1232,7 @@ fn void on_verify_existing_piece(uint piece_index, bool verified, int status, vo
  Start verification for a single piece.
  Extracts the expected hash and queues the verification.
 *>
-fn void start_piece_verification(download_session::DownloadContext* ctx, uint piece_index) @public
+fn void start_piece_verification(Session* ctx, uint piece_index) @public
 {
     // Get expected hash for this piece
     common::InfoHash expected_hash;
@@ -1130,7 +1250,7 @@ fn void start_piece_verification(download_session::DownloadContext* ctx, uint pi
  Build DownloadState from current download context for saving.
  Caller must call state.free() when done.
 *>
-fn state_provider::DownloadState build_download_state(download_session::DownloadContext* ctx) @public
+fn state_provider::DownloadState build_download_state(Session* ctx) @public
 {
     state_provider::DownloadState state;
     state.version = state_provider::STATE_VERSION;
@@ -1206,7 +1326,7 @@ fn state_provider::DownloadState build_download_state(download_session::Download
  Try to load fastresume data and restore verified pieces.
  Returns true if resume data was successfully loaded and pieces restored.
 *>
-fn bool try_load_fastresume_data(download_session::DownloadContext* ctx) @public
+fn bool try_load_fastresume_data(Session* ctx) @public
 {
     if (!ctx.state_provider || ctx.torrent_path.len == 0) return false;
 
@@ -1295,7 +1415,7 @@ fn bool try_load_fastresume_data(download_session::DownloadContext* ctx) @public
  Verify all existing pieces on disk (resume support).
  Calls verify_piece() for each piece asynchronously.
 *>
-fn void verify_all_existing_pieces_async(download_session::DownloadContext* ctx) @public
+fn void verify_all_existing_pieces_async(Session* ctx) @public
 {
     if (ctx.num_pieces == 0)
     {
@@ -1304,9 +1424,9 @@ fn void verify_all_existing_pieces_async(download_session::DownloadContext* ctx)
         return;
     }
 
-    // Start first batch of pieces (limited by download_session::VERIFICATION_BATCH_SIZE)
+    // Start first batch of pieces (limited by VERIFICATION_BATCH_SIZE)
     // This prevents overwhelming the system with too many concurrent verifications
-    uint batch_end = ctx.num_pieces < download_session::VERIFICATION_BATCH_SIZE ? ctx.num_pieces : download_session::VERIFICATION_BATCH_SIZE;
+    uint batch_end = ctx.num_pieces < VERIFICATION_BATCH_SIZE ? ctx.num_pieces : VERIFICATION_BATCH_SIZE;
 
     io::printfn("  Starting batched verification: %d pieces at a time (total: %d)",
                 batch_end, ctx.num_pieces);
@@ -1330,7 +1450,7 @@ fn void verify_all_existing_pieces_async(download_session::DownloadContext* ctx)
 *>
 fn void on_peer_discovery_peers(common::SocketAddress[] peers, String discovery_source, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     io::printfn("[PeerDiscovery] Discovered %d peers from %s", peers.len, discovery_source);
 
@@ -1357,7 +1477,7 @@ fn void on_peer_discovery_peers(common::SocketAddress[] peers, String discovery_
 *>
 fn void on_peer_discovery_complete(bool success, String error_message, void* user_data)
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (!success)
     {
@@ -1374,7 +1494,7 @@ fn void on_peer_discovery_complete(bool success, String error_message, void* use
 *>
 fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     // NOTE: Do NOT store or free the response pointer - it points to stack-allocated memory
     // in http_tracker that will be automatically freed when AnnounceContext is freed
@@ -1386,12 +1506,23 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
         ctx.current_tracker_url = active_tracker;
     }
 
-    // Publish tracker success event
+    // Publish tracker success event (existing event_types system)
     int peer_count = response ? (int)response.peers.len : -1;
     event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
         ctx.current_tracker_url, "Working", peer_count, "", ctx.tracker_mgr
     );
     ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
+
+    // Publish TRACKER_ANNOUNCE_SUCCESS event (new session-level event)
+    if (ctx.event_bus && response)
+    {
+        TrackerEvent evt = {
+            .tracker_url = ctx.current_tracker_url,
+            .peer_count = (int)response.peers.len,
+            .error_message = ""
+        };
+        ctx.event_bus.publish(TRACKER_ANNOUNCE_SUCCESS, &evt, TrackerEvent.sizeof);
+    }
 
     // Start PEX timer if not already running (every 60 seconds)
     if (!ctx.pex_timer)
@@ -1428,7 +1559,7 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
     }
 
     // Start file flush timer if not already running and interval is configured
-    if (!ctx.flush_timer && download_session::FILE_FLUSH_INTERVAL_MS > 0)
+    if (!ctx.flush_timer && FILE_FLUSH_INTERVAL_MS > 0)
     {
         async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
         if (catch err = timer_opt)
@@ -1439,13 +1570,13 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
         {
             ctx.flush_timer = timer_opt;
             // Start with configured interval
-            ctx.flush_timer.start(download_session::FILE_FLUSH_INTERVAL_MS, download_session::FILE_FLUSH_INTERVAL_MS,
+            ctx.flush_timer.start(FILE_FLUSH_INTERVAL_MS, FILE_FLUSH_INTERVAL_MS,
                                   &on_flush_timer_tick, ctx);
         }
     }
 
     // Start block timeout check timer if not already running
-    if (!ctx.block_timeout_timer && download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS > 0)
+    if (!ctx.block_timeout_timer && BLOCK_TIMEOUT_CHECK_INTERVAL_MS > 0)
     {
         async::timer::Timer*? timer_opt = async::timer::create(ctx.loop);
         if (catch err = timer_opt)
@@ -1456,8 +1587,8 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
         {
             ctx.block_timeout_timer = timer_opt;
             // Start with configured interval (10 seconds)
-            ctx.block_timeout_timer.start(download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
-                                          download_session::BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
+            ctx.block_timeout_timer.start(BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
+                                          BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
                                           &on_block_timeout_timer_tick, ctx);
         }
     }
@@ -1471,15 +1602,26 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
 *>
 fn void on_tracker_failed(String error_msg, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     io::eprintfn("Tracker failed after all retries: %s", error_msg);
 
-    // Publish tracker failure event
+    // Publish tracker failure event (existing event_types system)
     event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
         ctx.current_tracker_url, "Failed", -1, error_msg, ctx.tracker_mgr
     );
     ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
+
+    // Publish TRACKER_ANNOUNCE_FAILED event (new session-level event)
+    if (ctx.event_bus)
+    {
+        TrackerEvent evt = {
+            .tracker_url = ctx.current_tracker_url,
+            .peer_count = 0,
+            .error_message = error_msg
+        };
+        ctx.event_bus.publish(TRACKER_ANNOUNCE_FAILED, &evt, TrackerEvent.sizeof);
+    }
 
     // Continue with DHT and web seeds if available
     io::printfn("Continuing with DHT and web seeds...");
@@ -1492,7 +1634,7 @@ fn void on_tracker_failed(String error_msg, void* user_data) @public
 *>
 fn void on_pex_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (ctx.dm.is_complete())
     {
@@ -1511,7 +1653,7 @@ fn void on_pex_timer_tick(async::timer::Timer* timer, void* user_data) @public
 *>
 fn void on_keepalive_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (ctx.dm.is_complete())
     {
@@ -1534,7 +1676,7 @@ fn void on_keepalive_timer_tick(async::timer::Timer* timer, void* user_data) @pu
 *>
 fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (ctx.dm.is_complete())
     {
@@ -1568,7 +1710,7 @@ fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
 *>
 fn void on_block_timeout_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (ctx.dm.is_complete())
     {
@@ -1590,7 +1732,7 @@ fn void on_block_timeout_timer_tick(async::timer::Timer* timer, void* user_data)
 *>
 fn void on_webseed_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (ctx.dm.is_complete())
     {
@@ -1654,7 +1796,7 @@ fn void on_webseed_timer_tick(async::timer::Timer* timer, void* user_data) @publ
 *>
 fn void on_webseed_piece_complete(uint piece_index, char[] piece_data, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (piece_data.len == 0)
     {
@@ -1681,7 +1823,7 @@ fn void on_webseed_piece_complete(uint piece_index, char[] piece_data, void* use
 
     // Create context for web seed verification callback
     WebSeedVerifyContext* verify_ctx = mem::new(WebSeedVerifyContext);
-    verify_ctx.download_ctx = ctx;
+    verify_ctx.session = ctx;
     verify_ctx.piece_index = piece_index;
     verify_ctx.piece_data = piece_data_copy;
 
@@ -1697,7 +1839,7 @@ fn void on_webseed_piece_complete(uint piece_index, char[] piece_data, void* use
 fn void on_webseed_piece_verified(uint piece_index, bool verified, void* user_data) @public
 {
     WebSeedVerifyContext* verify_ctx = (WebSeedVerifyContext*)user_data;
-    DownloadContext* ctx = verify_ctx.download_ctx;
+    Session* ctx = verify_ctx.session;
 
     if (!verified)
     {
@@ -1727,7 +1869,7 @@ fn void on_webseed_piece_verified(uint piece_index, bool verified, void* user_da
  *>
 fn void on_httpseed_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (ctx.dm.is_complete())
     {
@@ -1791,7 +1933,7 @@ fn void on_httpseed_timer_tick(async::timer::Timer* timer, void* user_data) @pub
  *>
 fn void on_httpseed_piece_complete(uint piece_index, char[] piece_data, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (piece_data.len == 0)
     {
@@ -1818,7 +1960,7 @@ fn void on_httpseed_piece_complete(uint piece_index, char[] piece_data, void* us
 
     // Create context for httpseed verification callback
     HttpSeedVerifyContext* verify_ctx = mem::new(HttpSeedVerifyContext);
-    verify_ctx.download_ctx = ctx;
+    verify_ctx.session = ctx;
     verify_ctx.piece_index = piece_index;
     verify_ctx.piece_data = piece_data_copy;
 
@@ -1834,7 +1976,7 @@ fn void on_httpseed_piece_complete(uint piece_index, char[] piece_data, void* us
 fn void on_httpseed_piece_verified(uint piece_index, bool verified, void* user_data) @public
 {
     HttpSeedVerifyContext* verify_ctx = (HttpSeedVerifyContext*)user_data;
-    DownloadContext* ctx = verify_ctx.download_ctx;
+    Session* ctx = verify_ctx.session;
 
     if (!verified)
     {
@@ -1862,7 +2004,7 @@ fn void on_httpseed_piece_verified(uint piece_index, bool verified, void* user_d
  Start tracker announce with retry support.
  Uses multi-tracker manager (BEP 12) if available.
 *>
-fn void announce_with_retry(download_session::DownloadContext* ctx) @public
+fn void announce_with_retry(Session* ctx) @public
 {
     // Check if tracker coordinator is initialized
     if (!ctx.tracker_coord)
@@ -1889,7 +2031,7 @@ fn void announce_with_retry(download_session::DownloadContext* ctx) @public
  Called when all existing pieces have been verified.
  Starts the tracker announce process.
 *>
-fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
+fn void on_all_pieces_verified(Session* ctx) @public
 {
     usz total, complete, downloading;
     ctx.dm.get_progress(&total, &complete, &downloading);
@@ -1939,6 +2081,16 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
         io::printfn("Skipping tracker announce (no trackers configured)");
     }
 
+    // Publish SESSION_STARTED event
+    if (ctx.event_bus)
+    {
+        SessionStateEvent evt = {
+            .info_hash = ctx.torrent.info_hash,
+            .message = "Session started"
+        };
+        ctx.event_bus.publish(SESSION_STARTED, &evt, SessionStateEvent.sizeof);
+    }
+
     // Start DHT peer discovery if enabled
     if (ctx.dht_enabled && ctx.dht_client)
     {
@@ -1957,7 +2109,7 @@ fn void on_all_pieces_verified(download_session::DownloadContext* ctx) @public
 *>
 fn void on_upload_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     // Process upload requests for all connected peers
     ctx.peer_pool.peers.@each(; common::SocketAddress addr, peer_pool::TorrentPeer* peer_info)
@@ -1990,7 +2142,7 @@ fn void on_upload_timer_tick(async::timer::Timer* timer, void* user_data) @publi
 *>
 fn void on_dht_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     // Free previous search if exists
     if (ctx.dht_search)
@@ -2009,7 +2161,7 @@ fn void on_dht_timer_tick(async::timer::Timer* timer, void* user_data) @public
 *>
 fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (ctx.dht_client)
     {
@@ -2020,7 +2172,7 @@ fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
 <*
  Start DHT peer discovery for the torrent's info hash.
 *>
-fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
+fn void start_dht_peer_discovery(Session* ctx) @public
 {
     if (!ctx.dht_client || !ctx.torrent) return;
 
@@ -2102,7 +2254,7 @@ fn void start_dht_peer_discovery(download_session::DownloadContext* ctx) @public
 *>
 fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (!ctx.dht_search)
     {
@@ -2129,7 +2281,7 @@ fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @publi
 <*
  Process DHT peer discovery results and add peers to peer pool.
 *>
-fn void on_dht_peers_found(download_session::DownloadContext* ctx) @public
+fn void on_dht_peers_found(Session* ctx) @public
 {
     if (!ctx.dht_search) return;
 
@@ -2167,7 +2319,7 @@ fn void on_dht_peers_found(download_session::DownloadContext* ctx) @public
  @param ctx : "Download context"
  @return "CompositePeerDiscovery instance with all applicable sources"
 *>
-fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(download_session::DownloadContext* ctx)
+fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(Session* ctx)
 {
     // Create composite
     composite_peer_discovery::CompositePeerDiscovery* composite =
@@ -2230,7 +2382,7 @@ fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(download_sessio
 <*
  Initialize DHT client for peer discovery.
 *>
-fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @public
+fn void init_dht(Session* ctx, ushort dht_port) @public
 {
     // Generate DHT node ID (similar to peer ID)
     common::NodeId our_node_id = tracker::generate_peer_id();
@@ -2287,11 +2439,11 @@ fn void init_dht(download_session::DownloadContext* ctx, ushort dht_port) @publi
 
  @param infohash : "Info hash of the torrent"
  @param peers : "Array of discovered peer addresses"
- @param user_data : "DownloadContext pointer"
+ @param user_data : "Session pointer"
 *>
 fn void on_lsd_peers_discovered(common::InfoHash* infohash, common::SocketAddress[] peers, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     io::printfn("[LSD] Discovered %d peer(s) on local network", peers.len);
 
@@ -2306,11 +2458,11 @@ fn void on_lsd_peers_discovered(common::InfoHash* infohash, common::SocketAddres
  Timer callback for periodic LSD announcements (every 5 minutes).
 
  @param timer : "Timer that fired"
- @param user_data : "DownloadContext pointer"
+ @param user_data : "Session pointer"
 *>
 fn void on_lsd_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (!ctx.lsd_enabled || !ctx.lsd_mgr) return;
 
@@ -2330,7 +2482,7 @@ fn void on_lsd_timer_tick(async::timer::Timer* timer, void* user_data) @public
 
  @param ctx : "Download context"
 *>
-fn void init_lsd(download_session::DownloadContext* ctx) @public
+fn void init_lsd(Session* ctx) @public
 {
     // Check if torrent is private (BEP 27: private torrents must not use LSD)
     if (ctx.torrent.info.private)
@@ -2381,7 +2533,7 @@ fn void init_lsd(download_session::DownloadContext* ctx) @public
 *>
 fn void on_download_load_complete(String data, int status, void* user_data) @public
 {
-    download_session::DownloadContext* ctx = (download_session::DownloadContext*)user_data;
+    Session* ctx = (Session*)user_data;
 
     if (status != 0)
     {
@@ -2412,8 +2564,8 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
 
     // Display torrent info
     io::printfn("Name: %s", torrent.info.name);
-    io::printfn("Size: %s", download_session::format_size(torrent.info.length));
-    io::printfn("Pieces: %d x %s", num_pieces, download_session::format_size(torrent.info.piece_length));
+    io::printfn("Size: %s", format_size(torrent.info.length));
+    io::printfn("Pieces: %d x %s", num_pieces, format_size(torrent.info.piece_length));
     io::printfn("");
 
     // Build storage path (for multi-file torrents, append torrent name)
