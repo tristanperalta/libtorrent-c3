@@ -4,9 +4,12 @@ import std::io;
 import std::collections::map;
 import libtorrent::common;
 import libtorrent::metainfo;
-import libtorrent::shared_resources;
+import libtorrent::dht_client;
+import libtorrent::lsd;
+import libtorrent::ports::peer_discovery;
 import torrent_client::session;
 import async::event_loop;
+import async::timer;
 
 /**
  * TorrentManager - Manages multiple torrent download sessions
@@ -46,22 +49,44 @@ struct TorrentStats
 
 /**
  * Torrent manager for coordinating multiple downloads.
+ *
+ * OWNERSHIP MODEL:
+ * - TorrentManager owns all shared resources directly (no SharedResources wrapper)
+ * - TorrentManager owns all Session instances
+ * - Sessions borrow TorrentManager pointer (no ownership transfer)
  */
 struct TorrentManager
 {
-    // Shared resources (one instance for all torrents)
-    shared_resources::SharedResources* shared;
+    // Event loop (borrowed from caller - NOT owned)
+    event_loop::EventLoop* loop;
 
-    // Active sessions indexed by info hash
+    // Shared resources (owned by TorrentManager)
+    dht_client::DhtClient* dht;
+    peer_discovery::PeerDiscovery* peer_discovery;
+    lsd::LsdManager* lsd_mgr;
+
+    // Shared timers
+    async::timer::Timer* dht_tick_timer;
+    async::timer::Timer* lsd_timer;
+
+    // DHT/LSD flags
+    bool dht_enabled;
+    bool lsd_enabled;
+
+    // Network configuration
+    ushort listen_port;
+
+    // Active sessions indexed by info hash (owned by TorrentManager)
     HashMap{common::InfoHash, session::Session*} sessions;
 
     // Manager state
     bool is_running;
     uint max_active_torrents;  // 0 = unlimited
 
-    // Track if any sessions were ever added
-    // This tells us if SharedResources might have been auto-freed by release()
-    bool ever_had_sessions;
+    // Statistics
+    uint active_sessions;
+    ulong total_download_rate;
+    ulong total_upload_rate;
 }
 
 /**
@@ -75,15 +100,30 @@ fn TorrentManager* create(event_loop::EventLoop* loop, uint max_active = 0) @pub
 {
     TorrentManager* mgr = mem::new(TorrentManager);
 
-    // Create shared resources
-    mgr.shared = shared_resources::create(loop);
+    // Initialize event loop (borrowed, not owned)
+    mgr.loop = loop;
+
+    // Initialize shared resources (owned by manager)
+    mgr.dht = null;
+    mgr.peer_discovery = null;
+    mgr.lsd_mgr = null;
+    mgr.dht_tick_timer = null;
+    mgr.lsd_timer = null;
+    mgr.dht_enabled = false;
+    mgr.lsd_enabled = false;
+    mgr.listen_port = 6881;  // Default BitTorrent port
 
     // Initialize sessions map
-    mgr.sessions.init(mem);  // Start with capacity for 16 torrents
+    mgr.sessions.init(mem);
 
+    // Manager state
     mgr.is_running = true;
     mgr.max_active_torrents = max_active;
-    mgr.ever_had_sessions = false;
+
+    // Statistics
+    mgr.active_sessions = 0;
+    mgr.total_download_rate = 0;
+    mgr.total_upload_rate = 0;
 
     return mgr;
 }
@@ -120,9 +160,8 @@ fn session::Session*? TorrentManager.add_torrent(&self,
     // Create new session
     session::Session* ctx = mem::new(session::Session);
 
-    // Initialize session with shared resources
-    ctx.shared = self.shared;
-    ctx.shared.add_ref();  // Session takes a reference
+    // Initialize session with manager reference (borrowed, not owned)
+    ctx.manager = self;
 
     // TODO: Initialize session fields
     // This would normally be done in a session::create() function
@@ -135,7 +174,7 @@ fn session::Session*? TorrentManager.add_torrent(&self,
 
     // Add to sessions map
     self.sessions.set(torrent.info_hash, ctx);
-    self.ever_had_sessions = true;
+    self.active_sessions++;
 
     io::printfn("[TorrentManager] Added torrent: %s (total: %d)",
                 torrent.info.name, self.sessions.count);
@@ -164,10 +203,10 @@ fn bool TorrentManager.remove_torrent(&self, common::InfoHash* info_hash) @publi
 
     io::printfn("[TorrentManager] Removing torrent: %s", ctx.torrent.info.name);
 
-    // Release shared resources reference
-    if (ctx.shared)
+    // Decrement active session count
+    if (self.active_sessions > 0)
     {
-        ctx.shared.release();
+        self.active_sessions--;
     }
 
     // Free session-specific resources
@@ -329,8 +368,7 @@ fn void TorrentManager.free(&self) @public
 {
     io::eprintfn("[TorrentManager] Shutting down (%d active torrents)", self.sessions.count);
 
-    // Remove all torrents (this releases shared resources references)
-    // If last torrent is removed, SharedResources auto-frees via release()
+    // Remove all torrents
     common::InfoHash[] hashes = self.get_all_info_hashes();
     defer if (hashes.len > 0) free(hashes);
 
@@ -342,15 +380,34 @@ fn void TorrentManager.free(&self) @public
     // Free sessions map
     self.sessions.free();
 
-    // Free SharedResources only if no sessions were ever added
-    // If any sessions were added, release() already freed SharedResources when ref_count hit 0
-    // IMPORTANT: After remove_torrent() calls, self.shared may be a dangling pointer!
-    // DO NOT access self.shared->ref_count after removing torrents!
-    if (!self.ever_had_sessions)
+    // Close shared timers
+    if (self.dht_tick_timer)
     {
-        self.shared.free();
+        self.dht_tick_timer.close();
     }
-    // else: SharedResources was already freed by the last release() call
+
+    if (self.lsd_timer)
+    {
+        self.lsd_timer.close();
+    }
+
+    // Free shared resources (owned by manager)
+    if (self.dht)
+    {
+        self.dht.free();
+    }
+
+    if (self.lsd_mgr)
+    {
+        self.lsd_mgr.free();
+    }
+
+    if (self.peer_discovery)
+    {
+        free(self.peer_discovery);
+    }
+
+    // Note: Event loop is NOT owned by TorrentManager (borrowed from caller)
 
     free(self);
 }

@@ -69,7 +69,7 @@ fn void test_create_manager() @test => @pool()
     defer mgr.free();
 
     assert(mgr != null, "Manager should be created");
-    assert(mgr.shared != null, "Shared resources should exist");
+    assert(mgr.loop != null, "Event loop should exist");
     assert(mgr.is_running == true, "Manager should be running");
     assert(mgr.max_active_torrents == 0, "Should have unlimited torrents");
     assert(mgr.get_torrent_count() == 0, "Should start with no torrents");
@@ -107,8 +107,6 @@ fn void test_add_single_torrent() @test => @pool()
     session::Session* ctx = ctx_opt!!;
     assert(mgr.get_torrent_count() == 1, "Should have 1 torrent");
     assert(mgr.has_torrent(&hash), "Should have the torrent");
-    assert(ctx.shared == mgr.shared, "Session should share resources");
-    assert(mgr.shared.ref_count == 1, "Shared resources should have 1 reference");
 }
 
 fn void test_add_multiple_torrents() @test => @pool()
@@ -129,7 +127,6 @@ fn void test_add_multiple_torrents() @test => @pool()
     }
 
     assert(mgr.get_torrent_count() == 3, "Should have 3 torrents");
-    assert(mgr.shared.ref_count == 3, "Shared resources should have 3 references");
 }
 
 fn void test_add_duplicate_torrent() @test => @pool()
@@ -211,7 +208,6 @@ fn void test_remove_single_torrent() @test => @pool()
     assert(removed == true, "Should successfully remove torrent");
     assert(mgr.get_torrent_count() == 0, "Should have 0 torrents");
     assert(!mgr.has_torrent(&hash), "Should not have the torrent");
-    assert(mgr.shared.ref_count == 0, "Shared resources should have 0 references");
 }
 
 fn void test_remove_torrent_not_found() @test => @pool()
@@ -246,7 +242,6 @@ fn void test_remove_middle_torrent() @test => @pool()
     (void)mgr.add_torrent(create_test_torrent("test3", hash3), "/tmp");
 
     assert(mgr.get_torrent_count() == 3, "Should have 3 torrents");
-    assert(mgr.shared.ref_count == 3, "Should have 3 references");
 
     // Remove middle torrent
     mgr.remove_torrent(&hash2);
@@ -255,7 +250,6 @@ fn void test_remove_middle_torrent() @test => @pool()
     assert(mgr.has_torrent(&hash1), "Should still have torrent 1");
     assert(!mgr.has_torrent(&hash2), "Should not have torrent 2");
     assert(mgr.has_torrent(&hash3), "Should still have torrent 3");
-    assert(mgr.shared.ref_count == 2, "Should have 2 references");
 }
 
 // ============================================================================
@@ -440,15 +434,14 @@ fn void test_free_with_active_torrents() @test => @pool()
     (void)mgr.add_torrent(create_test_torrent("test3", generate_test_hash(3)), "/tmp");
 
     assert(mgr.get_torrent_count() == 3, "Should have 3 torrents");
-    assert(mgr.shared.ref_count == 3, "Should have 3 references");
 
-    // Free should clean up all torrents and shared resources
+    // Free should clean up all torrents and resources
     mgr.free();
 
     // Test passes if no memory leaks occur
 }
 
-fn void test_shared_resources_lifecycle() @test => @pool()
+fn void test_manager_lifecycle() @test => @pool()
 {
     event_loop::EventLoop loop = event_loop::create()!!;
     defer loop.free();
@@ -460,19 +453,14 @@ fn void test_shared_resources_lifecycle() @test => @pool()
     char[20] hash2 = generate_test_hash(2);
 
     (void)mgr.add_torrent(create_test_torrent("test1", hash1), "/tmp");
-    assert(mgr.shared.ref_count == 1, "Should have 1 ref after first add");
-
     (void)mgr.add_torrent(create_test_torrent("test2", hash2), "/tmp");
-    assert(mgr.shared.ref_count == 2, "Should have 2 refs after second add");
 
     // Remove first torrent
     mgr.remove_torrent(&hash1);
-    assert(mgr.shared.ref_count == 1, "Should have 1 ref after remove");
 
     // Remove second torrent
     mgr.remove_torrent(&hash2);
-    assert(mgr.shared.ref_count == 0, "Should have 0 refs after all removed");
 
-    // Free manager (SharedResources should already be freed by auto-cleanup)
+    // Free manager (should clean up all resources)
     mgr.free();
 }

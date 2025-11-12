@@ -40,7 +40,7 @@ import libtorrent::speed_tracker;
 import libtorrent::metadata_download;
 import libtorrent::metadata_exchange;
 import libtorrent::fast_extension;
-import libtorrent::shared_resources;
+import libtorrent::torrent_manager;
 import torrent_client::magnet_download_session;
 import torrent_client::session_message_handler;
 import torrent_client::session_tracker_coordinator;
@@ -173,8 +173,8 @@ struct HttpSeedVerifyContext
 *>
 struct Session
 {
-    // Shared resources (ALWAYS borrowed, never owned)
-    shared_resources::SharedResources* shared;  // Event loop, DHT, peer discovery, LSD
+    // Manager that owns this session (ALWAYS borrowed, never owned)
+    torrent_manager::TorrentManager* manager;  // Replaces SharedResources
 
     // Torrent-specific resources
     libtorrent::metainfo::TorrentFile* torrent;
@@ -254,6 +254,55 @@ struct Session
 
     // Event bus for pub/sub (decouples GUI from download logic)
     event_bus::EventBus* event_bus;
+}
+
+// ============================================================================
+// Session Accessor Methods (for cleaner access to shared resources)
+// ============================================================================
+
+/**
+ * Get the event loop from the manager.
+ * Convenience method for ctx.manager.loop
+ */
+fn event_loop::EventLoop* Session.get_loop(&self) @inline @public
+{
+    return self.manager.loop;
+}
+
+/**
+ * Get the DHT client from the manager.
+ * Convenience method for ctx.manager.dht
+ */
+fn dht_client::DhtClient* Session.get_dht(&self) @inline @public
+{
+    return self.manager.dht;
+}
+
+/**
+ * Check if DHT is enabled.
+ * Convenience method for ctx.manager.dht_enabled
+ */
+fn bool Session.is_dht_enabled(&self) @inline @public
+{
+    return self.manager.dht_enabled && self.manager.dht != null;
+}
+
+/**
+ * Get the LSD manager from the manager.
+ * Convenience method for ctx.manager.lsd_mgr
+ */
+fn lsd::LsdManager* Session.get_lsd_mgr(&self) @inline @public
+{
+    return self.manager.lsd_mgr;
+}
+
+/**
+ * Check if LSD is enabled.
+ * Convenience method for ctx.manager.lsd_enabled
+ */
+fn bool Session.is_lsd_enabled(&self) @inline @public
+{
+    return self.manager.lsd_enabled && self.manager.lsd_mgr != null;
 }
 
 // ============================================================================
@@ -1516,7 +1565,7 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
     // Start PEX timer if not already running (every 60 seconds)
     if (!ctx.pex_timer)
     {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
         if (catch err = timer_opt)
         {
             io::eprintfn("  Warning: Failed to create PEX timer");
@@ -1533,7 +1582,7 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
     // Start keepalive timer if not already running (every 120 seconds per BEP 3)
     if (!ctx.keepalive_timer)
     {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
         if (catch err = timer_opt)
         {
             io::eprintfn("  Warning: Failed to create keepalive timer");
@@ -1550,7 +1599,7 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
     // Start file flush timer if not already running and interval is configured
     if (!ctx.flush_timer && FILE_FLUSH_INTERVAL_MS > 0)
     {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
         if (catch err = timer_opt)
         {
             io::eprintfn("  Warning: Failed to create flush timer");
@@ -1567,7 +1616,7 @@ fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user
     // Start block timeout check timer if not already running
     if (!ctx.block_timeout_timer && BLOCK_TIMEOUT_CHECK_INTERVAL_MS > 0)
     {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
         if (catch err = timer_opt)
         {
             io::eprintfn("  Warning: Failed to create block timeout timer");
@@ -1817,7 +1866,7 @@ fn void on_webseed_piece_complete(uint piece_index, char[] piece_data, void* use
     verify_ctx.piece_data = piece_data_copy;
 
     // Start async verification
-    piece_assembler::verify_data(ctx.shared.loop, piece_index, piece_data_copy,
+    piece_assembler::verify_data(ctx.get_loop(), piece_index, piece_data_copy,
                                  expected_hash, &on_webseed_piece_verified, verify_ctx);
 }
 
@@ -1954,7 +2003,7 @@ fn void on_httpseed_piece_complete(uint piece_index, char[] piece_data, void* us
     verify_ctx.piece_data = piece_data_copy;
 
     // Start async verification
-    piece_assembler::verify_data(ctx.shared.loop, piece_index, piece_data_copy,
+    piece_assembler::verify_data(ctx.get_loop(), piece_index, piece_data_copy,
                                  expected_hash, &on_httpseed_piece_verified, verify_ctx);
 }
 
@@ -2081,7 +2130,7 @@ fn void on_all_pieces_verified(Session* ctx) @public
     }
 
     // Start DHT peer discovery if enabled
-    if (ctx.shared.dht_enabled && ctx.shared.dht)
+    if (ctx.is_dht_enabled() && ctx.get_dht())
     {
         io::printfn("Starting DHT peer discovery...");
         start_dht_peer_discovery(ctx);
@@ -2152,9 +2201,9 @@ fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
 {
     Session* ctx = (Session*)user_data;
 
-    if (ctx.shared.dht)
+    if (ctx.get_dht())
     {
-        ctx.shared.dht.tick();
+        ctx.get_dht().tick();
     }
 }
 
@@ -2163,7 +2212,7 @@ fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
 *>
 fn void start_dht_peer_discovery(Session* ctx) @public
 {
-    if (!ctx.shared.dht || !ctx.torrent) return;
+    if (!ctx.get_dht() || !ctx.torrent) return;
 
     // Create get_peers search if it doesn't exist
     if (!ctx.dht_search)
@@ -2173,11 +2222,11 @@ fn void start_dht_peer_discovery(Session* ctx) @public
 
     // BEP 32: Query both IPv4 and IPv6 routing tables for closest nodes
     dht_routing_table::NodeEntry[] ipv4_nodes =
-        ctx.shared.dht.routing_table_ipv4.find_closest_nodes(ctx.torrent.info_hash, 8);
+        ctx.get_dht().routing_table_ipv4.find_closest_nodes(ctx.torrent.info_hash, 8);
     defer free(ipv4_nodes);
 
     dht_routing_table::NodeEntry[] ipv6_nodes =
-        ctx.shared.dht.routing_table_ipv6.find_closest_nodes(ctx.torrent.info_hash, 8);
+        ctx.get_dht().routing_table_ipv6.find_closest_nodes(ctx.torrent.info_hash, 8);
     defer free(ipv6_nodes);
 
     // Merge results from both tables
@@ -2209,7 +2258,7 @@ fn void start_dht_peer_discovery(Session* ctx) @public
     // Send get_peers query to each node
     for (int i = 0; i < (int)nodes.len; i++)
     {
-        ctx.shared.dht.send_get_peers(
+        ctx.get_dht().send_get_peers(
             nodes[i].id,
             nodes[i].addr,
             ctx.torrent.info_hash,
@@ -2225,7 +2274,7 @@ fn void start_dht_peer_discovery(Session* ctx) @public
         ctx.dht_check_timer = null;
     }
 
-    async::timer::Timer*? check_timer_opt = async::timer::create(ctx.shared.loop);
+    async::timer::Timer*? check_timer_opt = async::timer::create(ctx.get_loop());
     if (catch err = check_timer_opt)
     {
         io::eprintfn("[DHT] Warning: Failed to create check timer");
@@ -2318,7 +2367,7 @@ fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(Session* ctx)
     if (ctx.tracker_mgr)
     {
         peer_discovery::PeerDiscovery* tracker_disc =
-            tracker_peer_discovery::create(ctx.shared.loop, ctx.torrent, ctx.tracker_mgr);
+            tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
         composite.add_source(tracker_disc);
         io::printfn("[PeerDiscovery] Added tracker discovery");
     }
@@ -2327,19 +2376,19 @@ fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(Session* ctx)
     if (!ctx.torrent.info.private)
     {
         // Add DHT discovery if DHT client is available
-        if (ctx.shared.dht)
+        if (ctx.get_dht())
         {
             peer_discovery::PeerDiscovery* dht_disc =
-                dht_peer_discovery::create(ctx.shared.dht, ctx.shared.loop);
+                dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
             composite.add_source(dht_disc);
             io::printfn("[PeerDiscovery] Added DHT discovery");
         }
 
         // Add LSD discovery if LSD manager is available
-        if (ctx.shared.lsd_mgr)
+        if (ctx.get_lsd_mgr())
         {
             peer_discovery::PeerDiscovery* lsd_disc =
-                lsd_peer_discovery::create(ctx.shared.lsd_mgr, ctx.shared.loop);
+                lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
             composite.add_source(lsd_disc);
             io::printfn("[PeerDiscovery] Added LSD discovery");
         }
@@ -2377,26 +2426,26 @@ fn void init_dht(Session* ctx, ushort dht_port) @public
     common::NodeId our_node_id = tracker::generate_peer_id();
 
     // Create DHT client
-    ctx.shared.dht = dht_client::create_dht_client(our_node_id, ctx.shared.loop, dht_port, ctx.event_bus);
-    if (!ctx.shared.dht)
+    ctx.manager.dht = dht_client::create_dht_client(our_node_id, ctx.get_loop(), dht_port, ctx.event_bus);
+    if (!ctx.get_dht())
     {
         io::eprintfn("[DHT] Failed to create DHT client");
-        ctx.shared.dht_enabled = false;
+        ctx.manager.dht_enabled = false;
         return;
     }
 
     io::printfn("[DHT] Starting DHT on port %d", dht_port);
 
     // Add default bootstrap nodes
-    ctx.shared.dht.add_default_bootstrap_nodes();
+    ctx.get_dht().add_default_bootstrap_nodes();
 
     // Start bootstrap process
-    ctx.shared.dht.bootstrap();
+    ctx.get_dht().bootstrap();
 
-    ctx.shared.dht_enabled = true;
+    ctx.manager.dht_enabled = true;
 
     // Set up periodic DHT query timer (every 5 minutes)
-    async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+    async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
     if (catch err = timer_opt)
     {
         io::eprintfn("[DHT] Warning: Failed to create DHT timer");
@@ -2410,17 +2459,17 @@ fn void init_dht(Session* ctx, ushort dht_port) @public
 
     // Set up DHT tick timer for RPC timeout processing (every 1 second)
     // Only create if not already created by another session
-    if (!ctx.shared.dht_tick_timer)
+    if (!ctx.manager.dht_tick_timer)
     {
-        async::timer::Timer*? tick_timer_opt = async::timer::create(ctx.shared.loop);
+        async::timer::Timer*? tick_timer_opt = async::timer::create(ctx.get_loop());
         if (catch err = tick_timer_opt)
         {
             io::eprintfn("[DHT] Warning: Failed to create DHT tick timer");
         }
         else
         {
-            ctx.shared.dht_tick_timer = tick_timer_opt;
-            ctx.shared.dht_tick_timer.start(1000, 1000,
+            ctx.manager.dht_tick_timer = tick_timer_opt;
+            ctx.manager.dht_tick_timer.start(1000, 1000,
                                      &on_dht_tick, ctx);
         }
     }
@@ -2457,10 +2506,10 @@ fn void on_lsd_timer_tick(async::timer::Timer* timer, void* user_data) @public
 {
     Session* ctx = (Session*)user_data;
 
-    if (!ctx.shared.lsd_enabled || !ctx.shared.lsd_mgr) return;
+    if (!ctx.is_lsd_enabled() || !ctx.get_lsd_mgr()) return;
 
     // Announce this torrent on the LAN using shared listen port
-    ctx.shared.lsd_mgr.announce(&ctx.torrent.info_hash, ctx.shared.listen_port);
+    ctx.get_lsd_mgr().announce(&ctx.torrent.info_hash, ctx.manager.listen_port);
 
     io::printfn("[LSD] Announced torrent on local network");
 }
@@ -2477,7 +2526,7 @@ fn void init_lsd(Session* ctx) @public
     if (ctx.torrent.info.private)
     {
         io::printfn("[LSD] Torrent is private - LSD disabled per BEP 27");
-        ctx.shared.lsd_enabled = false;
+        ctx.manager.lsd_enabled = false;
         return;
     }
 
@@ -2486,37 +2535,37 @@ fn void init_lsd(Session* ctx) @public
     if (catch err = mgr_opt)
     {
         io::eprintfn("[LSD] Failed to create LSD manager");
-        ctx.shared.lsd_enabled = false;
+        ctx.manager.lsd_enabled = false;
         return;
     }
 
-    ctx.shared.lsd_mgr = mgr_opt;
-    ctx.shared.lsd_enabled = true;
+    ctx.manager.lsd_mgr = mgr_opt;
+    ctx.manager.lsd_enabled = true;
 
     io::printfn("[LSD] Starting Local Service Discovery (BEP 14)");
 
     // Start LSD
-    ctx.shared.lsd_mgr.start(ctx.shared.loop);
+    ctx.get_lsd_mgr().start(ctx.get_loop());
 
     // Set up periodic announce timer (every 5 minutes per BEP 14)
     // Only create if not already created by another session
-    if (!ctx.shared.lsd_timer)
+    if (!ctx.manager.lsd_timer)
     {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
         if (catch err = timer_opt)
         {
             io::eprintfn("[LSD] Warning: Failed to create LSD timer");
         }
         else
         {
-            ctx.shared.lsd_timer = timer_opt;
+            ctx.manager.lsd_timer = timer_opt;
             // 300000ms = 5 minutes (BEP 14 spec)
-            ctx.shared.lsd_timer.start(300000, 300000, &on_lsd_timer_tick, ctx);
+            ctx.manager.lsd_timer.start(300000, 300000, &on_lsd_timer_tick, ctx);
         }
     }
 
     // Do initial announce
-    ctx.shared.lsd_mgr.announce(&ctx.torrent.info_hash, ctx.shared.listen_port);
+    ctx.get_lsd_mgr().announce(&ctx.torrent.info_hash, ctx.manager.listen_port);
     io::printfn("[LSD] Initial announce sent");
 }
 
@@ -2579,7 +2628,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
 
     // Create storage manager
     storage_manager::StorageManager? sm_opt = storage_manager::create(
-        ctx.shared.loop, &torrent.info, storage_path);
+        ctx.get_loop(), &torrent.info, storage_path);
     if (catch err = sm_opt)
     {
         io::eprintfn("Error creating storage manager: %s", err);
@@ -2681,7 +2730,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Create download manager (BEP 21: pass storage for file selection)
     ctx.dm = mem::new(download_manager::DownloadManager);
     *ctx.dm = download_manager::create(
-        ctx.shared.loop,
+        ctx.get_loop(),
         num_pieces,
         (uint)torrent.info.piece_length,
         last_piece_length,
@@ -2707,7 +2756,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         .max_failcount = 3,             // Future: Phase 3 will track failures
         .min_reconnect_time = 60        // Future: Phase 3 will handle retries
     };
-    ctx.peer_pool = peer_pool::create(ctx.shared.loop, pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
+    ctx.peer_pool = peer_pool::create(ctx.get_loop(), pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
     io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);
     if (torrent.info.private)
     {
@@ -2728,7 +2777,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     io::printfn("Created upload manager");
 
     // Create upload timer (process upload requests every 1 second)
-    async::timer::Timer*? upload_timer_opt = async::timer::create(ctx.shared.loop);
+    async::timer::Timer*? upload_timer_opt = async::timer::create(ctx.get_loop());
     if (catch err = upload_timer_opt)
     {
         io::eprintfn("  Warning: Failed to create upload timer");
@@ -2779,7 +2828,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
 
     // Initialize tracker coordinator
     ctx.tracker_coord = session_tracker_coordinator::create(
-        ctx.shared.loop, ctx.torrent, ctx.tracker_mgr, ctx.current_tracker_url
+        ctx.get_loop(), ctx.torrent, ctx.tracker_mgr, ctx.current_tracker_url
     );
     ctx.tracker_coord.set_peers_received_callback(&on_tracker_peers_received, ctx);
     ctx.tracker_coord.set_failed_callback(&on_tracker_failed, ctx);
@@ -2792,7 +2841,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     else
     {
         io::printfn("[DHT] Skipping DHT initialization for private torrent (BEP 27)");
-        ctx.shared.dht_enabled = false;
+        ctx.manager.dht_enabled = false;
     }
     io::printfn("");
 
@@ -2803,11 +2852,11 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
 
     // Initialize unified peer discovery (Hexagonal Architecture)
     io::printfn("Initializing peer discovery...");
-    ctx.shared.peer_discovery = build_peer_discovery_composite(ctx);
+    ctx.manager.peer_discovery = build_peer_discovery_composite(ctx);
 
     // Start peer discovery with default options
     peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
-    ctx.shared.peer_discovery.start_discovery(
+    ctx.manager.peer_discovery.start_discovery(
         &ctx.torrent.info_hash,
         &options,
         &on_peer_discovery_peers,
@@ -2819,13 +2868,13 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Initialize web seeding (BEP 19)
     if (torrent.url_list.len > 0)
     {
-        ctx.webseed_mgr = webseed::create(ctx.shared.loop, torrent, ctx.event_bus);  // Uses default: 20 concurrent downloads
+        ctx.webseed_mgr = webseed::create(ctx.get_loop(), torrent, ctx.event_bus);  // Uses default: 20 concurrent downloads
         if (ctx.webseed_mgr)
         {
             io::printfn("Web seed support: %d URLs available", torrent.url_list.len);
 
             // Start web seed timer immediately (web seeds work independently of trackers)
-            async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+            async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
             if (catch err = timer_opt)
             {
                 io::eprintfn("Warning: Failed to create web seed timer");
@@ -2846,13 +2895,13 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Initialize HTTP seeding (BEP 17)
     if (torrent.httpseeds.len > 0)
     {
-        ctx.httpseed_mgr = httpseed::create(ctx.shared.loop, torrent, ctx.event_bus);  // Uses default: 20 concurrent downloads
+        ctx.httpseed_mgr = httpseed::create(ctx.get_loop(), torrent, ctx.event_bus);  // Uses default: 20 concurrent downloads
         if (ctx.httpseed_mgr)
         {
             io::printfn("HTTP seed support: %d URLs available", torrent.httpseeds.len);
 
             // Start HTTP seed timer immediately (httpseeds work independently of trackers)
-            async::timer::Timer*? timer_opt = async::timer::create(ctx.shared.loop);
+            async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
             if (catch err = timer_opt)
             {
                 io::eprintfn("Warning: Failed to create HTTP seed timer");

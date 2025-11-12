@@ -1538,12 +1538,11 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     log_outputs::LogSink* log_sink = log_outputs::setup_gui_logging(ui);
 
     // Create download context
-    // Create SharedResources for this session
-    libtorrent::shared_resources::SharedResources* shared = libtorrent::shared_resources::create(loop);
+    // Create TorrentManager for managing this torrent
+    libtorrent::torrent_manager::TorrentManager* mgr = libtorrent::torrent_manager::create(loop, 1);
 
     Session ctx;
-    ctx.shared = shared;
-    ctx.shared.add_ref();  // Session takes a reference
+    ctx.manager = mgr;
     ctx.torrent = torrent;
     ctx.dm = null;
     ctx.sm = null;
@@ -1817,12 +1816,12 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.event_bus.dispatch_timer = null;
     }
 
-    // Close DHT UDP socket (if managed by shared resources)
+    // Close DHT UDP socket (if managed by manager)
     io::printfn("Closing DHT socket...");
-    if (ctx.shared.dht && ctx.shared.dht.socket)
+    if (ctx.get_dht() && ctx.get_dht().socket)
     {
-        ctx.shared.dht.socket.close();
-        ctx.shared.dht.socket = null;
+        ctx.get_dht().socket.close();
+        ctx.get_dht().socket = null;
     }
 
     // Disconnect all peers before freeing peer pool
@@ -1912,10 +1911,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     }
 
     // Release shared resources (auto-frees when ref_count reaches 0)
-    io::printfn("Releasing shared resources...");
-    if (ctx.shared)
+    io::printfn("Freeing torrent manager...");
+    if (mgr)
     {
-        ctx.shared.release();
+        mgr.free();
     }
 
     // Cleanup logging
@@ -1964,12 +1963,11 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Set up console logging (file and/or stderr)
     log_outputs::LogSink*? log_sink = log_outputs::setup_console_logging(log_file_path, debug_mode);
 
-    // Create SharedResources for this session
-    libtorrent::shared_resources::SharedResources* shared = libtorrent::shared_resources::create(loop);
+    // Create TorrentManager for managing this torrent
+    libtorrent::torrent_manager::TorrentManager* mgr = libtorrent::torrent_manager::create(loop, 1);
 
     Session ctx;
-    ctx.shared = shared;
-    ctx.shared.add_ref();  // Session takes a reference
+    ctx.manager = mgr;
     ctx.torrent = null;
     ctx.dm = null;
     ctx.sm = null;
@@ -2135,10 +2133,10 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         flush_timer.close();
     }
 
-    // Release shared resources (auto-frees when ref_count reaches 0)
-    if (ctx.shared)
+    // Free torrent manager
+    if (mgr)
     {
-        ctx.shared.release();
+        mgr.free();
     }
 
     // Flush any remaining logs before cleanup
