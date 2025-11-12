@@ -83,7 +83,7 @@ fn void start_magnet_download(session::Session* ctx, String magnet_uri) @public
         .max_failcount = 3,
         .min_reconnect_time = 60
     };
-    ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &magnet.info_hash, &our_peer_id, false);
+    ctx.peer_pool = peer_pool::create(ctx.shared.loop, pool_config, &magnet.info_hash, &our_peer_id, false);
 
     // Set metadata callback for magnet download
     ctx.peer_pool.on_metadata = &on_metadata_message;
@@ -118,7 +118,7 @@ fn void start_magnet_download(session::Session* ctx, String magnet_uri) @public
     }
 
     // Start metadata download timer
-    async::timer::Timer*? metadata_timer_opt = async::timer::create(ctx.loop);
+    async::timer::Timer*? metadata_timer_opt = async::timer::create(ctx.shared.loop);
     if (catch err = metadata_timer_opt)
     {
         io::eprintfn("Error: Failed to create metadata timer");
@@ -179,7 +179,7 @@ fn void start_tracker_announce(session::Session* ctx) @private
     ctx.torrent = fake_torrent;
 
     // Announce with "started" event
-    tracker::announce_to_url(ctx.loop, ctx.torrent, tracker_url, 6881, "started",
+    tracker::announce_to_url(ctx.shared.loop, ctx.torrent, tracker_url, 6881, "started",
                              &on_announce_complete, ctx);
 }
 
@@ -200,7 +200,7 @@ fn void on_announce_complete(tracker::TrackerResponse* response, int status, voi
             String next_tracker = ctx.tracker_mgr.get_next_tracker();
             ctx.current_tracker_url = next_tracker;
             io::printfn("Trying next tracker: %s", next_tracker);
-            tracker::announce_to_url(ctx.loop, ctx.torrent, next_tracker, 6881, "started",
+            tracker::announce_to_url(ctx.shared.loop, ctx.torrent, next_tracker, 6881, "started",
                                      &on_announce_complete, ctx);
         }
         else
@@ -324,7 +324,7 @@ fn void on_metadata_complete(session::Session* ctx) @private
     // Create storage manager
     io::printfn("[Metadata] Initializing storage...");
     storage_manager::StorageManager? sm_opt = storage_manager::create(
-        ctx.loop, &real_torrent.info, storage_path);
+        ctx.shared.loop, &real_torrent.info, storage_path);
     if (catch err = sm_opt)
     {
         io::eprintfn("[Metadata] ERROR: Failed to create storage manager: %s", err);
@@ -338,7 +338,7 @@ fn void on_metadata_complete(session::Session* ctx) @private
     // Create download manager
     ctx.dm = mem::new(download_manager::DownloadManager);
     *ctx.dm = download_manager::create(
-        ctx.loop,
+        ctx.shared.loop,
         num_pieces,
         (uint)real_torrent.info.piece_length,
         last_piece_length,

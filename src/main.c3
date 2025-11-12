@@ -1538,8 +1538,12 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     log_outputs::LogSink* log_sink = log_outputs::setup_gui_logging(ui);
 
     // Create download context
+    // Create SharedResources for this session
+    libtorrent::shared_resources::SharedResources* shared = libtorrent::shared_resources::create(loop);
+
     Session ctx;
-    ctx.loop = loop;
+    ctx.shared = shared;
+    ctx.shared.add_ref();  // Session takes a reference
     ctx.torrent = torrent;
     ctx.dm = null;
     ctx.sm = null;
@@ -1550,12 +1554,10 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.flush_timer = null;
     ctx.block_timeout_timer = null;
     ctx.peer_pool = null;
-    ctx.dht_client = null;
     ctx.dht_search = null;
     ctx.dht_timer = null;
     ctx.dht_check_timer = null;
-    ctx.dht_tick_timer = null;
-    ctx.dht_enabled = false;
+    // Note: dht_tick_timer and lsd_timer moved to SharedResources
     ctx.download_complete = false;
     ctx.is_partial_seed = false;  // BEP 21: TODO - set true if selective download
     ctx.exit_code = 0;
@@ -1805,11 +1807,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.dht_check_timer.close();
         ctx.dht_check_timer = null;
     }
-    if (ctx.dht_tick_timer)
-    {
-        ctx.dht_tick_timer.close();
-        ctx.dht_tick_timer = null;
-    }
+    // Note: dht_tick_timer moved to SharedResources (cleaned up on shared.release())
 
     // Close event bus timer
     io::printfn("Closing event bus timer...");
@@ -1819,12 +1817,12 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.event_bus.dispatch_timer = null;
     }
 
-    // Close DHT UDP socket
+    // Close DHT UDP socket (if managed by shared resources)
     io::printfn("Closing DHT socket...");
-    if (ctx.dht_client && ctx.dht_client.socket)
+    if (ctx.shared.dht && ctx.shared.dht.socket)
     {
-        ctx.dht_client.socket.close();
-        ctx.dht_client.socket = null;
+        ctx.shared.dht.socket.close();
+        ctx.shared.dht.socket = null;
     }
 
     // Disconnect all peers before freeing peer pool
@@ -1854,10 +1852,6 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     if (ctx.dht_search)
     {
         ctx.dht_search.free();
-    }
-    if (ctx.dht_client)
-    {
-        ctx.dht_client.free();
     }
 
     io::printfn("Freeing download manager...");
@@ -1917,6 +1911,13 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.event_bus.free();
     }
 
+    // Release shared resources (auto-frees when ref_count reaches 0)
+    io::printfn("Releasing shared resources...");
+    if (ctx.shared)
+    {
+        ctx.shared.release();
+    }
+
     // Cleanup logging
     io::printfn("Cleaning up logging...");
     logger::flush_logs();
@@ -1963,8 +1964,12 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Set up console logging (file and/or stderr)
     log_outputs::LogSink*? log_sink = log_outputs::setup_console_logging(log_file_path, debug_mode);
 
+    // Create SharedResources for this session
+    libtorrent::shared_resources::SharedResources* shared = libtorrent::shared_resources::create(loop);
+
     Session ctx;
-    ctx.loop = loop;
+    ctx.shared = shared;
+    ctx.shared.add_ref();  // Session takes a reference
     ctx.torrent = null;
     ctx.dm = null;
     ctx.sm = null;
@@ -2100,11 +2105,6 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         ctx.dht_search.free();
     }
 
-    if (ctx.dht_client)
-    {
-        ctx.dht_client.free();
-    }
-
     // Free web seed manager
     if (ctx.webseed_mgr)
     {
@@ -2133,6 +2133,12 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     if (flush_timer)
     {
         flush_timer.close();
+    }
+
+    // Release shared resources (auto-frees when ref_count reaches 0)
+    if (ctx.shared)
+    {
+        ctx.shared.release();
     }
 
     // Flush any remaining logs before cleanup

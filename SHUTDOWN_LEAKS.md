@@ -157,7 +157,7 @@ self.peers.@each(; common::SocketAddress addr, TorrentPeer* peer)
 
 ### 🐛 Bug #4: block_timeout_timer Never Closed
 
-**Location**: `src/download_session.c3:902`
+**Location**: `src/session.c3:902`
 
 **Problem**: The `block_timeout_timer` was created during download session but never explicitly closed:
 - Created at line 902 when tracker announces complete successfully
@@ -202,7 +202,7 @@ fn void GuiLogOutput.close(GuiLogOutput* self) @dynamic
 - After callback completes, the array was never freed
 - **Each tracker response leaked 4000 bytes** (200 peers × 20 bytes each)
 
-**Why This Was Missed**: Misleading comment in download_session.c3:831-832 claimed the response was "stack-allocated" and would be "automatically freed", but the peers array inside it was heap-allocated.
+**Why This Was Missed**: Misleading comment in session.c3:831-832 claimed the response was "stack-allocated" and would be "automatically freed", but the peers array inside it was heap-allocated.
 
 **Fix**: Free the peers array after callback completes, before freeing context:
 ```c3
