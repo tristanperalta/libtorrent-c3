@@ -43,7 +43,6 @@ import libtorrent::fast_extension;
 import libtorrent::torrent_manager;
 import torrent_client::magnet_download_session;
 import torrent_client::session_message_handler;
-import torrent_client::session_tracker_coordinator;
 import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
@@ -184,7 +183,6 @@ struct Session
     // Tracker state
     bool tracker_completed;
     tracker::TrackerResponse* tracker_response;
-    session_tracker_coordinator::TrackerCoordinator* tracker_coord;  // Tracker announce coordinator
     async::timer::Timer* pex_timer;          // PEX update timer (every 60s)
     async::timer::Timer* keepalive_timer;    // Keepalive timer (every 120s)
     async::timer::Timer* flush_timer;        // File flush timer (configurable interval)
@@ -193,6 +191,9 @@ struct Session
     // Multi-tracker support (BEP 12)
     tracker_manager::TrackerManager* tracker_mgr;  // Manages tier-based tracker selection
     String current_tracker_url;                    // Currently active tracker URL (for logging)
+
+    // Tracker peer discovery (stored separately to avoid C3 interface vtable bug)
+    tracker_peer_discovery::TrackerPeerDiscovery* tracker_discovery;
 
     // Peer management
     peer_pool::PeerPool* peer_pool;
@@ -465,10 +466,7 @@ fn void on_partial_seed_complete(Session* ctx) @public
     }
 
     // Send "completed" event to tracker
-    if (ctx.tracker_coord)
-    {
-        ctx.tracker_coord.start_announce("completed");
-    }
+    trigger_completed_announce(ctx);
 
     // FastResume: Only save if partial seed (BEP 21 - selective file download)
     // No point saving resume data for complete downloads - nothing to resume!
@@ -582,10 +580,7 @@ fn void on_complete_download(Session* ctx) @public
     }
 
     // Send "completed" event to tracker (announces we're now seeding)
-    if (ctx.tracker_coord)
-    {
-        ctx.tracker_coord.start_announce("completed");
-    }
+    trigger_completed_announce(ctx);
 
     // Stop download-only timers
     if (ctx.block_timeout_timer)
@@ -1048,105 +1043,6 @@ fn void on_download_peer_disconnected(common::SocketAddress* addr,
 }
 
 <*
- Callback for tracker announce completion.
-*>
-fn void on_download_tracker_complete(tracker::TrackerResponse* response, int status, void* user_data) @public
-{
-    Session* ctx = (Session*)user_data;
-    ctx.tracker_completed = true;
-    // Note: Don't save response pointer - it becomes invalid after this callback returns
-
-    if (status != 0 || !response)
-    {
-        String error_desc = tracker_error_string(status);
-        io::eprintfn("Error announcing to tracker: %s (status=%d)", error_desc, status);
-
-        // Publish tracker error event
-        DString error_msg;
-        error_msg.appendf("Error: %s", error_desc);
-        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
-            "", "Failed", -1, error_msg.str_view(), null
-        );
-        ctx.event_bus.publish(event_types::EVENT_TRACKER_ANNOUNCE_FAILED, &tracker_evt, event_types::TrackerEvent.sizeof);
-
-        ctx.exit_code = 1;
-        ctx.download_complete = true;
-        return;
-    }
-
-    if (response.failure_reason.len > 0)
-    {
-        io::eprintfn("Tracker error: %s", response.failure_reason);
-
-        // Publish tracker failure event
-        DString error_msg;
-        error_msg.appendf("Error: %s", response.failure_reason);
-        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
-            "", "Failed", -1, response.failure_reason, null
-        );
-        ctx.event_bus.publish(event_types::EVENT_TRACKER_ANNOUNCE_FAILED, &tracker_evt, event_types::TrackerEvent.sizeof);
-
-        ctx.exit_code = 1;
-        ctx.download_complete = true;
-        return;
-    }
-
-    int num_peers = (int)response.peers.len;
-    if (num_peers == 0)
-    {
-        io::printfn("No peers returned by tracker - will retry later");
-
-        // Publish no peers event
-        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
-            "", "No peers available", 0, "", null
-        );
-        ctx.event_bus.publish(event_types::EVENT_TRACKER_NO_PEERS, &tracker_evt, event_types::TrackerEvent.sizeof);
-
-        // Don't stop download, just wait for next re-announce
-        return;
-    }
-
-    io::printfn("Tracker returned %d peers", num_peers);
-
-    // Publish tracker success event
-    DString success_msg;
-    success_msg.appendf("Announce OK (%d peers)", num_peers);
-    event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
-        "", "Working", num_peers, "", null
-    );
-    ctx.event_bus.publish(event_types::EVENT_TRACKER_ANNOUNCE_SUCCESS, &tracker_evt, event_types::TrackerEvent.sizeof);
-
-    // Add all peers to peer pool (already SocketAddress[] from tracker)
-    ctx.peer_pool.add_peers_from_tracker(response.peers);
-
-    // Show peer pool stats
-    usz total_peers, candidates, connecting, connected;
-    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-
-    // Publish peer stats updated event
-    event_types::PeerEvent peer_evt = event_types::create_peer_event(
-        (common::Ipv4Addr){0,0,0,0}, 0, (int)connected, (int)total_peers, false
-    );
-    ctx.event_bus.publish(event_types::EVENT_PEER_STATS_UPDATED, &peer_evt, event_types::PeerEvent.sizeof);
-
-    io::printfn("  Peer pool now has %d total peers (%d candidates, %d connecting, %d connected)",
-                total_peers, candidates, connecting, connected);
-
-    // Automatically connect to best peers
-    io::printfn("Connecting to best peers...");
-    ctx.peer_pool.connect_to_peers();
-
-    // Show updated stats
-    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-    io::printfn("  Started %d new connections (total: %d connecting)", connecting - connected, connecting);
-
-    io::printfn("");
-    io::printfn("Download in progress...");
-    io::printfn("(Download will continue until complete or Ctrl+C)");
-    io::printfn("");
-}
-
-<*
  Callback when storage manager initialization completes.
 *>
 fn void on_storage_initialized(int status, void* user_data) @public
@@ -1571,149 +1467,6 @@ fn void on_peer_discovery_complete(bool success, String error_message, void* use
     }
 }
 
-// ============================================================================
-// Tracker Coordinator Callbacks
-// ============================================================================
-
-<*
- Callback when tracker coordinator receives peers.
-*>
-fn void on_tracker_peers_received(tracker::TrackerResponse* response, void* user_data) @public
-{
-    Session* ctx = (Session*)user_data;
-
-    // NOTE: Do NOT store or free the response pointer - it points to stack-allocated memory
-    // in http_tracker that will be automatically freed when AnnounceContext is freed
-
-    // Get current tracker URL from coordinator
-    String active_tracker = ctx.tracker_coord.get_current_tracker();
-    if (active_tracker.len > 0)
-    {
-        ctx.current_tracker_url = active_tracker;
-    }
-
-    // Publish tracker success event (existing event_types system)
-    int peer_count = response ? (int)response.peers.len : -1;
-    event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
-        ctx.current_tracker_url, "Working", peer_count, "", ctx.tracker_mgr
-    );
-    ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
-
-    // Publish TRACKER_ANNOUNCE_SUCCESS event (new session-level event)
-    if (ctx.event_bus && response)
-    {
-        TrackerEvent evt = {
-            .tracker_url = ctx.current_tracker_url,
-            .peer_count = (int)response.peers.len,
-            .error_message = ""
-        };
-        ctx.event_bus.publish(TRACKER_ANNOUNCE_SUCCESS, &evt, TrackerEvent.sizeof);
-    }
-
-    // Start PEX timer if not already running (every 60 seconds)
-    if (!ctx.pex_timer)
-    {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
-        if (catch err = timer_opt)
-        {
-            io::eprintfn("  Warning: Failed to create PEX timer");
-        }
-        else
-        {
-            ctx.pex_timer = timer_opt;
-            // Start after 60 seconds, then repeat every 60 seconds
-            ctx.pex_timer.start(60000, 60000,
-                                &on_pex_timer_tick, ctx);
-        }
-    }
-
-    // Start keepalive timer if not already running (every 120 seconds per BEP 3)
-    if (!ctx.keepalive_timer)
-    {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
-        if (catch err = timer_opt)
-        {
-            io::eprintfn("  Warning: Failed to create keepalive timer");
-        }
-        else
-        {
-            ctx.keepalive_timer = timer_opt;
-            // Start after 120 seconds, then repeat every 120 seconds
-            ctx.keepalive_timer.start(120000, 120000,
-                                      &on_keepalive_timer_tick, ctx);
-        }
-    }
-
-    // Start file flush timer if not already running and interval is configured
-    if (!ctx.flush_timer && FILE_FLUSH_INTERVAL_MS > 0)
-    {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
-        if (catch err = timer_opt)
-        {
-            io::eprintfn("  Warning: Failed to create flush timer");
-        }
-        else
-        {
-            ctx.flush_timer = timer_opt;
-            // Start with configured interval
-            ctx.flush_timer.start(FILE_FLUSH_INTERVAL_MS, FILE_FLUSH_INTERVAL_MS,
-                                  &on_flush_timer_tick, ctx);
-        }
-    }
-
-    // Start block timeout check timer if not already running
-    if (!ctx.block_timeout_timer && BLOCK_TIMEOUT_CHECK_INTERVAL_MS > 0)
-    {
-        async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
-        if (catch err = timer_opt)
-        {
-            io::eprintfn("  Warning: Failed to create block timeout timer");
-        }
-        else
-        {
-            ctx.block_timeout_timer = timer_opt;
-            // Start with configured interval (10 seconds)
-            ctx.block_timeout_timer.start(BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
-                                          BLOCK_TIMEOUT_CHECK_INTERVAL_MS,
-                                          &on_block_timeout_timer_tick, ctx);
-        }
-    }
-
-    // Call existing tracker completion handler
-    on_download_tracker_complete(response, 0, ctx);
-}
-
-<*
- Callback when tracker coordinator fails after all retries.
-*>
-fn void on_tracker_failed(String error_msg, void* user_data) @public
-{
-    Session* ctx = (Session*)user_data;
-
-    io::eprintfn("Tracker failed after all retries: %s", error_msg);
-
-    // Publish tracker failure event (existing event_types system)
-    event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
-        ctx.current_tracker_url, "Failed", -1, error_msg, ctx.tracker_mgr
-    );
-    ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
-
-    // Publish TRACKER_ANNOUNCE_FAILED event (new session-level event)
-    if (ctx.event_bus)
-    {
-        TrackerEvent evt = {
-            .tracker_url = ctx.current_tracker_url,
-            .peer_count = 0,
-            .error_message = error_msg
-        };
-        ctx.event_bus.publish(TRACKER_ANNOUNCE_FAILED, &evt, TrackerEvent.sizeof);
-    }
-
-    // Continue with DHT and web seeds if available
-    io::printfn("Continuing with DHT and web seeds...");
-}
-
-
 <*
  PEX timer callback - sends queued PEX updates to all connected peers.
  Runs every 60 seconds per BEP 11 rate limiting.
@@ -2087,35 +1840,23 @@ fn void on_httpseed_piece_verified(uint piece_index, bool verified, void* user_d
 }
 
 <*
- Start tracker announce with retry support.
- Uses multi-tracker manager (BEP 12) if available.
-*>
-fn void announce_with_retry(Session* ctx) @public
+ * Trigger "completed" announce to all trackers.
+ * Called when download finishes to notify trackers.
+ *>
+fn void trigger_completed_announce(Session* ctx) @public
 {
-    // Check if tracker coordinator is initialized
-    if (!ctx.tracker_coord)
+    if (!ctx.tracker_discovery)
     {
-        io::eprintfn("Error: Tracker coordinator not initialized");
+        io::eprintfn("[Session] No tracker discovery - skipping completed announce");
         return;
     }
 
-    // Use tracker coordinator for announces with retry support
-    // Determine event type based on whether this is initial announce
-    String event = ctx.tracker_coord.is_initial_announce_done() ? "" : "started";
-
-    // Reset tracker manager to beginning of tier for new announce cycle
-    if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
-    {
-        ctx.tracker_mgr.reset();
-    }
-
-    // Start announce with automatic retry and failover
-    ctx.tracker_coord.start_announce(event);
+    // Use stored concrete type reference (avoids C3 interface vtable bug)
+    ctx.tracker_discovery.trigger_event_announce("completed");
 }
 
 <*
  Called when all existing pieces have been verified.
- Starts the tracker announce process.
 *>
 fn void on_all_pieces_verified(Session* ctx) @public
 {
@@ -2151,21 +1892,8 @@ fn void on_all_pieces_verified(Session* ctx) @public
     }
     io::printfn("");
 
-    // Now start tracker announce (if we have trackers)
-    if (ctx.tracker_mgr && ctx.tracker_mgr.has_trackers())
-    {
-        io::printfn("Announcing to trackers (%d tiers available)...", ctx.tracker_mgr.get_tier_count());
-        announce_with_retry(ctx);
-    }
-    else if (ctx.torrent.announce.len > 0)
-    {
-        io::printfn("Announcing to tracker: %s", ctx.torrent.announce);
-        announce_with_retry(ctx);
-    }
-    else
-    {
-        io::printfn("Skipping tracker announce (no trackers configured)");
-    }
+    // NOTE: Tracker announces now happen automatically via PeerDiscovery system
+    // when start_discovery() is called on CompositePeerDiscovery later in setup
 
     // Publish SESSION_STARTED event
     if (ctx.event_bus)
@@ -2405,17 +2133,22 @@ fn void on_dht_peers_found(Session* ctx) @public
  @param ctx : "Download context"
  @return "CompositePeerDiscovery instance with all applicable sources"
 *>
-fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(Session* ctx)
+fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_composite(Session* ctx) @public
 {
-    // Create composite
+    // Create composite (return concrete type due to C3 interface vtable bug)
     composite_peer_discovery::CompositePeerDiscovery* composite =
         (composite_peer_discovery::CompositePeerDiscovery*)composite_peer_discovery::create();
 
     // Always add tracker discovery (works for both private and public torrents)
     if (ctx.tracker_mgr)
     {
-        peer_discovery::PeerDiscovery* tracker_disc =
+        // Store concrete type (workaround for C3 interface vtable bug)
+        ctx.tracker_discovery = (tracker_peer_discovery::TrackerPeerDiscovery*)
             tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
+
+        // Add to composite (cast to interface)
+        peer_discovery::PeerDiscovery* tracker_disc =
+            (peer_discovery::PeerDiscovery*)ctx.tracker_discovery;
         composite.add_source(tracker_disc);
         io::printfn("[PeerDiscovery] Added tracker discovery");
     }
@@ -2458,7 +2191,7 @@ fn peer_discovery::PeerDiscovery* build_peer_discovery_composite(Session* ctx)
     usz source_count = composite.get_source_count();
     io::printfn("[PeerDiscovery] Composite initialized with %d sources", source_count);
 
-    return (peer_discovery::PeerDiscovery*)composite;
+    return composite;  // Return concrete type (no cast needed)
 }
 
 // ============================================================================
@@ -2874,13 +2607,6 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
     }
 
-    // Initialize tracker coordinator
-    ctx.tracker_coord = session_tracker_coordinator::create(
-        ctx.get_loop(), ctx.torrent, ctx.tracker_mgr, ctx.current_tracker_url
-    );
-    ctx.tracker_coord.set_peers_received_callback(&on_tracker_peers_received, ctx);
-    ctx.tracker_coord.set_failed_callback(&on_tracker_failed, ctx);
-
     // Initialize DHT for peer discovery (skip for private torrents per BEP 27)
     if (!ctx.torrent.info.private)
     {
@@ -2900,17 +2626,78 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
 
     // Initialize unified peer discovery (Hexagonal Architecture)
     io::printfn("Initializing peer discovery...");
-    ctx.manager.peer_discovery = build_peer_discovery_composite(ctx);
 
-    // Start peer discovery with default options
+    // WORKAROUND: Due to C3 vtable bug, we can't use CompositePeerDiscovery
+    // Instead, start each source directly
     peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
-    ctx.manager.peer_discovery.start_discovery(
-        &ctx.torrent.info_hash,
-        &options,
-        &on_peer_discovery_peers,
-        &on_peer_discovery_complete,
-        ctx
-    );
+
+    // Always start tracker discovery (works for both private and public torrents)
+    if (ctx.tracker_mgr)
+    {
+        ctx.tracker_discovery = (tracker_peer_discovery::TrackerPeerDiscovery*)
+            tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
+        ctx.tracker_discovery.start_discovery(
+            &ctx.torrent.info_hash,
+            &options,
+            &on_peer_discovery_peers,
+            &on_peer_discovery_complete,
+            ctx
+        );
+        io::printfn("[PeerDiscovery] Started tracker discovery");
+    }
+
+    // Only start DHT/LSD/PEX for non-private torrents (BEP 27)
+    if (!ctx.torrent.info.private)
+    {
+        // Start DHT discovery if available (cast to concrete type to avoid vtable bug)
+        if (ctx.get_dht())
+        {
+            dht_peer_discovery::DhtPeerDiscovery* dht_disc = (dht_peer_discovery::DhtPeerDiscovery*)
+                dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
+            dht_disc.start_discovery(
+                &ctx.torrent.info_hash,
+                &options,
+                &on_peer_discovery_peers,
+                &on_peer_discovery_complete,
+                ctx
+            );
+            io::printfn("[PeerDiscovery] Started DHT discovery");
+        }
+
+        // Start LSD discovery if available (cast to concrete type to avoid vtable bug)
+        if (ctx.get_lsd_mgr())
+        {
+            lsd_peer_discovery::LsdPeerDiscovery* lsd_disc = (lsd_peer_discovery::LsdPeerDiscovery*)
+                lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
+            lsd_disc.start_discovery(
+                &ctx.torrent.info_hash,
+                &options,
+                &on_peer_discovery_peers,
+                &on_peer_discovery_complete,
+                ctx
+            );
+            io::printfn("[PeerDiscovery] Started LSD discovery");
+        }
+
+        // Start PEX discovery if available (cast to concrete type to avoid vtable bug)
+        if (ctx.peer_pool)
+        {
+            pex_peer_discovery::PexPeerDiscovery* pex_disc = (pex_peer_discovery::PexPeerDiscovery*)
+                pex_peer_discovery::create(ctx.peer_pool);
+            pex_disc.start_discovery(
+                &ctx.torrent.info_hash,
+                &options,
+                &on_peer_discovery_peers,
+                &on_peer_discovery_complete,
+                ctx
+            );
+            io::printfn("[PeerDiscovery] Started PEX discovery");
+        }
+    }
+    else
+    {
+        io::printfn("[PeerDiscovery] Skipping DHT/LSD/PEX for private torrent (BEP 27)");
+    }
     io::printfn("");
 
     // Initialize web seeding (BEP 19)

@@ -25,6 +25,8 @@ import libtorrent::dht_get_peers;
 import libtorrent::event_bus;
 import libtorrent::event_types;
 import libtorrent::file_selection;
+import libtorrent::ports::peer_discovery;
+import libtorrent::adapters::composite_peer_discovery;
 import torrent_client::log_outputs;
 import torrent_client::session;
 import torrent_client::magnet_download_session;
@@ -1547,7 +1549,6 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.dm = null;
     ctx.sm = null;
     ctx.tracker_completed = false;
-    ctx.tracker_coord = null;  // Will be initialized during session setup
     ctx.pex_timer = null;
     ctx.keepalive_timer = null;
     ctx.flush_timer = null;
@@ -1637,13 +1638,6 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
                                          ctx.current_tracker_url, "Idle", -1);
     }
 
-    // Initialize tracker coordinator
-    ctx.tracker_coord = session_tracker_coordinator::create(
-        loop, torrent, ctx.tracker_mgr, ctx.current_tracker_url
-    );
-    ctx.tracker_coord.set_peers_received_callback(&session::on_tracker_peers_received, &ctx);
-    ctx.tracker_coord.set_failed_callback(&session::on_tracker_failed, &ctx);
-
     // Build storage path (for multi-file torrents, append torrent name)
     String storage_path = save_path;
     bool need_free_path_gui = false;
@@ -1708,6 +1702,80 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     raylib_gui::add_log(ui, "Starting DHT on port 6881...");
     session::init_dht(&ctx, 6881);
 
+    // Initialize unified peer discovery (Hexagonal Architecture)
+    raylib_gui::add_log(ui, "Initializing peer discovery...");
+
+    // WORKAROUND: Due to C3 vtable bug, start each source directly
+    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+
+    // Always start tracker discovery
+    if (ctx.tracker_mgr)
+    {
+        ctx.tracker_discovery = (tracker_peer_discovery::TrackerPeerDiscovery*)
+            tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
+        ctx.tracker_discovery.start_discovery(
+            &ctx.torrent.info_hash,
+            &options,
+            &session::on_peer_discovery_peers,
+            &session::on_peer_discovery_complete,
+            &ctx
+        );
+        raylib_gui::add_log(ui, "[PeerDiscovery] Started tracker discovery");
+    }
+
+    // Only start DHT/LSD/PEX for non-private torrents (BEP 27)
+    if (!ctx.torrent.info.private)
+    {
+        // Start DHT discovery if available
+        if (ctx.get_dht())
+        {
+            dht_peer_discovery::DhtPeerDiscovery* dht_disc = (dht_peer_discovery::DhtPeerDiscovery*)
+                dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
+            dht_disc.start_discovery(
+                &ctx.torrent.info_hash,
+                &options,
+                &session::on_peer_discovery_peers,
+                &session::on_peer_discovery_complete,
+                &ctx
+            );
+            raylib_gui::add_log(ui, "[PeerDiscovery] Started DHT discovery");
+        }
+
+        // Start LSD discovery if available
+        if (ctx.get_lsd_mgr())
+        {
+            lsd_peer_discovery::LsdPeerDiscovery* lsd_disc = (lsd_peer_discovery::LsdPeerDiscovery*)
+                lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
+            lsd_disc.start_discovery(
+                &ctx.torrent.info_hash,
+                &options,
+                &session::on_peer_discovery_peers,
+                &session::on_peer_discovery_complete,
+                &ctx
+            );
+            raylib_gui::add_log(ui, "[PeerDiscovery] Started LSD discovery");
+        }
+
+        // Start PEX discovery if available
+        if (ctx.peer_pool)
+        {
+            pex_peer_discovery::PexPeerDiscovery* pex_disc = (pex_peer_discovery::PexPeerDiscovery*)
+                pex_peer_discovery::create(ctx.peer_pool);
+            pex_disc.start_discovery(
+                &ctx.torrent.info_hash,
+                &options,
+                &session::on_peer_discovery_peers,
+                &session::on_peer_discovery_complete,
+                &ctx
+            );
+            raylib_gui::add_log(ui, "[PeerDiscovery] Started PEX discovery");
+        }
+    }
+    else
+    {
+        raylib_gui::add_log(ui, "[PeerDiscovery] Skipping DHT/LSD/PEX for private torrent (BEP 27)");
+    }
+
     // Initialize web seeding (BEP 19)
     if (torrent.url_list.len > 0)
     {
@@ -1768,11 +1836,6 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Close timers properly (registers cleanup callbacks)
     // This must be done BEFORE close_all_handles() which drains the callbacks
     io::printfn("Closing timers...");
-    if (ctx.tracker_coord)
-    {
-        ctx.tracker_coord.free();
-        ctx.tracker_coord = null;
-    }
     if (ctx.pex_timer)
     {
         ctx.pex_timer.close();
@@ -1874,11 +1937,6 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Note: tracker_response is NOT freed here - it's stack-allocated by http_tracker
     // and automatically freed when AnnounceContext is freed
 
-    if (ctx.tracker_coord)
-    {
-        ctx.tracker_coord.free();
-    }
-
     if (ctx.tracker_mgr)
     {
         ctx.tracker_mgr.free();
@@ -1973,7 +2031,6 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.sm = null;
     ctx.tracker_completed = false;
     ctx.tracker_response = null;
-    ctx.tracker_coord = null;  // Will be initialized during session setup
     ctx.pex_timer = null;
     ctx.keepalive_timer = null;
     ctx.flush_timer = null;
@@ -2072,12 +2129,6 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // Note: tracker_response is NOT freed here - it's stack-allocated by http_tracker
     // and automatically freed when AnnounceContext is freed
-
-    // Free tracker coordinator
-    if (ctx.tracker_coord)
-    {
-        ctx.tracker_coord.free();
-    }
 
     // Free tracker manager
     if (ctx.tracker_mgr)

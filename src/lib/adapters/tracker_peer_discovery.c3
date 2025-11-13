@@ -211,10 +211,10 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
         self.stats.average_response_time_ms = (float)elapsed_ms;
     }
 
-    if (error != 0 || response.failure_reason.len > 0)
+    if (error != 0 || (response && response.failure_reason.len > 0))
     {
         // Announce failed
-        String error_msg = response.failure_reason.len > 0 ?
+        String error_msg = (response && response.failure_reason.len > 0) ?
                             response.failure_reason : "Unknown tracker error";
 
         logger::logf(logger::LogLevel.WARN,
@@ -283,6 +283,18 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
     }
 
     // Announce succeeded
+    if (!response)
+    {
+        logger::logf(logger::LogLevel.ERROR,
+                     "[TrackerDiscovery] Internal error: null response with no error code");
+        self.stats.failed_attempts++;
+        if (self.complete_callback)
+        {
+            self.complete_callback(false, "Internal error", self.user_data);
+        }
+        return;
+    }
+
     logger::logf(logger::LogLevel.INFO,
                  "[TrackerDiscovery] Announce succeeded: %d peers received (interval=%d s)",
                  response.peers.len, response.interval);
@@ -461,6 +473,28 @@ fn void TrackerPeerDiscovery.start_discovery(
 
     // Initial announce with "started" event
     String event = self.initial_announce_done ? "" : "started";
+    self.do_announce(event);
+}
+
+<*
+ * Trigger a manual announce with a specific event.
+ * Used for sending "completed" events on download finish.
+ *
+ * @param event : "Event string (empty, started, stopped, completed)"
+ *>
+fn void TrackerPeerDiscovery.trigger_event_announce(&self, String event) @public
+{
+    if (!self.active)
+    {
+        logger::logf(logger::LogLevel.WARN,
+                     "[TrackerDiscovery] Cannot announce - discovery not active");
+        return;
+    }
+
+    logger::logf(logger::LogLevel.INFO,
+                 "[TrackerDiscovery] Manual announce triggered (event=%s)",
+                 event.len > 0 ? event : "(none)");
+
     self.do_announce(event);
 }
 

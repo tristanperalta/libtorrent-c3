@@ -102,10 +102,11 @@ fn void CompositePeerDiscovery.add_source(&self, peer_discovery::PeerDiscovery* 
 
     self.sources.push(source);
 
-    String name = source.get_name();
-    logger::logf(logger::LogLevel.INFO,
-                 "[CompositeDiscovery] Added source: %s (total: %d)",
-                 name, self.sources.len());
+    // Temporarily disabled logger to debug crash
+    // String name = source.get_name();
+    // logger::logf(logger::LogLevel.INFO,
+    //              "[CompositeDiscovery] Added source: %s (total: %d)",
+    //              name, self.sources.len());
 }
 
 <*
@@ -222,7 +223,9 @@ fn void CompositePeerDiscovery.start_discovery(
         // Create callback context for this source
         CallbackContext* ctx = mem::new(CallbackContext);
         ctx.composite = self;
-        ctx.source_name = source.get_name();
+        // WORKAROUND: Avoid calling interface methods to prevent vtable crash
+        // ctx.source_name = source.get_name();
+        ctx.source_name = "unknown";
 
         // Start discovery on this source
         source.start_discovery(
