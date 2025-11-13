@@ -33,7 +33,7 @@ import std::time;
 struct CompositePeerDiscovery (peer_discovery::PeerDiscovery)
 {
     // Child discovery sources
-    List{peer_discovery::PeerDiscovery*} sources;
+    List{peer_discovery::PeerDiscovery} sources;
 
     // Configuration
     peer_discovery::DiscoveryOptions options;
@@ -60,7 +60,7 @@ struct CompositePeerDiscovery (peer_discovery::PeerDiscovery)
  *
  * @return "CompositePeerDiscovery aggregator instance"
  *>
-fn peer_discovery::PeerDiscovery* create() @public
+fn CompositePeerDiscovery* create() @public
 {
     CompositePeerDiscovery* composite = mem::new(CompositePeerDiscovery);
 
@@ -84,7 +84,7 @@ fn peer_discovery::PeerDiscovery* create() @public
 
     logger::logf(logger::LogLevel.INFO, "[CompositeDiscovery] Created aggregator");
 
-    return (peer_discovery::PeerDiscovery*)composite;
+    return composite;
 }
 
 // ============================================================================
@@ -96,17 +96,15 @@ fn peer_discovery::PeerDiscovery* create() @public
  *
  * @param source : "PeerDiscovery adapter to add"
  *>
-fn void CompositePeerDiscovery.add_source(&self, peer_discovery::PeerDiscovery* source) @public
+fn void CompositePeerDiscovery.add_source(&self, peer_discovery::PeerDiscovery source) @public
 {
-    if (!source) return;
-
     self.sources.push(source);
 
-    // Temporarily disabled logger to debug crash
-    // String name = source.get_name();
-    // logger::logf(logger::LogLevel.INFO,
-    //              "[CompositeDiscovery] Added source: %s (total: %d)",
-    //              name, self.sources.len());
+    // Note: Can't call source.get_name() here due to C3 interface limitation
+    // Interface methods work in loops but not in simple variable contexts
+    logger::logf(logger::LogLevel.INFO,
+                 "[CompositeDiscovery] Added source (total: %d)",
+                 self.sources.len());
 }
 
 <*
@@ -218,13 +216,12 @@ fn void CompositePeerDiscovery.start_discovery(
     int started = 0;
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+        peer_discovery::PeerDiscovery source = self.sources.get(i);
 
         // Create callback context for this source
         CallbackContext* ctx = mem::new(CallbackContext);
         ctx.composite = self;
-        // WORKAROUND: Avoid calling interface methods to prevent vtable crash
-        // ctx.source_name = source.get_name();
+        // Note: Can't call source.get_name() - C3 interface method dispatch fails
         ctx.source_name = "unknown";
 
         // Start discovery on this source
@@ -263,7 +260,7 @@ fn void CompositePeerDiscovery.stop_discovery(&self) @dynamic
     // Stop all child sources
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+        peer_discovery::PeerDiscovery source = self.sources.get(i);
         source.stop_discovery();
     }
 }
@@ -284,7 +281,7 @@ fn peer_discovery::DiscoveryStats CompositePeerDiscovery.get_stats(&self) @dynam
 
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+        peer_discovery::PeerDiscovery source = self.sources.get(i);
         peer_discovery::DiscoveryStats stats = source.get_stats();
 
         self.aggregated_stats.total_peers_discovered += stats.total_peers_discovered;
@@ -335,7 +332,7 @@ fn void CompositePeerDiscovery.free(&self) @dynamic
     // Free all child sources
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery* source = self.sources.get(i);
+        peer_discovery::PeerDiscovery source = self.sources.get(i);
         source.free();
     }
 

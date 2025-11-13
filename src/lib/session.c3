@@ -1,4 +1,4 @@
-module torrent_client::session;
+module libtorrent::session;
 
 import std::io;
 import std::time;
@@ -41,8 +41,8 @@ import libtorrent::metadata_download;
 import libtorrent::metadata_exchange;
 import libtorrent::fast_extension;
 import libtorrent::torrent_manager;
-import torrent_client::magnet_download_session;
-import torrent_client::session_message_handler;
+import libtorrent::magnet_download_session;
+import libtorrent::session_message_handler;
 import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
@@ -192,7 +192,10 @@ struct Session
     tracker_manager::TrackerManager* tracker_mgr;  // Manages tier-based tracker selection
     String current_tracker_url;                    // Currently active tracker URL (for logging)
 
-    // Tracker peer discovery (stored separately to avoid C3 interface vtable bug)
+    // Peer discovery composite (hexagonal architecture)
+    composite_peer_discovery::CompositePeerDiscovery* peer_discovery_composite;
+
+    // Tracker peer discovery (stored separately for tracker-specific methods like trigger_event_announce)
     tracker_peer_discovery::TrackerPeerDiscovery* tracker_discovery;
 
     // Peer management
@@ -2135,20 +2138,19 @@ fn void on_dht_peers_found(Session* ctx) @public
 *>
 fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_composite(Session* ctx) @public
 {
-    // Create composite (return concrete type due to C3 interface vtable bug)
+    // Create composite aggregator
     composite_peer_discovery::CompositePeerDiscovery* composite =
-        (composite_peer_discovery::CompositePeerDiscovery*)composite_peer_discovery::create();
+        composite_peer_discovery::create();
 
     // Always add tracker discovery (works for both private and public torrents)
     if (ctx.tracker_mgr)
     {
-        // Store concrete type (workaround for C3 interface vtable bug)
-        ctx.tracker_discovery = (tracker_peer_discovery::TrackerPeerDiscovery*)
-            tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
+        // Store concrete type for direct access to tracker-specific methods
+        ctx.tracker_discovery = tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
 
-        // Add to composite (cast to interface)
-        peer_discovery::PeerDiscovery* tracker_disc =
-            (peer_discovery::PeerDiscovery*)ctx.tracker_discovery;
+        // Add to composite (cast to interface fat pointer)
+        peer_discovery::PeerDiscovery tracker_disc =
+            (peer_discovery::PeerDiscovery)ctx.tracker_discovery;
         composite.add_source(tracker_disc);
         io::printfn("[PeerDiscovery] Added tracker discovery");
     }
@@ -2159,8 +2161,8 @@ fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_compos
         // Add DHT discovery if DHT client is available
         if (ctx.get_dht())
         {
-            peer_discovery::PeerDiscovery* dht_disc =
-                dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
+            peer_discovery::PeerDiscovery dht_disc =
+                (peer_discovery::PeerDiscovery)dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
             composite.add_source(dht_disc);
             io::printfn("[PeerDiscovery] Added DHT discovery");
         }
@@ -2168,8 +2170,8 @@ fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_compos
         // Add LSD discovery if LSD manager is available
         if (ctx.get_lsd_mgr())
         {
-            peer_discovery::PeerDiscovery* lsd_disc =
-                lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
+            peer_discovery::PeerDiscovery lsd_disc =
+                (peer_discovery::PeerDiscovery)lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
             composite.add_source(lsd_disc);
             io::printfn("[PeerDiscovery] Added LSD discovery");
         }
@@ -2177,8 +2179,8 @@ fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_compos
         // Add PEX discovery if peer pool is available
         if (ctx.peer_pool)
         {
-            peer_discovery::PeerDiscovery* pex_disc =
-                pex_peer_discovery::create(ctx.peer_pool);
+            peer_discovery::PeerDiscovery pex_disc =
+                (peer_discovery::PeerDiscovery)pex_peer_discovery::create(ctx.peer_pool);
             composite.add_source(pex_disc);
             io::printfn("[PeerDiscovery] Added PEX discovery");
         }
@@ -2624,80 +2626,21 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     init_lsd(ctx);
     io::printfn("");
 
-    // Initialize unified peer discovery (Hexagonal Architecture)
+    // Initialize unified peer discovery (Hexagonal Architecture - Composite Pattern)
     io::printfn("Initializing peer discovery...");
 
-    // WORKAROUND: Due to C3 vtable bug, we can't use CompositePeerDiscovery
-    // Instead, start each source directly
+    // Build composite with all applicable discovery sources
+    ctx.peer_discovery_composite = build_peer_discovery_composite(ctx);
+
+    // Start unified discovery through composite
     peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
-
-    // Always start tracker discovery (works for both private and public torrents)
-    if (ctx.tracker_mgr)
-    {
-        ctx.tracker_discovery = (tracker_peer_discovery::TrackerPeerDiscovery*)
-            tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
-        ctx.tracker_discovery.start_discovery(
-            &ctx.torrent.info_hash,
-            &options,
-            &on_peer_discovery_peers,
-            &on_peer_discovery_complete,
-            ctx
-        );
-        io::printfn("[PeerDiscovery] Started tracker discovery");
-    }
-
-    // Only start DHT/LSD/PEX for non-private torrents (BEP 27)
-    if (!ctx.torrent.info.private)
-    {
-        // Start DHT discovery if available (cast to concrete type to avoid vtable bug)
-        if (ctx.get_dht())
-        {
-            dht_peer_discovery::DhtPeerDiscovery* dht_disc = (dht_peer_discovery::DhtPeerDiscovery*)
-                dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
-            dht_disc.start_discovery(
-                &ctx.torrent.info_hash,
-                &options,
-                &on_peer_discovery_peers,
-                &on_peer_discovery_complete,
-                ctx
-            );
-            io::printfn("[PeerDiscovery] Started DHT discovery");
-        }
-
-        // Start LSD discovery if available (cast to concrete type to avoid vtable bug)
-        if (ctx.get_lsd_mgr())
-        {
-            lsd_peer_discovery::LsdPeerDiscovery* lsd_disc = (lsd_peer_discovery::LsdPeerDiscovery*)
-                lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
-            lsd_disc.start_discovery(
-                &ctx.torrent.info_hash,
-                &options,
-                &on_peer_discovery_peers,
-                &on_peer_discovery_complete,
-                ctx
-            );
-            io::printfn("[PeerDiscovery] Started LSD discovery");
-        }
-
-        // Start PEX discovery if available (cast to concrete type to avoid vtable bug)
-        if (ctx.peer_pool)
-        {
-            pex_peer_discovery::PexPeerDiscovery* pex_disc = (pex_peer_discovery::PexPeerDiscovery*)
-                pex_peer_discovery::create(ctx.peer_pool);
-            pex_disc.start_discovery(
-                &ctx.torrent.info_hash,
-                &options,
-                &on_peer_discovery_peers,
-                &on_peer_discovery_complete,
-                ctx
-            );
-            io::printfn("[PeerDiscovery] Started PEX discovery");
-        }
-    }
-    else
-    {
-        io::printfn("[PeerDiscovery] Skipping DHT/LSD/PEX for private torrent (BEP 27)");
-    }
+    ctx.peer_discovery_composite.start_discovery(
+        &ctx.torrent.info_hash,
+        &options,
+        &on_peer_discovery_peers,
+        &on_peer_discovery_complete,
+        ctx
+    );
     io::printfn("");
 
     // Initialize web seeding (BEP 19)

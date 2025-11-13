@@ -64,7 +64,7 @@ struct LsdPeerDiscovery (peer_discovery::PeerDiscovery)
  * @param loop : "Event loop for async operations"
  * @return "LsdPeerDiscovery adapter instance"
  *>
-fn peer_discovery::PeerDiscovery* create(
+fn LsdPeerDiscovery* create(
     lsd::LsdManager* lsd_manager,
     event_loop::EventLoop* loop
 ) @public
@@ -93,7 +93,7 @@ fn peer_discovery::PeerDiscovery* create(
 
     logger::logf(logger::LogLevel.INFO, "[LsdDiscovery] Created adapter");
 
-    return (peer_discovery::PeerDiscovery*)adapter;
+    return adapter;
 }
 
 // ============================================================================

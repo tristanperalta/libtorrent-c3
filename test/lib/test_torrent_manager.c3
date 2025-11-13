@@ -4,7 +4,7 @@ import libtorrent::torrent_manager;
 import libtorrent::metainfo;
 import libtorrent::common;
 import async::event_loop;
-import torrent_client::session;
+import libtorrent::session;
 import std::io;
 
 // ============================================================================

@@ -8,7 +8,7 @@ import libtorrent::dht_client;
 import libtorrent::lsd;
 import libtorrent::ports::peer_discovery;
 import libtorrent::adapters::composite_peer_discovery;
-import torrent_client::session;
+import libtorrent::session;
 import async::event_loop;
 import async::timer;
 

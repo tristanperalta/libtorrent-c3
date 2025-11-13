@@ -74,7 +74,7 @@ struct DhtPeerDiscovery (peer_discovery::PeerDiscovery)
  * @param loop : "Event loop for async operations"
  * @return "DhtPeerDiscovery adapter instance"
  *>
-fn peer_discovery::PeerDiscovery* create(
+fn DhtPeerDiscovery* create(
     dht_client::DhtClient* dht_client,
     event_loop::EventLoop* loop
 ) @public
@@ -107,7 +107,7 @@ fn peer_discovery::PeerDiscovery* create(
 
     logger::logf(logger::LogLevel.INFO, "[DhtDiscovery] Created adapter");
 
-    return (peer_discovery::PeerDiscovery*)adapter;
+    return adapter;
 }
 
 // ============================================================================

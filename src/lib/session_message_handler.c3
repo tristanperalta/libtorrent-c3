@@ -1,4 +1,4 @@
-module torrent_client::session_message_handler;
+module libtorrent::session_message_handler;
 
 import std::io;
 import libtorrent::common;
@@ -8,7 +8,7 @@ import libtorrent::download_manager;
 import libtorrent::block_manager;
 import libtorrent::bitfield;
 import libtorrent::peer_pool;
-import torrent_client::session;
+import libtorrent::session;
 
 /**
  * Session Message Handler

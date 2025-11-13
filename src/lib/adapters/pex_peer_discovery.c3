@@ -60,7 +60,7 @@ struct PexPeerDiscovery (peer_discovery::PeerDiscovery)
  * @param peer_pool : "Peer pool instance"
  * @return "PexPeerDiscovery adapter instance"
  *>
-fn peer_discovery::PeerDiscovery* create(
+fn PexPeerDiscovery* create(
     peer_pool::PeerPool* peer_pool
 ) @public
 {
@@ -88,7 +88,7 @@ fn peer_discovery::PeerDiscovery* create(
 
     logger::logf(logger::LogLevel.INFO, "[PexDiscovery] Created adapter");
 
-    return (peer_discovery::PeerDiscovery*)adapter;
+    return adapter;
 }
 
 // ============================================================================

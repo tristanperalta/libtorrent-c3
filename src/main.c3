@@ -28,8 +28,8 @@ import libtorrent::file_selection;
 import libtorrent::ports::peer_discovery;
 import libtorrent::adapters::composite_peer_discovery;
 import torrent_client::log_outputs;
-import torrent_client::session;
-import torrent_client::magnet_download_session;
+import libtorrent::session;
+import libtorrent::magnet_download_session;
 import libtorrent::adapters::fastresume_state_provider;
 import raylib_gui;
 

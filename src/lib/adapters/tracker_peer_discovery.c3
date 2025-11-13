@@ -83,7 +83,7 @@ struct TrackerPeerDiscovery (peer_discovery::PeerDiscovery)
  * @param tracker_mgr : "Tracker manager for multi-tracker support (can be null)"
  * @return "TrackerPeerDiscovery adapter instance"
  *>
-fn peer_discovery::PeerDiscovery* create(
+fn TrackerPeerDiscovery* create(
     event_loop::EventLoop* loop,
     metainfo::TorrentFile* torrent,
     tracker_manager::TrackerManager* tracker_mgr
@@ -121,7 +121,7 @@ fn peer_discovery::PeerDiscovery* create(
 
     logger::logf(logger::LogLevel.INFO, "[TrackerDiscovery] Created adapter for torrent");
 
-    return (peer_discovery::PeerDiscovery*)adapter;
+    return adapter;
 }
 
 // ============================================================================

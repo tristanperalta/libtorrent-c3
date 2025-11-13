@@ -1,4 +1,4 @@
-module torrent_client::magnet_download_session;
+module libtorrent::magnet_download_session;
 
 import std::io;
 import std::encoding::hex;
@@ -16,7 +16,7 @@ import libtorrent::peer_connection;
 import libtorrent::bencode;
 import libtorrent::storage_manager;
 import libtorrent::download_manager;
-import torrent_client::session;
+import libtorrent::session;
 
 /**
  * Magnet Download Session (BEP 9)
