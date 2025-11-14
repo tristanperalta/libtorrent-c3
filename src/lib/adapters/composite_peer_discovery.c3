@@ -5,6 +5,7 @@ import libtorrent::common;
 import libtorrent::logger;
 import std::collections::list;
 import std::time;
+import std::io;
 
 <*
  * CompositePeerDiscovery Adapter
@@ -183,17 +184,18 @@ fn void CompositePeerDiscovery.start_discovery(
     void* user_data
 ) @dynamic
 {
+    io::printfn("[CompositeDiscovery] start_discovery called (active=%s, sources=%d)",
+                self.active ? "true" : "false", self.sources.len());
+
     if (self.active)
     {
-        logger::logf(logger::LogLevel.WARN,
-                     "[CompositeDiscovery] Discovery already active");
+        io::printfn("[CompositeDiscovery] WARNING: Discovery already active");
         return;
     }
 
     if (self.sources.len() == 0)
     {
-        logger::logf(logger::LogLevel.WARN,
-                     "[CompositeDiscovery] No discovery sources configured");
+        io::printfn("[CompositeDiscovery] WARNING: No discovery sources configured");
         if (complete_callback)
         {
             complete_callback(false, "No discovery sources", user_data);
@@ -201,9 +203,7 @@ fn void CompositePeerDiscovery.start_discovery(
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO,
-                 "[CompositeDiscovery] Starting discovery across %d sources",
-                 self.sources.len());
+    io::printfn("[CompositeDiscovery] Starting discovery across %d sources", self.sources.len());
 
     self.active = true;
     self.options = *options;
@@ -236,9 +236,7 @@ fn void CompositePeerDiscovery.start_discovery(
         started++;
     }
 
-    logger::logf(logger::LogLevel.INFO,
-                 "[CompositeDiscovery] Started %d discovery sources",
-                 started);
+    io::printfn("[CompositeDiscovery] Started %d discovery sources", started);
 
     // Notify completion (composite starts all sources immediately)
     if (self.complete_callback)

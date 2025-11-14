@@ -30,6 +30,8 @@ fn common::SocketAddress make_test_address(char a, char b, char c, char d, ushor
 
 fn void test_build_announce_message_format() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash infohash = make_test_infohash(0xAA);
     ushort port = 6881;
     char[16] cookie = "0123456789abcdef";
@@ -59,6 +61,8 @@ fn void test_build_announce_message_format() @test
 
 fn void test_build_announce_message_different_port() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash infohash = make_test_infohash(0x11);
     ushort port = 12345;
     char[16] cookie = "fedcba9876543210";
@@ -71,6 +75,8 @@ fn void test_build_announce_message_different_port() @test
 
 fn void test_build_announce_message_different_infohash() @test
 {
+    defer logger::free_logger();
+
     common::InfoHash infohash = make_test_infohash(0xFF);
     ushort port = 6881;
     char[16] cookie = "0000000000000000";
@@ -103,6 +109,8 @@ fn void test_peer_callback(common::InfoHash* infohash, common::SocketAddress[] p
 
 fn void test_create_lsd_manager() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager*? mgr = lsd::create(&test_peer_callback, &state);
@@ -112,17 +120,16 @@ fn void test_create_lsd_manager() @test
     }
 
     mgr.free();
-    logger::free_logger();
 }
 
 fn void test_lsd_manager_inactive_by_default() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
-    defer logger::free_logger();
 
     // Manager should be inactive initially (we can't test this directly without exposing .active field)
     // Instead, test that announce doesn't crash when inactive
@@ -138,12 +145,12 @@ fn void test_lsd_manager_inactive_by_default() @test
 
 fn void test_handle_valid_announcement() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
-    defer logger::free_logger();
 
     // Build a valid announcement message (using different cookie to avoid filtering)
     common::InfoHash infohash = make_test_infohash(0xBB);
@@ -171,11 +178,12 @@ fn void test_handle_valid_announcement() @test
 
 fn void test_handle_announcement_with_own_cookie() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // We need to get the manager's cookie to test filtering
     // Since cookie is private, we'll test indirectly by having the manager
@@ -190,11 +198,12 @@ fn void test_handle_announcement_with_own_cookie() @test
 
 fn void test_parse_invalid_announcement_too_short() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // Message with too few lines
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\n\r\n";
@@ -208,11 +217,12 @@ fn void test_parse_invalid_announcement_too_short() @test
 
 fn void test_parse_invalid_announcement_wrong_request_line() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     String invalid_msg = "GET / HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 6881\r\nInfohash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n";
     common::SocketAddress source = make_test_address(192, 168, 1, 1, 6881);
@@ -225,11 +235,12 @@ fn void test_parse_invalid_announcement_wrong_request_line() @test
 
 fn void test_parse_announcement_missing_port() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nInfohash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n";
     common::SocketAddress source = make_test_address(192, 168, 1, 1, 6881);
@@ -242,11 +253,12 @@ fn void test_parse_announcement_missing_port() @test
 
 fn void test_parse_announcement_missing_infohash() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 6881\r\n\r\n";
     common::SocketAddress source = make_test_address(192, 168, 1, 1, 6881);
@@ -259,11 +271,12 @@ fn void test_parse_announcement_missing_infohash() @test
 
 fn void test_parse_announcement_invalid_port() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 999999\r\nInfohash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n";
     common::SocketAddress source = make_test_address(192, 168, 1, 1, 6881);
@@ -276,11 +289,12 @@ fn void test_parse_announcement_invalid_port() @test
 
 fn void test_parse_announcement_invalid_infohash_length() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // Infohash too short (should be 40 hex chars)
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 6881\r\nInfohash: aaaaaa\r\n\r\n";
@@ -294,11 +308,12 @@ fn void test_parse_announcement_invalid_infohash_length() @test
 
 fn void test_parse_announcement_invalid_hex() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // Infohash with invalid hex chars
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 6881\r\nInfohash: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\r\n\r\n";
@@ -316,11 +331,12 @@ fn void test_parse_announcement_invalid_hex() @test
 
 fn void test_roundtrip_build_and_parse() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // Build message
     common::InfoHash original_infohash = make_test_infohash(0x42);
@@ -350,11 +366,12 @@ fn void test_roundtrip_build_and_parse() @test
 
 fn void test_multiple_announcements() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // Handle first announcement
     common::InfoHash infohash1 = make_test_infohash(0x11);
@@ -392,11 +409,12 @@ fn void test_multiple_announcements() @test
 
 fn void test_announcement_with_zero_port() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 0\r\nInfohash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n";
     common::SocketAddress source = make_test_address(192, 168, 1, 1, 6881);
@@ -409,11 +427,12 @@ fn void test_announcement_with_zero_port() @test
 
 fn void test_announcement_with_max_port() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     String valid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 65535\r\nInfohash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\ncookie: cccccccccccccccc\r\n\r\n";
     common::SocketAddress source = make_test_address(192, 168, 1, 1, 65535);
@@ -427,11 +446,12 @@ fn void test_announcement_with_max_port() @test
 
 fn void test_announcement_with_extra_headers() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // Add extra headers that should be ignored
     String msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nPort: 6881\r\nInfohash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\ncookie: dddddddddddddddd\r\nX-Custom: ignored\r\n\r\n";
@@ -445,11 +465,12 @@ fn void test_announcement_with_extra_headers() @test
 
 fn void test_announcement_case_sensitive_headers() @test
 {
+    defer logger::free_logger();
+
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
     defer mgr.free();
-    defer logger::free_logger();
 
     // Wrong case for header names
     String invalid_msg = "BT-SEARCH * HTTP/1.1\r\nHost: 239.192.152.143:6771\r\nport: 6881\r\ninfohash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n";

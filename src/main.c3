@@ -1702,79 +1702,27 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     raylib_gui::add_log(ui, "Starting DHT on port 6881...");
     session::init_dht(&ctx, 6881);
 
-    // Initialize unified peer discovery (Hexagonal Architecture)
+    // Initialize unified peer discovery (Hexagonal Architecture - Composite Pattern)
     raylib_gui::add_log(ui, "Initializing peer discovery...");
 
-    // WORKAROUND: Due to C3 vtable bug, start each source directly
+    // Build composite with all applicable discovery sources
+    ctx.peer_discovery_composite = session::build_peer_discovery_composite(&ctx);
+
+    // Start unified discovery through composite
     peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    ctx.peer_discovery_composite.start_discovery(
+        &ctx.torrent.info_hash,
+        &options,
+        &session::on_peer_discovery_peers,
+        &session::on_peer_discovery_complete,
+        &ctx
+    );
 
-    // Always start tracker discovery
-    if (ctx.tracker_mgr)
-    {
-        ctx.tracker_discovery = (tracker_peer_discovery::TrackerPeerDiscovery*)
-            tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
-        ctx.tracker_discovery.start_discovery(
-            &ctx.torrent.info_hash,
-            &options,
-            &session::on_peer_discovery_peers,
-            &session::on_peer_discovery_complete,
-            &ctx
-        );
-        raylib_gui::add_log(ui, "[PeerDiscovery] Started tracker discovery");
-    }
-
-    // Only start DHT/LSD/PEX for non-private torrents (BEP 27)
-    if (!ctx.torrent.info.private)
-    {
-        // Start DHT discovery if available
-        if (ctx.get_dht())
-        {
-            dht_peer_discovery::DhtPeerDiscovery* dht_disc = (dht_peer_discovery::DhtPeerDiscovery*)
-                dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
-            dht_disc.start_discovery(
-                &ctx.torrent.info_hash,
-                &options,
-                &session::on_peer_discovery_peers,
-                &session::on_peer_discovery_complete,
-                &ctx
-            );
-            raylib_gui::add_log(ui, "[PeerDiscovery] Started DHT discovery");
-        }
-
-        // Start LSD discovery if available
-        if (ctx.get_lsd_mgr())
-        {
-            lsd_peer_discovery::LsdPeerDiscovery* lsd_disc = (lsd_peer_discovery::LsdPeerDiscovery*)
-                lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
-            lsd_disc.start_discovery(
-                &ctx.torrent.info_hash,
-                &options,
-                &session::on_peer_discovery_peers,
-                &session::on_peer_discovery_complete,
-                &ctx
-            );
-            raylib_gui::add_log(ui, "[PeerDiscovery] Started LSD discovery");
-        }
-
-        // Start PEX discovery if available
-        if (ctx.peer_pool)
-        {
-            pex_peer_discovery::PexPeerDiscovery* pex_disc = (pex_peer_discovery::PexPeerDiscovery*)
-                pex_peer_discovery::create(ctx.peer_pool);
-            pex_disc.start_discovery(
-                &ctx.torrent.info_hash,
-                &options,
-                &session::on_peer_discovery_peers,
-                &session::on_peer_discovery_complete,
-                &ctx
-            );
-            raylib_gui::add_log(ui, "[PeerDiscovery] Started PEX discovery");
-        }
-    }
-    else
-    {
-        raylib_gui::add_log(ui, "[PeerDiscovery] Skipping DHT/LSD/PEX for private torrent (BEP 27)");
-    }
+    usz source_count = ctx.peer_discovery_composite.get_source_count();
+    DString discovery_msg;
+    discovery_msg.appendf("[PeerDiscovery] Started discovery with %d sources", source_count);
+    raylib_gui::add_log(ui, discovery_msg.str_view());
+    discovery_msg.free();
 
     // Initialize web seeding (BEP 19)
     if (torrent.url_list.len > 0)

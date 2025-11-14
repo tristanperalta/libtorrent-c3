@@ -1908,12 +1908,8 @@ fn void on_all_pieces_verified(Session* ctx) @public
         ctx.event_bus.publish(SESSION_STARTED, &evt, SessionStateEvent.sizeof);
     }
 
-    // Start DHT peer discovery if enabled
-    if (ctx.is_dht_enabled() && ctx.get_dht())
-    {
-        io::printfn("Starting DHT peer discovery...");
-        start_dht_peer_discovery(ctx);
-    }
+    // Note: Peer discovery (DHT, Tracker, LSD, PEX) is now handled through
+    // CompositePeerDiscovery in the unified initialization flow
 }
 
 // ============================================================================
@@ -1950,27 +1946,8 @@ fn void on_upload_timer_tick(async::timer::Timer* timer, void* user_data) @publi
 }
 
 // ============================================================================
-// DHT Peer Discovery
+// DHT Tick Processing
 // ============================================================================
-
-<*
- Timer callback for periodic DHT peer discovery.
- Re-queries DHT for peers every 5 minutes.
-*>
-fn void on_dht_timer_tick(async::timer::Timer* timer, void* user_data) @public
-{
-    Session* ctx = (Session*)user_data;
-
-    // Free previous search if exists
-    if (ctx.dht_search)
-    {
-        ctx.dht_search.free();
-        ctx.dht_search = null;
-    }
-
-    // Start new DHT peer discovery
-    start_dht_peer_discovery(ctx);
-}
 
 <*
  DHT tick timer callback - processes RPC timeouts.
@@ -1984,145 +1961,6 @@ fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
     {
         ctx.get_dht().tick();
     }
-}
-
-<*
- Start DHT peer discovery for the torrent's info hash.
-*>
-fn void start_dht_peer_discovery(Session* ctx) @public
-{
-    if (!ctx.get_dht() || !ctx.torrent) return;
-
-    // Create get_peers search if it doesn't exist
-    if (!ctx.dht_search)
-    {
-        ctx.dht_search = dht_get_peers::create_search(ctx.torrent.info_hash);
-    }
-
-    // BEP 32: Query both IPv4 and IPv6 routing tables for closest nodes
-    dht_routing_table::NodeEntry[] ipv4_nodes =
-        ctx.get_dht().routing_table_ipv4.find_closest_nodes(ctx.torrent.info_hash, 8);
-    defer free(ipv4_nodes);
-
-    dht_routing_table::NodeEntry[] ipv6_nodes =
-        ctx.get_dht().routing_table_ipv6.find_closest_nodes(ctx.torrent.info_hash, 8);
-    defer free(ipv6_nodes);
-
-    // Merge results from both tables
-    usz total_nodes = ipv4_nodes.len + ipv6_nodes.len;
-    if (total_nodes == 0)
-    {
-        io::printfn("[DHT] No nodes in routing tables yet, will retry later");
-        return;
-    }
-
-    dht_routing_table::NodeEntry[] nodes = mem::new_array(dht_routing_table::NodeEntry, total_nodes);
-    defer free(nodes);
-
-    // Copy IPv4 nodes
-    for (usz i = 0; i < ipv4_nodes.len; i++)
-    {
-        nodes[i] = ipv4_nodes[i];
-    }
-
-    // Copy IPv6 nodes
-    for (usz i = 0; i < ipv6_nodes.len; i++)
-    {
-        nodes[ipv4_nodes.len + i] = ipv6_nodes[i];
-    }
-
-    io::printfn("[DHT] Querying %d DHT nodes for peers (%d IPv4, %d IPv6)...",
-        nodes.len, ipv4_nodes.len, ipv6_nodes.len);
-
-    // Send get_peers query to each node
-    for (int i = 0; i < (int)nodes.len; i++)
-    {
-        ctx.get_dht().send_get_peers(
-            nodes[i].id,
-            nodes[i].addr,
-            ctx.torrent.info_hash,
-            ctx.dht_search
-        );
-    }
-
-    // Schedule check for results in 5 seconds
-    // Close any existing check timer first
-    if (ctx.dht_check_timer)
-    {
-        ctx.dht_check_timer.close();
-        ctx.dht_check_timer = null;
-    }
-
-    async::timer::Timer*? check_timer_opt = async::timer::create(ctx.get_loop());
-    if (catch err = check_timer_opt)
-    {
-        io::eprintfn("[DHT] Warning: Failed to create check timer");
-    }
-    else
-    {
-        ctx.dht_check_timer = check_timer_opt;
-        ctx.dht_check_timer.start(5000, 0, &on_dht_check_results, ctx);
-    }
-}
-
-<*
- Timer callback to check DHT peer discovery results.
- Called 5 seconds after sending get_peers queries.
-*>
-fn void on_dht_check_results(async::timer::Timer* timer, void* user_data) @public
-{
-    Session* ctx = (Session*)user_data;
-
-    if (!ctx.dht_search)
-    {
-        timer.close();
-        ctx.dht_check_timer = null;
-        return;
-    }
-
-    // Check if we found any peers
-    if (dht_get_peers::found_peers(ctx.dht_search))
-    {
-        on_dht_peers_found(ctx);
-    }
-    else
-    {
-        io::printfn("[DHT] No peers found yet, will retry on next timer");
-    }
-
-    // Close timer (one-shot) and clear reference
-    timer.close();
-    ctx.dht_check_timer = null;
-}
-
-<*
- Process DHT peer discovery results and add peers to peer pool.
-*>
-fn void on_dht_peers_found(Session* ctx) @public
-{
-    if (!ctx.dht_search) return;
-
-    // Get discovered peers from DHT (already SocketAddress[])
-    common::SocketAddress[] dht_peers = ctx.dht_search.get_peers();
-    defer free(dht_peers);
-
-    if (dht_peers.len == 0)
-    {
-        io::printfn("[DHT] No peers found");
-        return;
-    }
-
-    io::printfn("[DHT] Found %d peers", dht_peers.len);
-    ctx.peer_pool.add_peers_from_dht(dht_peers);
-
-    // Show updated peer pool stats
-    usz total_peers, candidates, connecting, connected;
-    ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
-    io::printfn("  Peer pool now has %d total peers (%d candidates)",
-                total_peers, candidates);
-
-    // Try to connect to new peers
-    ctx.peer_pool.connect_to_peers();
 }
 
 // ============================================================================
@@ -2227,18 +2065,8 @@ fn void init_dht(Session* ctx, ushort dht_port) @public
 
     ctx.manager.dht_enabled = true;
 
-    // Set up periodic DHT query timer (every 5 minutes)
-    async::timer::Timer*? timer_opt = async::timer::create(ctx.get_loop());
-    if (catch err = timer_opt)
-    {
-        io::eprintfn("[DHT] Warning: Failed to create DHT timer");
-    }
-    else
-    {
-        ctx.dht_timer = timer_opt;
-        ctx.dht_timer.start(300000, 300000,
-                            &on_dht_timer_tick, ctx);
-    }
+    // Note: Periodic DHT peer discovery is now handled by DhtPeerDiscovery adapter
+    // through the CompositePeerDiscovery pattern
 
     // Set up DHT tick timer for RPC timeout processing (every 1 second)
     // Only create if not already created by another session
