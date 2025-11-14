@@ -2417,22 +2417,34 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         );
         ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
     }
-    else
+    else if (torrent.announce.len > 0)
     {
-        // Fallback to single tracker
-        ctx.tracker_mgr = null;
+        // Single tracker - create a TrackerManager with one tier containing one tracker
+        String[][] single_tracker_list = mem::new_array(String[], 1);
+        single_tracker_list[0] = mem::new_array(String, 1);
+        single_tracker_list[0][0] = torrent.announce;
+
+        ctx.tracker_mgr = mem::new(tracker_manager::TrackerManager);
+        *ctx.tracker_mgr = tracker_manager::initialize(single_tracker_list[..]);
+        io::printfn("Single tracker: %s", torrent.announce);
         ctx.current_tracker_url = torrent.announce;
 
-        // If announce is empty, this is likely a DHT-only/web seed-only torrent
-        if (ctx.current_tracker_url.len == 0)
-        {
-            io::printfn("No trackers found - will use DHT and web seeds only");
-        }
+        // Publish tracker status changed event (initialization)
+        event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
+            ctx.current_tracker_url, "Idle", -1, "", ctx.tracker_mgr
+        );
+        ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
+    }
+    else
+    {
+        // No trackers at all - DHT-only/web seed-only torrent
+        ctx.tracker_mgr = null;
+        ctx.current_tracker_url = "";
+        io::printfn("No trackers found - will use DHT and web seeds only");
 
         // Publish tracker status changed event (initialization)
-        String display_url = ctx.current_tracker_url.len > 0 ? ctx.current_tracker_url : "(none - DHT only)";
         event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
-            display_url, "Idle", -1, "", null
+            "(none - DHT only)", "Idle", -1, "", null
         );
         ctx.event_bus.publish(event_types::EVENT_TRACKER_STATUS_CHANGED, &tracker_evt, event_types::TrackerEvent.sizeof);
     }

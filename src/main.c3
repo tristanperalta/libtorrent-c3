@@ -1627,15 +1627,29 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         raylib_gui::update_tracker_list(ui, ctx.tracker_mgr,
                                          ctx.current_tracker_url, "Idle", -1);
     }
-    else
+    else if (torrent.announce.len > 0)
     {
-        // Fallback to single tracker
-        ctx.tracker_mgr = null;
+        // Single tracker - create a TrackerManager with one tier containing one tracker
+        String[][] single_tracker_list = mem::new_array(String[], 1);
+        single_tracker_list[0] = mem::new_array(String, 1);
+        single_tracker_list[0][0] = torrent.announce;
+
+        ctx.tracker_mgr = mem::new(tracker_manager::TrackerManager);
+        *ctx.tracker_mgr = tracker_manager::initialize(single_tracker_list[..]);
         ctx.current_tracker_url = torrent.announce;
 
+        io::printfn("Single tracker: %s", torrent.announce);
+
         // Populate GUI with single tracker
-        raylib_gui::update_tracker_list(ui, null,
+        raylib_gui::update_tracker_list(ui, ctx.tracker_mgr,
                                          ctx.current_tracker_url, "Idle", -1);
+    }
+    else
+    {
+        // No trackers at all - DHT-only/web seed-only torrent
+        ctx.tracker_mgr = null;
+        ctx.current_tracker_url = "";
+        io::printfn("No trackers found - will use DHT and web seeds only");
     }
 
     // Build storage path (for multi-file torrents, append torrent name)
