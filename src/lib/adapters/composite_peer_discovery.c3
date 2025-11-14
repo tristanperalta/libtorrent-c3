@@ -50,6 +50,9 @@ struct CompositePeerDiscovery (peer_discovery::PeerDiscovery)
 
     // Aggregated statistics
     peer_discovery::DiscoveryStats aggregated_stats;
+
+    // Callback contexts (one per source, allocated during start_discovery)
+    List{CallbackContext*} callback_contexts;
 }
 
 // ============================================================================
@@ -66,6 +69,7 @@ fn CompositePeerDiscovery* create() @public
     CompositePeerDiscovery* composite = mem::new(CompositePeerDiscovery);
 
     composite.sources.init(mem);
+    composite.callback_contexts.init(mem);
 
     composite.options = peer_discovery::default_options();
 
@@ -127,6 +131,17 @@ struct CallbackContext
 {
     CompositePeerDiscovery* composite;
     String source_name;  // Name of the child source
+}
+
+// Helper to free all callback contexts
+fn void CompositePeerDiscovery.free_callback_contexts(&self) @private
+{
+    for (usz i = 0; i < self.callback_contexts.len(); i++)
+    {
+        CallbackContext* ctx = self.callback_contexts.get(i);
+        free(ctx);
+    }
+    self.callback_contexts.clear();
 }
 
 // Forward peer discovered callback
@@ -212,6 +227,9 @@ fn void CompositePeerDiscovery.start_discovery(
     self.complete_callback = complete_callback;
     self.user_data = user_data;
 
+    // Clear previous callback contexts if any
+    self.free_callback_contexts();
+
     // Start all child sources
     int started = 0;
     for (usz i = 0; i < self.sources.len(); i++)
@@ -223,6 +241,9 @@ fn void CompositePeerDiscovery.start_discovery(
         ctx.composite = self;
         // Note: Can't call source.get_name() - C3 interface method dispatch fails
         ctx.source_name = "unknown";
+
+        // Track the context for cleanup
+        self.callback_contexts.push(ctx);
 
         // Start discovery on this source
         source.start_discovery(
@@ -261,6 +282,9 @@ fn void CompositePeerDiscovery.stop_discovery(&self) @dynamic
         peer_discovery::PeerDiscovery source = self.sources.get(i);
         source.stop_discovery();
     }
+
+    // Free callback contexts
+    self.free_callback_contexts();
 }
 
 fn peer_discovery::DiscoveryStats CompositePeerDiscovery.get_stats(&self) @dynamic
@@ -335,5 +359,6 @@ fn void CompositePeerDiscovery.free(&self) @dynamic
     }
 
     self.sources.free();
+    self.callback_contexts.free();
     free(self);
 }
