@@ -555,13 +555,18 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Register file selection callback (BEP 21 Phase 3)
     raylib_gui::set_file_selection_callback(ui, &on_file_selection_toggled, &ctx);
 
+    // Initialize tracker configuration (parallel announce settings)
+    ctx.tracker_config = tracker_peer_discovery::default_tracker_config();
+
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
     {
         // Use announce-list for multi-tracker support
         ctx.tracker_mgr = mem::new(tracker_manager::TrackerManager);
         *ctx.tracker_mgr = tracker_manager::initialize(torrent.announce_list);
-        ctx.current_tracker_url = "";
+
+        // Get first tracker from tier 0 for initial display
+        ctx.current_tracker_url = ctx.tracker_mgr.get_next_tracker();
 
         io::printfn("Multi-tracker support: %d tiers, %d total trackers",
                     ctx.tracker_mgr.get_tier_count(),

@@ -293,6 +293,100 @@ fn String TrackerManager.get_tracker_url(&self, uint tier, uint index) @public
 }
 
 <*
+ * Get all tracker URLs in a specific tier (for parallel announces).
+ * Used when announce_to_all_trackers=true.
+ *
+ * @param tier : "Tier index (0-based)"
+ * @return "List of tracker URLs in the tier (caller must free list, not strings)"
+ *>
+fn String[] TrackerManager.get_tier_trackers(&self, uint tier) @public
+{
+    if (tier >= self.tiers.len)
+    {
+        return {};  // Invalid tier
+    }
+
+    // Return reference to the tier array (no copy needed)
+    return self.tiers[tier];
+}
+
+<*
+ * Get one tracker from each tier (for parallel tier announces).
+ * Used when announce_to_all_tiers=true, announce_to_all_trackers=false (uTorrent mode).
+ * Returns the first tracker from each tier.
+ *
+ * @return "List of tracker URLs (one per tier, caller must free)"
+ *>
+fn String[] TrackerManager.get_one_per_tier(&self) @public
+{
+    if (self.tiers.len == 0)
+    {
+        return {};
+    }
+
+    // Allocate result array
+    String[] result = mem::new_array(String, self.tiers.len);
+    uint count = 0;
+
+    foreach (tier : self.tiers)
+    {
+        if (tier.len > 0)
+        {
+            result[count++] = tier[0];  // First tracker from this tier
+        }
+    }
+
+    // If we didn't fill the array, return a slice of what we actually filled
+    if (count < self.tiers.len)
+    {
+        return result[0..count];
+    }
+
+    return result;
+}
+
+<*
+ * Get all tracker URLs across all tiers (for maximum parallel announces).
+ * Used when both announce_to_all_trackers=true AND announce_to_all_tiers=true.
+ *
+ * @return "List of all tracker URLs (caller must free)"
+ *>
+fn String[] TrackerManager.get_all_trackers(&self) @public
+{
+    if (self.tiers.len == 0)
+    {
+        return {};
+    }
+
+    // Count total trackers
+    uint total_count = 0;
+    foreach (tier : self.tiers)
+    {
+        total_count += (uint)tier.len;
+    }
+
+    if (total_count == 0)
+    {
+        return {};
+    }
+
+    // Allocate result array
+    String[] result = mem::new_array(String, total_count);
+    uint index = 0;
+
+    // Copy all trackers from all tiers
+    foreach (tier : self.tiers)
+    {
+        foreach (tracker_url : tier)
+        {
+            result[index++] = tracker_url;
+        }
+    }
+
+    return result;
+}
+
+<*
  * Free tracker manager resources.
  *>
 fn void TrackerManager.free(&self) @public
