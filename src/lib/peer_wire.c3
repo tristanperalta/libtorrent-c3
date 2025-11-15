@@ -46,7 +46,10 @@ enum MessageType : const char
     HAVE_NONE = 15,     // BEP 6: Fast Extension
     REJECT_REQUEST = 16,// BEP 6: Fast Extension
     ALLOWED_FAST = 17,  // BEP 6: Fast Extension
-    EXTENDED = 20       // Extension protocol (BEP 10)
+    EXTENDED = 20,      // Extension protocol (BEP 10)
+    HASH_REQUEST = 21,  // BEP 52: Request Merkle hashes
+    HASHES = 22,        // BEP 52: Merkle hash response
+    HASH_REJECT = 23    // BEP 52: Reject hash request
 }
 
 <*
@@ -98,6 +101,44 @@ struct PieceMsg
 fn void PieceMsg.free(&self) @inline
 {
     if (self.block.len > 0) free(self.block);
+}
+
+<*
+ * HASH_REQUEST message payload (BEP 52).
+ * Used to request Merkle tree hashes from a peer.
+ *>
+struct HashRequestMsg
+{
+    char[32] pieces_root;  // SHA-256 Merkle root hash (identifies file)
+    uint base_layer;       // Which layer of the tree to request
+    uint index;            // Starting index in the layer (must be multiple of length)
+    uint length;           // Number of hashes to request (power of 2, range 2-512)
+    uint proof_layers;     // Number of uncle hashes to include in proof
+}
+
+<*
+ * HASHES message payload (BEP 52).
+ * Response containing requested Merkle hashes plus proof hashes.
+ *>
+struct HashesMsg
+{
+    char[32] pieces_root;  // SHA-256 Merkle root hash
+    uint base_layer;       // Layer index
+    uint index;            // Starting index in layer
+    uint length;           // Number of requested hashes
+    char[][] hashes;       // Hash array: [requested_hashes... proof_hashes...] (caller must free)
+}
+
+<*
+ * HASH_REJECT message payload (BEP 52).
+ * Sent when peer cannot fulfill hash request.
+ *>
+struct HashRejectMsg
+{
+    char[32] pieces_root;  // SHA-256 Merkle root hash
+    uint base_layer;       // Layer index
+    uint index;            // Starting index
+    uint length;           // Number of hashes requested
 }
 
 // ============================================================================
@@ -160,9 +201,10 @@ fn char[] encode_handshake(char[20] info_hash, char[20] peer_id, Allocator alloc
     // Reserved bytes - set extension protocol support bits
     // Byte 5 (offset 25), bit 0x10: extension protocol (BEP 10)
     // Byte 7 (offset 27), bit 0x04: Fast Extension (BEP 6)
+    // Byte 7 (offset 27), bit 0x08: v2 protocol (BEP 52)
     for (usz i = 20; i < 28; i++) msg[i] = 0;
     msg[25] |= 0x10;  // Enable extension protocol (BEP 10)
-    msg[27] |= 0x04;  // Enable Fast Extension (BEP 6)
+    msg[27] |= 0x0C;  // Enable Fast Extension (0x04) + v2 protocol (0x08)
 
     // Info hash
     foreach (i, b : info_hash) msg[i + 28] = b;
@@ -239,6 +281,18 @@ fn bool handshake_supports_fast(HandshakeMsg* handshake) @public
 {
     // Check bit 2 (byte 7, bit 0x04)
     return (handshake.reserved[7] & 0x04) != 0;
+}
+
+<*
+ Check if a handshake indicates v2 protocol support (BEP 52).
+
+ @param handshake : "Decoded handshake message"
+ @return "True if peer supports BitTorrent v2 protocol"
+*>
+fn bool handshake_supports_v2(HandshakeMsg* handshake) @public
+{
+    // Check bit 4 (byte 7, bit 0x08)
+    return (handshake.reserved[7] & 0x08) != 0;
 }
 
 // ============================================================================
@@ -567,6 +621,129 @@ fn char[] encode_extension_message(char ext_msg_id, char[] payload, Allocator al
     {
         msg[6 + i] = payload[i];
     }
+
+    return msg;
+}
+
+// ============================================================================
+// BEP 52: v2 Protocol Messages
+// ============================================================================
+
+<*
+ Encode a HASH_REQUEST message (message 21).
+
+ Wire format: <length:4><id:1><pieces_root:32><base_layer:4><index:4><length:4><proof_layers:4>
+ Total: 53 bytes
+
+ @param request : "Hash request parameters"
+ @param allocator : "Allocator for message buffer"
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_hash_request(HashRequestMsg* request, Allocator allocator = mem) @public
+{
+    // Total: 4 (length) + 1 (id) + 32 (root) + 4*4 (uint fields) = 53 bytes
+    char[] msg = allocator::alloc_array(allocator, char, 53);
+
+    // Write length (49 = 1 + 32 + 4 + 4 + 4 + 4)
+    write_u32_be(msg, 0, 49);
+
+    // Write message ID
+    msg[4] = (char)MessageType.HASH_REQUEST;
+
+    // Write pieces_root (32 bytes)
+    foreach (i, byte : request.pieces_root)
+    {
+        msg[5 + i] = byte;
+    }
+
+    // Write uint fields (big-endian)
+    write_u32_be(msg, 37, request.base_layer);
+    write_u32_be(msg, 41, request.index);
+    write_u32_be(msg, 45, request.length);
+    write_u32_be(msg, 49, request.proof_layers);
+
+    return msg;
+}
+
+<*
+ Encode a HASHES message (message 22).
+
+ Wire format: <length:4><id:1><pieces_root:32><base_layer:4><index:4><length:4><hashes:variable>
+ Variable length depends on number of hashes (each hash is 32 bytes)
+
+ @param hashes : "Hashes message with hash array"
+ @param allocator : "Allocator for message buffer"
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_hashes(HashesMsg* hashes, Allocator allocator = mem) @public
+{
+    // Calculate total length
+    usz hash_data_len = hashes.hashes.len * 32;
+    usz total_len = 4 + 1 + 32 + 4 + 4 + 4 + hash_data_len;
+
+    char[] msg = allocator::alloc_array(allocator, char, total_len);
+
+    // Write length field (excluding 4-byte length prefix)
+    write_u32_be(msg, 0, (uint)(total_len - 4));
+
+    // Write message ID
+    msg[4] = (char)MessageType.HASHES;
+
+    // Write pieces_root (32 bytes)
+    foreach (i, byte : hashes.pieces_root)
+    {
+        msg[5 + i] = byte;
+    }
+
+    // Write uint fields
+    write_u32_be(msg, 37, hashes.base_layer);
+    write_u32_be(msg, 41, hashes.index);
+    write_u32_be(msg, 45, hashes.length);
+
+    // Write hash data (concatenated 32-byte hashes)
+    usz offset = 49;
+    foreach (hash : hashes.hashes)
+    {
+        foreach (byte : hash)
+        {
+            msg[offset++] = byte;
+        }
+    }
+
+    return msg;
+}
+
+<*
+ Encode a HASH_REJECT message (message 23).
+
+ Wire format: <length:4><id:1><pieces_root:32><base_layer:4><index:4><length:4>
+ Total: 49 bytes
+
+ @param reject : "Hash reject parameters"
+ @param allocator : "Allocator for message buffer"
+ @return "Encoded message (caller must free)"
+*>
+fn char[] encode_hash_reject(HashRejectMsg* reject, Allocator allocator = mem) @public
+{
+    // Total: 4 (length) + 1 (id) + 32 (root) + 4*3 (uint fields) = 49 bytes
+    char[] msg = allocator::alloc_array(allocator, char, 49);
+
+    // Write length (45 = 1 + 32 + 4 + 4 + 4)
+    write_u32_be(msg, 0, 45);
+
+    // Write message ID
+    msg[4] = (char)MessageType.HASH_REJECT;
+
+    // Write pieces_root (32 bytes)
+    foreach (i, byte : reject.pieces_root)
+    {
+        msg[5 + i] = byte;
+    }
+
+    // Write uint fields (big-endian)
+    write_u32_be(msg, 37, reject.base_layer);
+    write_u32_be(msg, 41, reject.index);
+    write_u32_be(msg, 45, reject.length);
 
     return msg;
 }
@@ -928,6 +1105,156 @@ fn RequestMsg? decode_reject_request(char[] payload) @public
 {
     // REJECT_REQUEST has the same format as REQUEST/CANCEL
     return decode_request(payload);
+}
+
+// ============================================================================
+// BEP 52: v2 Protocol Message Decoding
+// ============================================================================
+
+<*
+ Decode a HASH_REQUEST message (message 21).
+
+ @param payload : "Message payload (must be 48 bytes: 32 + 4*4)"
+ @return "Decoded hash request or fault if invalid"
+*>
+fn HashRequestMsg? decode_hash_request(char[] payload) @public
+{
+    // Validate payload length (32 + 4 + 4 + 4 + 4 = 48)
+    if (payload.len != 48)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+
+    HashRequestMsg request;
+
+    // Read pieces_root (32 bytes)
+    for (usz i = 0; i < 32; i++)
+    {
+        request.pieces_root[i] = payload[i];
+    }
+
+    // Read uint fields (big-endian)
+    request.base_layer = read_u32_be(payload, 32);
+    request.index = read_u32_be(payload, 36);
+    request.length = read_u32_be(payload, 40);
+    request.proof_layers = read_u32_be(payload, 44);
+
+    return request;
+}
+
+<*
+ Decode a HASHES message (message 22).
+
+ @param payload : "Message payload (variable length: 44 + n*32 bytes)"
+ @return "Decoded hashes message or fault if invalid"
+*>
+fn HashesMsg? decode_hashes(char[] payload) @public
+{
+    // Validate minimum payload length (32 + 4 + 4 + 4 = 44)
+    if (payload.len < 44)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+
+    HashesMsg hashes;
+
+    // Read pieces_root (32 bytes)
+    for (usz i = 0; i < 32; i++)
+    {
+        hashes.pieces_root[i] = payload[i];
+    }
+
+    // Read uint fields
+    hashes.base_layer = read_u32_be(payload, 32);
+    hashes.index = read_u32_be(payload, 36);
+    hashes.length = read_u32_be(payload, 40);
+
+    // Validate hash data length (must be multiple of 32)
+    usz hash_data_len = payload.len - 44;
+    if (hash_data_len % 32 != 0)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+
+    // Parse hash array
+    usz num_hashes = hash_data_len / 32;
+    hashes.hashes = mem::new_array(char[], num_hashes);
+
+    for (usz i = 0; i < num_hashes; i++)
+    {
+        hashes.hashes[i] = mem::new_array(char, 32);
+        usz offset = 44 + (i * 32);
+        for (usz j = 0; j < 32; j++)
+        {
+            hashes.hashes[i][j] = payload[offset + j];
+        }
+    }
+
+    return hashes;
+}
+
+<*
+ Decode a HASH_REJECT message (message 23).
+
+ @param payload : "Message payload (must be 44 bytes: 32 + 4*3)"
+ @return "Decoded hash reject or fault if invalid"
+*>
+fn HashRejectMsg? decode_hash_reject(char[] payload) @public
+{
+    // Validate payload length (32 + 4 + 4 + 4 = 44)
+    if (payload.len != 44)
+    {
+        return PEER_WIRE_INVALID_MESSAGE?;
+    }
+
+    HashRejectMsg reject;
+
+    // Read pieces_root (32 bytes)
+    for (usz i = 0; i < 32; i++)
+    {
+        reject.pieces_root[i] = payload[i];
+    }
+
+    // Read uint fields (big-endian)
+    reject.base_layer = read_u32_be(payload, 32);
+    reject.index = read_u32_be(payload, 36);
+    reject.length = read_u32_be(payload, 40);
+
+    return reject;
+}
+
+<*
+ Validate HASH_REQUEST parameters (BEP 52 constraints).
+
+ Checks:
+ - index is multiple of length
+ - length is power of 2, range [2, 512]
+
+ @param request : "Hash request to validate"
+ @return "True if parameters are valid"
+*>
+fn bool validate_hash_request(HashRequestMsg* request) @public
+{
+    // Check index is multiple of length
+    if (request.index % request.length != 0)
+    {
+        return false;
+    }
+
+    // Check length range [2, 512]
+    if (request.length < 2 || request.length > 512)
+    {
+        return false;
+    }
+
+    // Check length is power of 2
+    // A power of 2 has only one bit set, so (x & (x-1)) == 0
+    if ((request.length & (request.length - 1)) != 0)
+    {
+        return false;
+    }
+
+    return true;
 }
 
 // ============================================================================
