@@ -191,6 +191,7 @@ struct Session
     // Multi-tracker support (BEP 12)
     tracker_manager::TrackerManager* tracker_mgr;  // Manages tier-based tracker selection
     String current_tracker_url;                    // Currently active tracker URL (for logging)
+    tracker_peer_discovery::TrackerConfig tracker_config;  // Parallel announce configuration
 
     // Peer discovery composite (hexagonal architecture)
     composite_peer_discovery::CompositePeerDiscovery* peer_discovery_composite;
@@ -1947,7 +1948,7 @@ fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_compos
     if (ctx.tracker_mgr)
     {
         // Store concrete type for direct access to tracker-specific methods
-        ctx.tracker_discovery = tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr);
+        ctx.tracker_discovery = tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr, ctx.event_bus, &ctx.tracker_config);
 
         // Add to composite (cast to interface fat pointer)
         peer_discovery::PeerDiscovery tracker_disc =
@@ -2363,6 +2364,9 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         io::printfn("Started upload request processor (1s interval)");
     }
 
+    // Initialize tracker configuration (parallel announce settings)
+    ctx.tracker_config = tracker_peer_discovery::default_tracker_config();
+
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
     {
@@ -2372,7 +2376,9 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         io::printfn("Multi-tracker support: %d tiers, %d total trackers",
                     ctx.tracker_mgr.get_tier_count(),
                     torrent.announce_list[0].len + (torrent.announce_list.len > 1 ? torrent.announce_list[1].len : 0));
-        ctx.current_tracker_url = "";
+
+        // Get first tracker from tier 0 for initial display
+        ctx.current_tracker_url = ctx.tracker_mgr.get_next_tracker();
 
         // Publish tracker status changed event (initialization)
         event_types::TrackerEvent tracker_evt = event_types::create_tracker_event(
