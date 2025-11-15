@@ -2,6 +2,7 @@ module libtorrent::metainfo;
 
 import std::io;
 import std::hash::sha1;
+import std::hash::sha256;
 import std::encoding::hex;
 import std::net::url;
 import std::collections::list;
@@ -9,6 +10,7 @@ import std::collections::set;
 import std::core::mem::allocator;
 import libtorrent::bencode;
 import libtorrent::path_sanitize;
+import libtorrent::merkle_tree;
 import libtorrent::common;
 
 /**
@@ -43,6 +45,10 @@ struct FileEntry
     String[] symlink_path;  // Symlink target path (only if attr contains 'l')
     InfoHash sha1;          // Optional SHA1 hash for file deduplication
     bool has_sha1;          // Whether sha1 field is present
+
+    // BEP 52: v2 fields
+    common::InfoHashV2 pieces_root;  // 32-byte SHA-256 Merkle root hash
+    bool has_pieces_root;            // True for v2/hybrid torrents
 }
 
 /**
@@ -96,6 +102,11 @@ struct TorrentInfo
     bool is_multi_file;     // true if multi-file torrent
     FileEntry[] files;      // Files list (multi-file mode only)
     bool private;           // BEP 27: Private torrent flag (DHT/PEX disabled)
+
+    // BEP 52: v2 fields
+    int meta_version;       // 1 = v1 only, 2 = v2/hybrid, 0 = unknown
+    bool is_v2;             // True if v2 or hybrid torrent
+    merkle_tree::MerkleTree*[] piece_layers;  // Merkle trees per file (same order as files[])
 }
 
 /**
@@ -115,7 +126,11 @@ struct TorrentFile
     String[] url_list;      // Optional: URL seeds (BEP 19)
     String[] httpseeds;     // Optional: HTTP seeds (BEP 17)
     TorrentInfo info;       // File metadata
-    char[20] info_hash;     // SHA1 hash of bencoded info dict
+    char[20] info_hash;     // SHA1 hash of bencoded info dict (v1)
+
+    // BEP 52: v2 fields
+    common::InfoHashV2 info_hash_v2;  // v2 SHA-256 info hash
+    bool is_hybrid;                   // True if contains both v1 and v2 metadata
 
     // Memory management
     DynamicArenaAllocator arena;  // Arena allocator for torrent-lifetime allocations
@@ -442,6 +457,16 @@ fn TorrentFile*? parse(String data) @public => @pool()
     defer free(info_encoded);  // bencode::encode() returns heap memory
     torrent.info_hash = sha1::hash(info_encoded);
 
+    // BEP 52: Calculate v2 info hash (SHA-256) if this is a v2 torrent
+    if (torrent.info.is_v2)
+    {
+        torrent.info_hash_v2 = calculate_info_hash_v2((char[])info_encoded);
+
+        // Detect hybrid torrents: v2 torrent with v1 compatibility fields
+        // Hybrid = has both "pieces" (v1) and "file tree" (v2)
+        torrent.is_hybrid = (torrent.info.pieces.len > 0);
+    }
+
     // Validate torrent name (BEP 3 compliance)
     // If name is empty, ".", or "..", use info-hash as name
     // Note: Null bytes and path traversal within names are handled by path sanitization
@@ -557,6 +582,38 @@ fn fault? parse_info(Allocator arena, TorrentInfo* info, BencodeValue* info_val)
     else
     {
         info.private = false;  // Default to public torrent
+    }
+
+    // BEP 52: Extract 'meta version' (optional - indicates v2/hybrid torrent)
+    BencodeValue* meta_version_val = info_val.dict_get("meta version");
+    if (meta_version_val && meta_version_val.type == bencode::BencodeType.INTEGER)
+    {
+        info.meta_version = (int)meta_version_val.integer;
+        info.is_v2 = (info.meta_version == 2);
+    }
+    else
+    {
+        // Default to v1 (no meta version field = v1 torrent)
+        info.meta_version = 1;
+        info.is_v2 = false;
+    }
+
+    // BEP 52: Extract 'file tree' (v2 torrents only)
+    BencodeValue* file_tree_val = info_val.dict_get("file tree");
+    if (file_tree_val && file_tree_val.type == bencode::BencodeType.DICT)
+    {
+        // v2 torrent detected
+        info.is_v2 = true;
+
+        // Parse file tree (this populates info.files with v2 metadata)
+        parse_file_tree(arena, info, file_tree_val)!;
+
+        // BEP 52: Extract 'piece layers' (required for v2)
+        BencodeValue* piece_layers_val = info_val.dict_get("piece layers");
+        if (piece_layers_val && piece_layers_val.type == bencode::BencodeType.DICT)
+        {
+            parse_piece_layers(arena, info, piece_layers_val)!;
+        }
     }
 
     return {};  // Success
@@ -764,6 +821,209 @@ fn fault? parse_files_list(Allocator arena, TorrentInfo* info, BencodeValue* fil
     }
 
     return {};  // Success
+}
+
+// ============================================================================
+// BEP 52: v2 Torrent Parsing Functions
+// ============================================================================
+
+/**
+ * Parse BEP 52 file tree (recursive helper).
+ * Traverses nested dictionaries to extract file entries with v2 metadata.
+ *
+ * File tree structure (BEP 52):
+ *   "dir1": {
+ *     "file.txt": {
+ *       "": {                    // Empty string key contains file metadata
+ *         "length": 1234,
+ *         "pieces root": <32-byte SHA-256 hash>
+ *       }
+ *     }
+ *   }
+ *
+ * @param arena: Allocator for file entry allocations
+ * @param tree_node: Current node in the file tree (dictionary)
+ * @param path_components: List of accumulated path components
+ * @param files: Accumulator for extracted file entries
+ * @param total_length: Accumulator for total torrent size
+ * @return: Fault if parsing fails
+ */
+fn fault? parse_file_tree_recursive(Allocator arena, BencodeValue* tree_node, List{String}* path_components, List{FileEntry}* files, long* total_length)
+{
+    if (tree_node.type != bencode::BencodeType.DICT) return TORRENT_INVALID_FORMAT?;
+
+    // Iterate over dictionary entries
+    foreach (entry : tree_node.dict.entries())
+    {
+        String key = entry.key;
+        BencodeValue* value = entry.value;
+
+        if (key.len == 0)
+        {
+            // Empty string key "" - this is a file metadata node
+            if (value.type != bencode::BencodeType.DICT) return TORRENT_INVALID_FORMAT?;
+
+            // Extract file metadata
+            BencodeValue* length_val = bencode::dict_get_required(bencode::BencodeType.INTEGER, value, "length", TORRENT_MISSING_FIELD)!;
+            BencodeValue* pieces_root_val = bencode::dict_get_required(bencode::BencodeType.STRING, value, "pieces root", TORRENT_MISSING_FIELD)!;
+
+            // Validate pieces_root is 32 bytes
+            if (pieces_root_val.string.len != common::SHA256_HASH_SIZE)
+            {
+                return TORRENT_INVALID_FORMAT?;
+            }
+
+            // Create file entry
+            FileEntry file;
+            file.length = length_val.integer;
+            file.offset = *total_length;
+            *total_length += file.length;
+
+            // Copy path components to file entry
+            file.path = allocator::new_array(arena, String, path_components.len());
+            foreach (i, component : *path_components)
+            {
+                file.path[i] = copy_string(arena, component);
+            }
+
+            // Copy pieces_root hash
+            foreach (i, byte : pieces_root_val.string[:common::SHA256_HASH_SIZE])
+            {
+                file.pieces_root[i] = byte;
+            }
+            file.has_pieces_root = true;
+
+            // Add file to list
+            files.push(file);
+        }
+        else
+        {
+            // Non-empty key - this is a directory or file name
+            // Recursively traverse this subtree
+            path_components.push(key);
+            parse_file_tree_recursive(arena, value, path_components, files, total_length)!;
+            path_components.pop()!!;  // Remove path component after recursion
+        }
+    }
+
+    return {};
+}
+
+/**
+ * Parse BEP 52 "file tree" dictionary to extract v2 file entries.
+ *
+ * @param arena: Allocator for file entry allocations
+ * @param info: TorrentInfo to populate with files
+ * @param file_tree_val: "file tree" bencode dictionary
+ * @return: Fault if parsing fails
+ */
+fn fault? parse_file_tree(Allocator arena, TorrentInfo* info, BencodeValue* file_tree_val) => @pool()
+{
+    if (file_tree_val.type != bencode::BencodeType.DICT) return TORRENT_INVALID_FORMAT?;
+
+    // Use temp allocator for temporary path components list
+    List{String} path_components;
+    path_components.init(tmem);
+
+    List{FileEntry} files;
+    files.init(tmem);
+
+    long total_length = 0;
+
+    // Recursively parse file tree
+    parse_file_tree_recursive(arena, file_tree_val, &path_components, &files, &total_length)!;
+
+    // Validate: must have at least one file
+    if (files.len() == 0) return TORRENT_INVALID_INFO?;
+
+    // Copy file list to arena
+    info.files = allocator::new_array(arena, FileEntry, files.len());
+    foreach (i, file : files)
+    {
+        info.files[i] = file;
+    }
+    info.length = total_length;
+    info.is_multi_file = (files.len() > 1);
+
+    return {};
+}
+
+/**
+ * Parse BEP 52 "piece layers" dictionary to validate and count entries.
+ *
+ * Piece layers structure (BEP 52):
+ *   {
+ *     <32-byte pieces_root>: <concatenated 32-byte piece hashes>,
+ *     ...
+ *   }
+ *
+ * Each entry maps a file's pieces_root hash to its Merkle tree layer hashes.
+ * For now, we just validate the structure. Merkle trees will be built on-demand.
+ *
+ * @param arena: Allocator for allocations
+ * @param info: TorrentInfo with parsed files (must have pieces_root for each file)
+ * @param piece_layers_val: "piece layers" bencode dictionary
+ * @return: Fault if parsing fails
+ */
+fn fault? parse_piece_layers(Allocator arena, TorrentInfo* info, BencodeValue* piece_layers_val)
+{
+    if (piece_layers_val.type != bencode::BencodeType.DICT) return TORRENT_INVALID_FORMAT?;
+
+    // Allocate Merkle tree array (one per file) - will be populated on-demand
+    info.piece_layers = allocator::new_array(arena, merkle_tree::MerkleTree*, info.files.len);
+
+    // Initialize all to null - Merkle trees will be built on-demand when needed
+    foreach (i, file : info.files)
+    {
+        info.piece_layers[i] = null;
+    }
+
+    // Validate piece layers structure
+    foreach (entry : piece_layers_val.dict.entries())
+    {
+        // Validate key is 32 bytes (pieces_root hash)
+        if (entry.key.len != common::SHA256_HASH_SIZE)
+        {
+            return TORRENT_INVALID_FORMAT?;
+        }
+
+        // Validate value is a string (concatenated hashes)
+        if (entry.value.type != bencode::BencodeType.STRING)
+        {
+            return TORRENT_INVALID_FORMAT?;
+        }
+
+        // Validate layer data is multiple of SHA256_HASH_SIZE
+        if (entry.value.string.len % common::SHA256_HASH_SIZE != 0)
+        {
+            return TORRENT_INVALID_FORMAT?;
+        }
+    }
+
+    return {};
+}
+
+/**
+ * Calculate BEP 52 v2 info hash (SHA-256 of bencoded info dict).
+ *
+ * @param info_dict_bencode: Raw bencoded info dictionary bytes
+ * @return: 32-byte SHA-256 hash
+ */
+fn common::InfoHashV2 calculate_info_hash_v2(char[] info_dict_bencode) => @pool()
+{
+    // Compute SHA-256 hash of the raw bencode data
+    Sha256 hasher;
+    hasher.init();
+    hasher.update(info_dict_bencode);
+
+    common::InfoHashV2 hash;
+    char[32] hash_result = hasher.final();
+    foreach (i, byte : hash_result[:common::SHA256_HASH_SIZE])
+    {
+        hash[i] = byte;
+    }
+
+    return hash;
 }
 
 /**

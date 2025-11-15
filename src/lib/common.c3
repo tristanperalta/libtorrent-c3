@@ -19,6 +19,7 @@ const usz IPV4_ADDR_SIZE = 4;     // IPv4 address size in bytes
 const usz IPV6_ADDR_SIZE = 16;    // IPv6 address size in bytes (BEP 7)
 const usz PEER_ID_SIZE = 20;      // Peer ID size in bytes (BEP 3)
 const usz SHA1_HASH_SIZE = 20;    // SHA1 info hash size in bytes (BEP 3)
+const usz SHA256_HASH_SIZE = 32;  // SHA256 info hash size in bytes (BEP 52)
 
 // BitTorrent handshake constants (BEP 3)
 const usz HANDSHAKE_SIZE = 68;            // Total handshake message size
@@ -39,7 +40,8 @@ const usz COMPACT_NODE_IPV4_SIZE = 26;    // NodeID (20) + IPv4 (4) + port (2)
 const usz COMPACT_NODE_IPV6_SIZE = 38;    // NodeID (20) + IPv6 (16) + port (2)
 
 // Type aliases for common protocol types
-alias InfoHash = char[SHA1_HASH_SIZE];     // Torrent info hash
+alias InfoHash = char[SHA1_HASH_SIZE];     // Torrent info hash (v1, BEP 3)
+alias InfoHashV2 = char[SHA256_HASH_SIZE]; // Torrent info hash (v2, BEP 52)
 alias PeerId = char[PEER_ID_SIZE];         // BitTorrent peer ID
 alias NodeId = char[SHA1_HASH_SIZE];       // DHT node ID (BEP 5)
 alias Ipv4Addr = char[IPV4_ADDR_SIZE];     // IPv4 address in network byte order
