@@ -5,7 +5,7 @@ import std::time;
 import std::encoding::hex;
 import std::math::random;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 import async::udp;
 import async::event_loop;
 
@@ -322,7 +322,7 @@ fn LsdManager*? create(LsdPeerCallback peer_callback, void* user_data) @public
 
     // Log cookie (convert char[] to String for logging)
     String cookie_str = (String)mgr.cookie[..];
-    logger::logf(logger::LogLevel.INFO, "[LSD] Created LSD manager with cookie: %s", cookie_str);
+    log::info("[LSD] Created LSD manager with cookie: %s", cookie_str);
 
     return mgr;
 }
@@ -355,11 +355,11 @@ fn void LsdManager.start(&self, async::event_loop::EventLoop* loop) @public
 {
     if (self.active)
     {
-        logger::logf(logger::LogLevel.WARN, "[LSD] Already active");
+        log::warn("[LSD] Already active");
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO, "[LSD] Starting LSD on %s:%d",
+    log::info("[LSD] Starting LSD on %s:%d",
                  LSD_MULTICAST_IPV4, LSD_PORT);
 
     // TODO: Implement multicast socket setup
@@ -378,7 +378,7 @@ fn void LsdManager.stop(&self) @public
 {
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.INFO, "[LSD] Stopping LSD");
+    log::info("[LSD] Stopping LSD");
 
     // TODO: Leave multicast group
 
@@ -404,7 +404,7 @@ fn void LsdManager.announce(&self, common::InfoHash* infohash, ushort port) @pub
 {
     if (!self.active)
     {
-        logger::logf(logger::LogLevel.WARN, "[LSD] Cannot announce - LSD not active");
+        log::warn("[LSD] Cannot announce - LSD not active");
         return;
     }
 
@@ -415,8 +415,7 @@ fn void LsdManager.announce(&self, common::InfoHash* infohash, ushort port) @pub
         long elapsed = now - self.last_announce_time;
         if (elapsed < (MIN_INTERVAL_MS / 1000))
         {
-            logger::logf(logger::LogLevel.DEBUG,
-                         "[LSD] Rate limited - last announce %d seconds ago", elapsed);
+            log::debug("[LSD] Rate limited - last announce %d seconds ago", elapsed);
             return;
         }
     }
@@ -425,7 +424,7 @@ fn void LsdManager.announce(&self, common::InfoHash* infohash, ushort port) @pub
     String message = build_announce_message(infohash, port, self.cookie[..]);
     defer free(message);
 
-    logger::logf(logger::LogLevel.DEBUG, "[LSD] Announcing infohash on multicast");
+    log::debug("[LSD] Announcing infohash on multicast");
 
     // TODO: Send multicast message
     // This requires async::udp sendto with multicast destination
@@ -457,20 +456,20 @@ fn void LsdManager.handle_announcement(&self, char[] data, common::SocketAddress
     {
         String addr_str = source_addr.to_string();
         defer free(addr_str);
-        logger::logf(logger::LogLevel.DEBUG, "[LSD] Invalid announcement from %s", addr_str);
+        log::debug("[LSD] Invalid announcement from %s", addr_str);
         return;
     }
 
     // Filter own announcements (cookie match)
     if (result.cookie.len > 0 && is_our_cookie(result.cookie, self.cookie[..]))
     {
-        logger::logf(logger::LogLevel.DEBUG, "[LSD] Filtered own announcement (cookie match)");
+        log::debug("[LSD] Filtered own announcement (cookie match)");
         return;
     }
 
     String peer_addr_str = result.address.to_string();
     defer free(peer_addr_str);
-    logger::logf(logger::LogLevel.INFO, "[LSD] Discovered peer: %s for torrent", peer_addr_str);
+    log::info("[LSD] Discovered peer: %s for torrent", peer_addr_str);
 
     // Notify callback with infohash and peer address
     if (self.peer_callback)

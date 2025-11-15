@@ -5,7 +5,7 @@ import std::time;
 import libtorrent::metadata_exchange;
 import libtorrent::common;
 import libtorrent::bencode;
-import libtorrent::logger;
+import std::core::log;
 import std::hash::sha1;
 
 /**
@@ -166,7 +166,7 @@ fn void MetadataDownload.set_metadata_size(&self, uint total_size) @public
         self.pieces[i].data = {};
     }
 
-    logger::logf(logger::LogLevel.INFO, "[Metadata] Initialized download: %d bytes in %d pieces",
+    log::info("[Metadata] Initialized download: %d bytes in %d pieces",
                  total_size, self.num_pieces);
 }
 
@@ -250,7 +250,7 @@ fn void MetadataDownload.check_timeouts(&self) @public
 
             if (elapsed_sec >= REQUEST_TIMEOUT_SEC)
             {
-                logger::logf(logger::LogLevel.WARN, "[Metadata] Piece %d request timed out, retrying", i);
+                log::warn("[Metadata] Piece %d request timed out, retrying", i);
                 self.pieces[i].state = PieceState.IDLE;
                 self.pieces[i].request_time_sec = 0;
             }
@@ -273,7 +273,7 @@ fn bool MetadataDownload.handle_data(&self, uint piece, char[] data) @public
 {
     if (piece >= self.num_pieces)
     {
-        logger::logf(logger::LogLevel.ERROR, "[Metadata] Received invalid piece index: %d", piece);
+        log::error("[Metadata] Received invalid piece index: %d", piece);
         return false;
     }
 
@@ -293,7 +293,7 @@ fn bool MetadataDownload.handle_data(&self, uint piece, char[] data) @public
     self.pieces[piece].state = PieceState.RECEIVED;
     self.pieces_received++;
 
-    logger::logf(logger::LogLevel.INFO, "[Metadata] Received piece %d/%d (%d bytes)",
+    log::info("[Metadata] Received piece %d/%d (%d bytes)",
                  piece + 1, self.num_pieces, data.len);
 
     // Check if download is complete
@@ -322,7 +322,7 @@ fn void MetadataDownload.handle_reject(&self, uint piece) @public
     {
         self.pieces[piece].state = PieceState.IDLE;
         self.pieces[piece].request_time_sec = 0;
-        logger::logf(logger::LogLevel.INFO, "[Metadata] Piece %d rejected, will retry with another peer", piece);
+        log::info("[Metadata] Piece %d rejected, will retry with another peer", piece);
     }
 }
 
@@ -337,7 +337,7 @@ fn void MetadataDownload.handle_reject(&self, uint piece) @public
  */
 fn bool try_assemble_metadata(MetadataDownload* self) @private
 {
-    logger::log(logger::LogLevel.INFO, "[Metadata] All pieces received, assembling and verifying...");
+    log::info("[Metadata] All pieces received, assembling and verifying...");
 
     // Allocate buffer for complete metadata
     self.metadata = mem::new_array(char, self.total_size);
@@ -374,7 +374,7 @@ fn bool try_assemble_metadata(MetadataDownload* self) @private
 
     if (!hash_matches)
     {
-        logger::log(logger::LogLevel.ERROR, "[Metadata] Hash verification FAILED - metadata is corrupt");
+        log::error("[Metadata] Hash verification FAILED - metadata is corrupt");
 
         // Free invalid metadata
         free(self.metadata);
@@ -383,7 +383,7 @@ fn bool try_assemble_metadata(MetadataDownload* self) @private
         return false;
     }
 
-    logger::log(logger::LogLevel.INFO, "[Metadata] Hash verification PASSED - download complete!");
+    log::info("[Metadata] Hash verification PASSED - download complete!");
     self.complete = true;
 
     return true;

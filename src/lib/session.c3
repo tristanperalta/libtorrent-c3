@@ -3,6 +3,7 @@ module libtorrent::session;
 import std::io;
 import std::time;
 import std::encoding::hex;
+import std::core::log;
 import uv;
 import libtorrent;
 import libtorrent::common;
@@ -976,9 +977,8 @@ fn void on_download_peer_disconnected(common::SocketAddress* addr,
 
     // Log state before completion check
     int shutting_down_val = ctx.peer_pool ? (int)ctx.peer_pool.shutting_down : -1;
-    logger::logf(logger::LogLevel.DEBUG,
-                 "Peer disconnected. download_complete=%d, is_complete=%d, shutting_down=%d",
-                 ctx.download_complete, ctx.dm.is_complete(), shutting_down_val);
+    log::debug("Peer disconnected. download_complete=%d, is_complete=%d, shutting_down=%d",
+               ctx.download_complete, ctx.dm.is_complete(), shutting_down_val);
 
     // Peer pool automatically tries to replace failed connections
     // Check if download is complete (and we haven't already handled completion)
@@ -986,17 +986,14 @@ fn void on_download_peer_disconnected(common::SocketAddress* addr,
     {
         io::printfn("");
         io::printfn("Download complete!");
-        logger::logf(logger::LogLevel.DEBUG,
-                     "Calling on_complete_download() - setting download_complete=true");
+        log::debug("Calling on_complete_download() - setting download_complete=true");
         on_complete_download(ctx);
-        logger::logf(logger::LogLevel.DEBUG,
-                     "Returned from on_complete_download() - download_complete should be %d",
-                     ctx.download_complete);
+        log::debug("Returned from on_complete_download() - download_complete should be %d",
+                   ctx.download_complete);
         return;
     }
 
-    logger::log(logger::LogLevel.DEBUG,
-                "Skipping completion (already handled or not complete yet)");
+    log::debug("Skipping completion (already handled or not complete yet)");
 
     // Check if all peers are disconnected
     usz total_peers, candidates, connecting, connected;

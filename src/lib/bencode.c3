@@ -4,7 +4,6 @@ import std::io;
 import std::core::mem;
 import std::core::dstring;
 import std::collections::list;
-import libtorrent::logger;
 
 /**
  * Bencode Format Specification

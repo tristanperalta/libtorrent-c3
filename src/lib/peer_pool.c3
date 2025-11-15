@@ -8,7 +8,7 @@ import libtorrent::peer_connection;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import libtorrent::pex;
-import libtorrent::logger;
+import std::core::log;
 import std::io;
 import std::time;
 import std::sort;
@@ -539,7 +539,7 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             peer_info.failcount++;
 
             // Log disconnect with reason and failcount (BEP 7: format IPv4/IPv6)
-            logger::logf(logger::LogLevel.DEBUG,
+            log::debug(
                 "Peer %s disconnected (reason: %s, failcount: %d/%d)",
                 peer_info.addr,
                 disconnect_reason_to_string(reason),
@@ -550,7 +550,7 @@ fn void on_peer_state_internal(peer_connection::PeerConnection* conn,
             if (peer_info.failcount >= pool.config.max_failcount)
             {
                 peer_info.state = PeerState.BANNED;
-                logger::logf(logger::LogLevel.WARN,
+                log::warn(
                     "Banned peer %s after %d failures",
                     peer_info.addr,
                     peer_info.failcount);
@@ -651,7 +651,7 @@ fn void on_pex_message_internal(peer_connection::PeerConnection* conn,
     // Add new peers from PEX to our pool
     if (pex_msg.added.len > 0)
     {
-        logger::logf(logger::LogLevel.INFO, "[PEX] Received %d peers from peer",
+        log::info( "[PEX] Received %d peers from peer",
                      pex_msg.added.len);
         pool.add_peers_from_pex(pex_msg.added);
     }
@@ -939,7 +939,7 @@ fn void PeerPool.disconnect_all_gracefully(&self) @public
 
     if (connected_count > 0)
     {
-        logger::logf(logger::LogLevel.INFO,
+        log::info(
                      "[Shutdown] Gracefully disconnecting from %d peer%s",
                      connected_count, connected_count == 1 ? "" : "s");
     }
@@ -1141,7 +1141,7 @@ fn void broadcast_pex_update(PeerPool* pool, common::Ipv4Addr ip, ushort port, b
 
     if (notified_count > 0)
     {
-        logger::logf(logger::LogLevel.INFO, "[PEX] Queued peer %d.%d.%d.%d:%d (%s) for %d connected peers",
+        log::info( "[PEX] Queued peer %d.%d.%d.%d:%d (%s) for %d connected peers",
                      ip[0], ip[1], ip[2], ip[3], port,
                      added ? "added" : "dropped",
                      notified_count);
@@ -1242,7 +1242,7 @@ fn void PeerPool.add_peers_from_pex(&self, pex::PexPeer[] pex_peers) @public
     // Log PEX peer additions
     if (added_count > 0 || rejected_count > 0)
     {
-        logger::logf(logger::LogLevel.INFO, "[PEX] Added %d peers, rejected %d invalid peers",
+        log::info( "[PEX] Added %d peers, rejected %d invalid peers",
                      added_count, rejected_count);
     }
 

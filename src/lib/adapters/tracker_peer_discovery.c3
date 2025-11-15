@@ -5,7 +5,7 @@ import libtorrent::tracker;
 import libtorrent::tracker_manager;
 import libtorrent::metainfo;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 import async::event_loop;
 import async::timer;
 import std::time;
@@ -119,7 +119,7 @@ fn TrackerPeerDiscovery* create(
     adapter.announce_timer = null;
     adapter.initial_announce_done = false;
 
-    logger::logf(logger::LogLevel.INFO, "[TrackerDiscovery] Created adapter for torrent");
+    log::info( "[TrackerDiscovery] Created adapter for torrent");
 
     return adapter;
 }
@@ -135,7 +135,7 @@ fn void on_periodic_announce(timer::Timer* timer, void* user_data)
 
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[TrackerDiscovery] Periodic announce triggered");
 
     // Reset tracker manager to beginning for new cycle
@@ -154,7 +154,7 @@ fn void on_retry_timer(timer::Timer* timer, void* user_data)
 
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[TrackerDiscovery] Retry timer fired (retry %d/%d)",
                  self.retry_count + 1, self.options.max_retries);
 
@@ -217,7 +217,7 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
         String error_msg = (response && response.failure_reason.len > 0) ?
                             response.failure_reason : "Unknown tracker error";
 
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[TrackerDiscovery] Announce failed: %s (attempt %d)",
                      error_msg, self.retry_count + 1);
 
@@ -235,7 +235,7 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
                 self.current_backoff_ms = self.options.min_discovery_interval_ms;
             }
 
-            logger::logf(logger::LogLevel.DEBUG,
+            log::debug(
                          "[TrackerDiscovery] Scheduling retry in %d ms",
                          self.current_backoff_ms);
 
@@ -243,7 +243,7 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
             timer::Timer*? timer_opt = timer::create(self.loop);
             if (catch err = timer_opt)
             {
-                logger::logf(logger::LogLevel.ERROR,
+                log::error(
                              "[TrackerDiscovery] Failed to create retry timer");
                 self.stats.failed_attempts++;
                 if (self.complete_callback)
@@ -285,7 +285,7 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
     // Announce succeeded
     if (!response)
     {
-        logger::logf(logger::LogLevel.ERROR,
+        log::error(
                      "[TrackerDiscovery] Internal error: null response with no error code");
         self.stats.failed_attempts++;
         if (self.complete_callback)
@@ -295,7 +295,7 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[TrackerDiscovery] Announce succeeded: %d peers received (interval=%d s)",
                  response.peers.len, response.interval);
 
@@ -349,14 +349,14 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
             interval_ms = self.options.min_discovery_interval_ms;
         }
 
-        logger::logf(logger::LogLevel.DEBUG,
+        log::debug(
                      "[TrackerDiscovery] Setting up periodic announces every %d ms",
                      interval_ms);
 
         timer::Timer*? timer_opt = timer::create(self.loop);
         if (catch err = timer_opt)
         {
-            logger::logf(logger::LogLevel.WARN,
+            log::warn(
                          "[TrackerDiscovery] Failed to create periodic timer");
             return;
         }
@@ -379,7 +379,7 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
     self.stats.total_discovery_attempts++;
     self.last_announce_start_time = (long)(time::now().to_seconds() * 1000);
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[TrackerDiscovery] Starting announce (event=%s, attempt=%d)",
                  event.len > 0 ? event : "(none)", self.stats.total_discovery_attempts);
 
@@ -395,7 +395,7 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
         String tracker_url = self.tracker_mgr.get_next_tracker();
         if (tracker_url.len > 0)
         {
-            logger::logf(logger::LogLevel.DEBUG,
+            log::debug(
                          "[TrackerDiscovery] Announcing to tracker: %s", tracker_url);
             tracker::announce_to_url(self.loop, self.torrent, tracker_url,
                                       self.options.local_port, event,
@@ -403,7 +403,7 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
         }
         else
         {
-            logger::logf(logger::LogLevel.WARN,
+            log::warn(
                          "[TrackerDiscovery] No valid trackers available");
             free(ctx);
             if (self.complete_callback)
@@ -417,7 +417,7 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
         // Fallback: Use primary announce URL from torrent
         if (self.torrent.announce.len > 0)
         {
-            logger::logf(logger::LogLevel.DEBUG,
+            log::debug(
                          "[TrackerDiscovery] Announcing to primary tracker: %s",
                          self.torrent.announce);
             tracker::announce(self.loop, self.torrent, self.options.local_port,
@@ -425,7 +425,7 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
         }
         else
         {
-            logger::logf(logger::LogLevel.WARN,
+            log::warn(
                          "[TrackerDiscovery] No trackers configured");
             free(ctx);
             if (self.complete_callback)
@@ -451,12 +451,12 @@ fn void TrackerPeerDiscovery.start_discovery(
 {
     if (self.active)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[TrackerDiscovery] Discovery already active");
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[TrackerDiscovery] Starting discovery");
 
     self.active = true;
@@ -486,12 +486,12 @@ fn void TrackerPeerDiscovery.trigger_event_announce(&self, String event) @public
 {
     if (!self.active)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[TrackerDiscovery] Cannot announce - discovery not active");
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[TrackerDiscovery] Manual announce triggered (event=%s)",
                  event.len > 0 ? event : "(none)");
 
@@ -502,7 +502,7 @@ fn void TrackerPeerDiscovery.stop_discovery(&self) @dynamic
 {
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[TrackerDiscovery] Stopping discovery");
 
     self.active = false;

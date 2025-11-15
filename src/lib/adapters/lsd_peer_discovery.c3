@@ -3,7 +3,7 @@ module libtorrent::adapters::lsd_peer_discovery;
 import libtorrent::ports::peer_discovery;
 import libtorrent::lsd;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 import async::event_loop;
 import std::time;
 
@@ -91,7 +91,7 @@ fn LsdPeerDiscovery* create(
     adapter.stats.average_response_time_ms = 0.0;
     adapter.stats.active_peers = 0;
 
-    logger::logf(logger::LogLevel.INFO, "[LsdDiscovery] Created adapter");
+    log::info( "[LsdDiscovery] Created adapter");
 
     return adapter;
 }
@@ -122,7 +122,7 @@ fn void on_lsd_peers_discovered(common::InfoHash* infohash,
 
     if (!match) return;
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[LsdDiscovery] Discovered %d peers via LSD", peers.len);
 
     // Update stats
@@ -152,14 +152,14 @@ fn void LsdPeerDiscovery.start_discovery(
 {
     if (self.active)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[LsdDiscovery] Discovery already active");
         return;
     }
 
     if (!self.lsd_manager)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[LsdDiscovery] LSD manager not available");
         if (complete_callback)
         {
@@ -168,7 +168,7 @@ fn void LsdPeerDiscovery.start_discovery(
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[LsdDiscovery] Starting discovery");
 
     self.active = true;
@@ -201,7 +201,7 @@ fn void LsdPeerDiscovery.stop_discovery(&self) @dynamic
 {
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[LsdDiscovery] Stopping discovery");
 
     self.active = false;

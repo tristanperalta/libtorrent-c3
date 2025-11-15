@@ -2,7 +2,7 @@ module libtorrent::adapters::composite_peer_discovery;
 
 import libtorrent::ports::peer_discovery;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 import std::collections::list;
 import std::time;
 import std::io;
@@ -87,7 +87,7 @@ fn CompositePeerDiscovery* create() @public
     composite.aggregated_stats.average_response_time_ms = 0.0;
     composite.aggregated_stats.active_peers = 0;
 
-    logger::logf(logger::LogLevel.INFO, "[CompositeDiscovery] Created aggregator");
+    log::info( "[CompositeDiscovery] Created aggregator");
 
     return composite;
 }
@@ -107,7 +107,7 @@ fn void CompositePeerDiscovery.add_source(&self, peer_discovery::PeerDiscovery s
 
     // Note: Can't call source.get_name() here due to C3 interface limitation
     // Interface methods work in loops but not in simple variable contexts
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[CompositeDiscovery] Added source (total: %d)",
                  self.sources.len());
 }
@@ -154,7 +154,7 @@ fn void on_source_peers_discovered(common::SocketAddress[] peers,
 
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[CompositeDiscovery] Forwarding %d peers from %s",
                  peers.len, discovery_source);
 
@@ -177,7 +177,7 @@ fn void on_source_discovery_complete(bool success,
 
     if (!success)
     {
-        logger::logf(logger::LogLevel.DEBUG,
+        log::debug(
                      "[CompositeDiscovery] Source %s failed: %s",
                      ctx.source_name, error_message);
     }
@@ -270,7 +270,7 @@ fn void CompositePeerDiscovery.stop_discovery(&self) @dynamic
 {
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[CompositeDiscovery] Stopping discovery across %d sources",
                  self.sources.len());
 
