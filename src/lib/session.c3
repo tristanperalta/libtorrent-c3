@@ -337,39 +337,6 @@ fn String tracker_error_string(int status) @public
     }
 }
 
-<*
- Format byte size in human-readable format.
-
- @param bytes : "Number of bytes"
- @return "Formatted string (e.g., \"1.5 GB\")"
-*>
-fn String format_size(long bytes) @public
-{
-    DString result;
-
-    if (bytes < 1024)
-    {
-        result.appendf("%d bytes", bytes);
-    }
-    else if (bytes < 1024 * 1024)
-    {
-        double kb = (double)bytes / 1024.0;
-        result.appendf("%.2f KB", kb);
-    }
-    else if (bytes < 1024 * 1024 * 1024)
-    {
-        double mb = (double)bytes / (1024.0 * 1024.0);
-        result.appendf("%.2f MB", mb);
-    }
-    else
-    {
-        double gb = (double)bytes / (1024.0 * 1024.0 * 1024.0);
-        result.appendf("%.2f GB", gb);
-    }
-
-    return result.copy_str(mem);
-}
-
 // ============================================================================
 // Download Session Callbacks and Helper Functions
 // ============================================================================
@@ -1375,14 +1342,14 @@ fn bool try_load_fastresume_data(Session* ctx) @public
     {
         ctx.total_bytes_downloaded = state.total_downloaded;
         io::printfn("  Restored download stats: %s downloaded",
-                   format_size((long)state.total_downloaded));
+                   common::format_size((long)state.total_downloaded));
     }
 
     if (state.total_uploaded > 0)
     {
         // TODO: Restore upload stats when upload manager supports it
         io::printfn("  Note: Resume data contains upload stats: %s uploaded",
-                   format_size((long)state.total_uploaded));
+                   common::format_size((long)state.total_uploaded));
     }
 
     // Restore unfinished pieces (partially downloaded)
@@ -2216,8 +2183,8 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
 
     // Display torrent info
     io::printfn("Name: %s", torrent.info.name);
-    io::printfn("Size: %s", format_size(torrent.info.length));
-    io::printfn("Pieces: %d x %s", num_pieces, format_size(torrent.info.piece_length));
+    io::printfn("Size: %s", common::format_size(torrent.info.length));
+    io::printfn("Pieces: %d x %s", num_pieces, common::format_size(torrent.info.piece_length));
     io::printfn("");
 
     // Build storage path (for multi-file torrents, append torrent name)

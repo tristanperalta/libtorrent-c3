@@ -290,7 +290,7 @@ fn void on_metadata_complete(session::Session* ctx) @private
     }
 
     io::printfn("[Metadata] Successfully parsed! Name: %s, Size: %s",
-                real_torrent.info.name, session::format_size(real_torrent.info.length));
+                real_torrent.info.name, common::format_size(real_torrent.info.length));
 
     // Free fake torrent and replace with real one
     free(ctx.torrent);
@@ -301,7 +301,7 @@ fn void on_metadata_complete(session::Session* ctx) @private
     uint last_piece_length = (uint)(real_torrent.info.length % real_torrent.info.piece_length);
     if (last_piece_length == 0) last_piece_length = (uint)real_torrent.info.piece_length;
 
-    io::printfn("[Metadata] Pieces: %d x %s", num_pieces, session::format_size(real_torrent.info.piece_length));
+    io::printfn("[Metadata] Pieces: %d x %s", num_pieces, common::format_size(real_torrent.info.piece_length));
     io::printfn("");
 
     // Build storage path (for multi-file torrents, append torrent name)

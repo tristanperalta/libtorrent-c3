@@ -494,3 +494,40 @@ fn CompactNodeIPv6? decode_compact_node_ipv6(char[] bytes) @public
 
     return result;
 }
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+<*
+ Format byte size in human-readable format.
+
+ @param bytes : "Number of bytes"
+ @return "Formatted string (e.g., \"1.5 GB\") - caller must free"
+*>
+fn String format_size(long bytes) @public
+{
+    DString result;
+
+    if (bytes < 1024)
+    {
+        result.appendf("%d bytes", bytes);
+    }
+    else if (bytes < 1024 * 1024)
+    {
+        double kb = (double)bytes / 1024.0;
+        result.appendf("%.2f KB", kb);
+    }
+    else if (bytes < 1024 * 1024 * 1024)
+    {
+        double mb = (double)bytes / (1024.0 * 1024.0);
+        result.appendf("%.2f MB", mb);
+    }
+    else
+    {
+        double gb = (double)bytes / (1024.0 * 1024.0 * 1024.0);
+        result.appendf("%.2f GB", gb);
+    }
+
+    return result.copy_str(mem);
+}

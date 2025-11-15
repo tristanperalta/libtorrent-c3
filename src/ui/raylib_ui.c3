@@ -7,6 +7,7 @@ import libtorrent::logger;
 import libtorrent::peer_pool;
 import libtorrent::tracker_manager;
 import libtorrent::piece_picker;
+import libtorrent::common;
 import std::io;
 
 // ============================================================================
@@ -303,31 +304,6 @@ fn void render_ui(UIState* state) @private
 }
 
 <*
- Format a file size in bytes to human-readable format.
-*>
-fn String format_size(long bytes) @private
-{
-    DString buf;
-    if (bytes >= 1024L * 1024L * 1024L)
-    {
-        buf.appendf("%.2f GiB", (double)bytes / (1024.0 * 1024.0 * 1024.0));
-    }
-    else if (bytes >= 1024L * 1024L)
-    {
-        buf.appendf("%.2f MiB", (double)bytes / (1024.0 * 1024.0));
-    }
-    else if (bytes >= 1024L)
-    {
-        buf.appendf("%.2f KiB", (double)bytes / 1024.0);
-    }
-    else
-    {
-        buf.appendf("%d B", bytes);
-    }
-    return buf.str_view();
-}
-
-<*
  Render piece-by-piece progress bar showing download fragmentation.
 
  Groups pieces into vertical bars (1 pixel wide) for efficient rendering:
@@ -441,7 +417,9 @@ fn void render_overview_tab(UIState* state, int content_y, int content_height) @
 
     // Downloaded
     stats_text.clear();
-    stats_text.appendf("Downloaded: %s", format_size(state.downloaded));
+    String downloaded_str = common::format_size(state.downloaded);
+    defer mem::free(downloaded_str);
+    stats_text.appendf("Downloaded: %s", downloaded_str);
     rl::drawText(stats_text.zstr_view(), left_x, stats_y, 16, rl::DARKGRAY);
     stats_y += 25;
 
@@ -464,7 +442,9 @@ fn void render_overview_tab(UIState* state, int content_y, int content_height) @
 
     // Pieces
     stats_text.clear();
-    stats_text.appendf("Pieces: %d x %s", state.pieces_total, format_size(state.piece_length));
+    String piece_size_str = common::format_size(state.piece_length);
+    defer mem::free(piece_size_str);
+    stats_text.appendf("Pieces: %d x %s", state.pieces_total, piece_size_str);
     rl::drawText(stats_text.zstr_view(), left_x, stats_y, 16, rl::DARKGRAY);
     stats_y += 25;
 
@@ -493,7 +473,9 @@ fn void render_overview_tab(UIState* state, int content_y, int content_height) @
 
     // Total Size
     info_text.clear();
-    info_text.appendf("Total Size: %s", format_size(state.total_size));
+    String total_size_str = common::format_size(state.total_size);
+    defer mem::free(total_size_str);
+    info_text.appendf("Total Size: %s", total_size_str);
     rl::drawText(info_text.zstr_view(), right_x, info_y, 16, rl::DARKGRAY);
     info_y += 25;
 

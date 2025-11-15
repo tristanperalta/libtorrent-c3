@@ -353,7 +353,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
     // Basic info
     io::printfn("Name: %s", torrent.info.name);
 
-    String size_str = session::format_size(torrent.info.length);
+    String size_str = common::format_size(torrent.info.length);
     defer free(size_str);
     io::printfn("Size: %s (%d bytes)", size_str, torrent.info.length);
 
@@ -397,7 +397,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
                 if (i > 0) path.append_char('/');
                 path.append(component);
             }
-            String file_size_str = session::format_size(file.length);
+            String file_size_str = common::format_size(file.length);
             defer free(file_size_str);
             io::printfn("    [%d] %s (%s)", idx + 1, path.str_view(), file_size_str);
         }
@@ -410,7 +410,7 @@ fn void display_torrent_info(libtorrent::metainfo::TorrentFile* torrent)
 
     // Piece info
     io::printfn("Piece Info:");
-    String piece_length_str = session::format_size(torrent.info.piece_length);
+    String piece_length_str = common::format_size(torrent.info.piece_length);
     defer free(piece_length_str);
     io::printfn("  Piece length: %s", piece_length_str);
     long num_pieces = torrent.info.pieces.len / 20;
