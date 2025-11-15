@@ -76,7 +76,7 @@ fn void test_handshake_encode() @test
     }
 
     // Verify reserved bytes - byte 25 (index 5) should have extension bit set (BEP 10)
-    // and byte 27 (index 7) should have Fast Extension bit set (BEP 6)
+    // and byte 27 (index 7) should have Fast Extension + v2 bits set (BEP 6 + BEP 52)
     for (usz i = 20; i < 28; i++)
     {
         if (i == 25)
@@ -86,8 +86,8 @@ fn void test_handshake_encode() @test
         }
         else if (i == 27)
         {
-            // Byte 7 should have Fast Extension bit (0x04) set
-            assert(handshake[i] == 0x04, "Reserved byte 7 should have Fast Extension bit set");
+            // Byte 7 should have Fast Extension (0x04) + v2 (0x08) = 0x0C set
+            assert(handshake[i] == 0x0C, "Reserved byte 7 should have Fast Extension + v2 bits set");
         }
         else
         {
@@ -125,7 +125,7 @@ fn void test_handshake_decode() @test
     peer_wire::HandshakeMsg msg = msg_opt!!;
 
     // Verify reserved bytes - byte 5 should have extension bit (0x10) set
-    // and byte 7 should have Fast Extension bit (0x04) set
+    // and byte 7 should have Fast Extension + v2 bits (0x0C) set
     for (usz i = 0; i < 8; i++)
     {
         if (i == 5)
@@ -134,7 +134,7 @@ fn void test_handshake_decode() @test
         }
         else if (i == 7)
         {
-            assert(msg.reserved[i] == 0x04, "Reserved byte 7 should have Fast Extension bit");
+            assert(msg.reserved[i] == 0x0C, "Reserved byte 7 should have Fast Extension + v2 bits");
         }
         else
         {
@@ -145,6 +145,7 @@ fn void test_handshake_decode() @test
     // Verify extension support is detected
     assert(peer_wire::handshake_supports_extensions(&msg), "Should support extensions");
     assert(peer_wire::handshake_supports_fast(&msg), "Should support Fast Extension");
+    assert(peer_wire::handshake_supports_v2(&msg), "Should support v2 protocol");
 
     // Verify info hash
     for (usz i = 0; i < 20; i++)
