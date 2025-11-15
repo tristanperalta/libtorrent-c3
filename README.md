@@ -21,14 +21,14 @@ A BitTorrent client and library written in C3. Downloads torrents, exchanges pee
 ## Quick Start
 
 ```bash
-# Download a torrent
-./torrent-client example.torrent
+# CLI: Download a torrent
+./torrent-cli download example.torrent
 
-# With GUI
-./torrent-client --gui example.torrent
+# CLI: With logging
+./torrent-cli download --log-file download.log --debug example.torrent
 
-# With logging
-./torrent-client --log-file download.log --debug example.torrent
+# GUI: Download with visual interface
+./torrent-gui example.torrent
 ```
 
 ## Targets
@@ -38,14 +38,19 @@ A BitTorrent client and library written in C3. Downloads torrents, exchanges pee
    - Built with PIC (Position Independent Code)
    - Exports public API for applications
 
-2. **torrent-client** - Executable application
-   - Command-line and GUI torrent client
-   - Links to the libtorrent dynamic library
+2. **torrent-cli** - Command-line executable
+   - Full-featured CLI torrent client
+   - No GUI dependencies - builds without raylib
+
+3. **torrent-gui** - GUI executable
+   - Visual torrent client with raylib interface
+   - Requires raylib55 and raygui
 
 ## Building
 
 ### Prerequisites
 
+**Required for all builds:**
 - [C3 compiler](https://c3-lang.org/) version 0.7.6 or later
 - **libuv** - Cross-platform async I/O library
   - Arch Linux: `sudo pacman -S libuv`
@@ -55,7 +60,9 @@ A BitTorrent client and library written in C3. Downloads torrents, exchanges pee
   - Arch Linux: `sudo pacman -S curl`
   - Ubuntu/Debian: `sudo apt install libcurl4-openssl-dev`
   - macOS: `brew install curl`
-- **Optional: raylib55, raygui** - For GUI mode
+
+**Required only for torrent-gui:**
+- **raylib55, raygui** - GUI libraries
   - Arch Linux: `sudo pacman -S raylib`
 
 ### Build all targets
@@ -66,13 +73,25 @@ c3c build
 
 This generates:
 - `libtorrent.so` - The dynamic library
-- `torrent-client` - The executable
+- `torrent-cli` - The CLI executable
+- `torrent-gui` - The GUI executable (requires raylib)
 
-### Build specific target
+### Build specific targets
 
 ```bash
-c3c build libtorrent       # Build only the library
-c3c build torrent-client   # Build only the executable
+c3c build libtorrent    # Build only the library
+c3c build torrent-cli   # Build only the CLI (no raylib needed)
+c3c build torrent-gui   # Build only the GUI (requires raylib)
+```
+
+### Production builds
+
+Optimized builds with O3 optimization:
+
+```bash
+c3c build libtorrent-prod   # Optimized library
+c3c build torrent-cli-prod  # Optimized CLI
+c3c build torrent-gui-prod  # Optimized GUI
 ```
 
 ### Clean build artifacts
@@ -83,13 +102,20 @@ c3c clean
 
 ## Running
 
-Run the executable:
+Run the CLI executable:
 
 ```bash
-LD_LIBRARY_PATH=. ./torrent-client
+LD_LIBRARY_PATH=. ./torrent-cli info example.torrent
+LD_LIBRARY_PATH=. ./torrent-cli download example.torrent
 ```
 
-Or install `libtorrent.so` to a system library path.
+Run the GUI executable:
+
+```bash
+LD_LIBRARY_PATH=. ./torrent-gui example.torrent
+```
+
+Or install `libtorrent.so` to a system library path to avoid setting `LD_LIBRARY_PATH`.
 
 ## Security
 

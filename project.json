@@ -7,14 +7,14 @@
     "lib",
     "vendor/c3-vendor/libraries"
   ],
-  "dependencies": ["curl", "c3io", "raylib55", "raygui"],
+  "dependencies": ["curl", "c3io"],
   "authors": [
     "Tristan Peralta <tristan@peralta.ph>",
     "Claude Code <noreply@anthropic.com>"
   ],
   "version": "0.1.0",
   "sources": [
-    "src/**"
+    "src/lib/**"
   ],
   "test-sources": [
     "test/**"
@@ -26,9 +26,15 @@
       "sources": ["src/lib/**"],
       "reloc": "pic"
     },
-    "torrent-client": {
+    "torrent-cli": {
       "type": "executable",
-      "sources": ["src/main.c3", "src/ui/**", "src/log_outputs.c3"],
+      "sources": ["src/cli/**"],
+      "sanitize": "address"
+    },
+    "torrent-gui": {
+      "type": "executable",
+      "sources": ["src/gui/**", "src/ui/**"],
+      "dependencies": ["curl", "c3io", "raylib55", "raygui"],
       "sanitize": "address"
     },
     "libtorrent-prod": {
@@ -45,9 +51,23 @@
       "strip-unused": true,
       "sanitize": "none"
     },
-    "torrent-client-prod": {
+    "torrent-cli-prod": {
       "type": "executable",
-      "sources": ["src/main.c3", "src/ui/**", "src/log_outputs.c3"],
+      "sources": ["src/cli/**"],
+      "output": "build/prod",
+      "build-dir": "build/prod/obj",
+      "opt": "O3",
+      "optlevel": "max",
+      "debug-info": "none",
+      "safe": false,
+      "fp-math": "fast",
+      "strip-unused": true,
+      "sanitize": "none"
+    },
+    "torrent-gui-prod": {
+      "type": "executable",
+      "sources": ["src/gui/**", "src/ui/**"],
+      "dependencies": ["curl", "c3io", "raylib55", "raygui"],
       "output": "build/prod",
       "build-dir": "build/prod/obj",
       "opt": "O3",

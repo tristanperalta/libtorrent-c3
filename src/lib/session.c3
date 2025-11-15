@@ -43,7 +43,6 @@ import libtorrent::fast_extension;
 import libtorrent::torrent_manager;
 import libtorrent::magnet_download_session;
 import libtorrent::session_message_handler;
-import raylib_gui;
 
 // Maximum concurrent piece verifications during resume check
 // Default: 100 pieces - optimized for systems with 12+ threads
@@ -253,8 +252,8 @@ struct Session
     int max_concurrent_pieces;          // Max pieces to download simultaneously
     String select_files_str;            // BEP 21: File selection string (e.g., "0,2,4")
 
-    // GUI integration (null in CLI mode)
-    raylib_gui::UIState* gui_state;
+    // GUI integration (null in CLI mode, cast to GUI type in GUI code)
+    void* gui_state;
 
     // Event bus for pub/sub (decouples GUI from download logic)
     event_bus::EventBus* event_bus;
