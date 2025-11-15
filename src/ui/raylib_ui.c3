@@ -341,23 +341,41 @@ fn void render_piece_bar(UIState* state, int x, int y, int width, int height) @p
             }
         }
 
-        // Determine bar color (majority wins)
-        rl::Color color;
+        // Calculate completion percentage for gradient coloring
         uint pieces_in_bar = end_piece - start_piece;
-        if (complete > pieces_in_bar / 2)
+        float completion_pct = (float)complete / (float)pieces_in_bar;
+
+        // Determine bar color using gradient based on completion percentage
+        rl::Color color;
+        if (completion_pct == 0.0)
         {
-            // Blue - majority complete
-            color = (rl::Color){0, 120, 215, 255};
+            // 0% - Dark gray (no pieces downloaded)
+            color = (rl::Color){180, 180, 180, 255};
         }
-        else if (downloading > 0)
+        else if (completion_pct < 0.25)
         {
-            // Light blue - some downloading
-            color = (rl::Color){100, 150, 255, 255};
+            // 1-24% - Light gray (very few pieces)
+            color = (rl::Color){200, 200, 200, 255};
+        }
+        else if (completion_pct < 0.50)
+        {
+            // 25-49% - Light blue (some progress)
+            color = (rl::Color){140, 180, 255, 255};
+        }
+        else if (completion_pct < 0.75)
+        {
+            // 50-74% - Medium blue (majority complete)
+            color = (rl::Color){80, 140, 240, 255};
+        }
+        else if (completion_pct < 1.00)
+        {
+            // 75-99% - Blue (almost all complete)
+            color = (rl::Color){40, 100, 200, 255};
         }
         else
         {
-            // Light gray - not started
-            color = (rl::Color){220, 220, 220, 255};
+            // 100% - Dark blue (all pieces complete)
+            color = (rl::Color){0, 80, 160, 255};
         }
 
         // Draw 1-pixel wide vertical bar
