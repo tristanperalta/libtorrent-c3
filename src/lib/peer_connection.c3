@@ -11,7 +11,7 @@ import libtorrent::common;
 import std::io;
 import std::time;
 import std::collections::list;
-import libtorrent::logger;
+import std::core::log;
 
 <*
  Peer Connection State Machine
@@ -379,7 +379,7 @@ fn void PeerConnection.graceful_close(&self) @public
     if (self.state == PeerState.CLOSED) return;
 
     // Log graceful disconnect
-    logger::log(logger::LogLevel.INFO, "[Shutdown] Gracefully disconnecting from peer");
+    log::info("[Shutdown] Gracefully disconnecting from peer");
 
     // Step 1: Send NOT_INTERESTED if we were interested
     // This tells the peer we're intentionally leaving, not crashing
@@ -445,7 +445,7 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     // Start reading to receive handshake response (macro auto-increments refcount)
     if (catch excuse = @async_tcp_start_read(conn, &alloc_buffer, &on_tcp_read, peer))
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to start reading from peer");
+        log::error("Failed to start reading from peer");
         if (peer.tcp)
         {
             peer.tcp.close();
@@ -460,7 +460,7 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     // Send handshake (macro auto-increments refcount)
     if (catch excuse = @async_tcp_write(conn, handshake, &on_handshake_sent, peer))
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to send handshake to peer");
+        log::error("Failed to send handshake to peer");
         if (peer.tcp)
         {
             peer.tcp.close();
@@ -489,7 +489,7 @@ fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* use
 
     if (status != 0)
     {
-        logger::logf(logger::LogLevel.ERROR, "Failed to send handshake: status=%d", status);
+        log::error("Failed to send handshake: status=%d", status);
         if (peer.tcp)
         {
             peer.tcp.close();
@@ -570,7 +570,7 @@ fn void process_handshake(PeerConnection* peer)
     peer_wire::HandshakeMsg? handshake_opt = peer_wire::decode_handshake((char[])buffer);
     if (catch excuse = handshake_opt)
     {
-        logger::log(logger::LogLevel.ERROR, "Invalid handshake from peer");
+        log::error("Invalid handshake from peer");
         peer.state = PeerState.CLOSED;
         peer.last_disconnect_reason = DisconnectReason.INVALID_HANDSHAKE;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
@@ -592,7 +592,7 @@ fn void process_handshake(PeerConnection* peer)
 
     if (!hash_matches)
     {
-        logger::log(logger::LogLevel.ERROR, "Peer sent wrong info hash");
+        log::error("Peer sent wrong info hash");
         peer.state = PeerState.CLOSED;
         peer.last_disconnect_reason = DisconnectReason.WRONG_INFO_HASH;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
@@ -625,7 +625,7 @@ fn void process_handshake(PeerConnection* peer)
     }
     else if (!peer.supports_extensions)
     {
-        logger::log(logger::LogLevel.INFO, "Peer does not support extension protocol - PEX unavailable");
+        log::info("Peer does not support extension protocol - PEX unavailable");
     }
 
     // Process any messages that came with the handshake
@@ -658,7 +658,7 @@ fn void process_messages(PeerConnection* peer)
         peer_wire::Message? msg_opt = peer_wire::decode_message((char[])buffer);
         if (catch excuse = msg_opt)
         {
-            logger::log(logger::LogLevel.ERROR, "Invalid message from peer");
+            log::error("Invalid message from peer");
             peer.state = PeerState.CLOSED;
             peer.last_disconnect_reason = DisconnectReason.INVALID_MESSAGE;
             if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
@@ -812,7 +812,7 @@ fn void on_message_sent(async::tcp::TcpConnection* conn, int status, void* user_
 
     if (status != 0)
     {
-        logger::logf(logger::LogLevel.ERROR, "Failed to send message to peer: status=%d", status);
+        log::error("Failed to send message to peer: status=%d", status);
         // Don't close connection on send failure, just log it
     }
 }
@@ -1065,7 +1065,7 @@ fn void send_extension_handshake(PeerConnection* peer) @private
 
     if (catch excuse = send_message(peer, msg))
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to send extension handshake");
+        log::error("Failed to send extension handshake");
         return;
     }
 
@@ -1082,7 +1082,7 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
     peer_wire::ExtensionHandshake? ext_hs_opt = peer_wire::decode_extension_handshake(payload);
     if (catch excuse = ext_hs_opt)
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to decode extension handshake");
+        log::error("Failed to decode extension handshake");
         return;
     }
 
@@ -1106,7 +1106,7 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
         peer.supports_metadata = true;
         peer.peer_metadata_msg_id = ext_hs.ut_metadata_id;
         peer.peer_metadata_size = ext_hs.metadata_size;
-        logger::logf(logger::LogLevel.INFO, "[Metadata] Peer supports metadata exchange (msg_id: %d, size: %d)",
+        log::info("[Metadata] Peer supports metadata exchange (msg_id: %d, size: %d)",
                      peer.peer_metadata_msg_id, peer.peer_metadata_size);
     }
 
@@ -1114,7 +1114,7 @@ fn void handle_extension_handshake(PeerConnection* peer, char[] payload) @privat
     peer.peer_upload_only = ext_hs.upload_only;
     if (peer.peer_upload_only)
     {
-        logger::log(logger::LogLevel.INFO, "[BEP 21] Peer is upload-only (partial seed)");
+        log::info("[BEP 21] Peer is upload-only (partial seed)");
     }
 
     // Debug output disabled for logging mode
@@ -1132,7 +1132,7 @@ fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
     peer_wire::ExtensionMessage? ext_msg_opt = peer_wire::decode_extension_message(payload);
     if (catch excuse = ext_msg_opt)
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to decode extension message");
+        log::error("Failed to decode extension message");
         return;
     }
 
@@ -1156,7 +1156,7 @@ fn void handle_extension_message(PeerConnection* peer, char[] payload) @private
     }
     else
     {
-        logger::logf(logger::LogLevel.WARN, "Unknown extension message ID: %d", ext_msg.ext_msg_id);
+        log::warn("Unknown extension message ID: %d", ext_msg.ext_msg_id);
     }
 }
 
@@ -1168,15 +1168,14 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
     // BEP 27: Ignore PEX messages for private torrents
     if (peer.is_private)
     {
-        logger::logf(logger::LogLevel.WARN,
-                    "[PEX] Ignoring PEX message from peer on private torrent (BEP 27)");
+        log::warn("[PEX] Ignoring PEX message from peer on private torrent (BEP 27)");
         return;
     }
 
     pex::PexMessage? pex_msg_opt = pex::decode_pex_message(payload);
     if (catch excuse = pex_msg_opt)
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to decode PEX message");
+        log::error("Failed to decode PEX message");
         return;
     }
 
@@ -1186,7 +1185,7 @@ fn void handle_pex_message(PeerConnection* peer, char[] payload) @private
     // Log PEX activity
     if (pex_msg.added.len > 0 || pex_msg.dropped.len > 0)
     {
-        logger::logf(logger::LogLevel.INFO, "[PEX] Received %d added, %d dropped peers",
+        log::info("[PEX] Received %d added, %d dropped peers",
                      pex_msg.added.len, pex_msg.dropped.len);
     }
 
@@ -1252,12 +1251,12 @@ fn void? PeerConnection.send_pex_message(&self) @public
     // Send message
     if (catch err = send_message(self, ext_msg))
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to send PEX message");
+        log::error("Failed to send PEX message");
         return err?;
     }
 
     // Log PEX activity
-    logger::logf(logger::LogLevel.INFO, "[PEX] Sent %d added, %d dropped peers",
+    log::info("[PEX] Sent %d added, %d dropped peers",
                  self.added_peers.len, self.dropped_peers.len);
 
     // Update rate limit timestamp
@@ -1363,7 +1362,7 @@ fn void handle_metadata_message(PeerConnection* peer, char[] payload) @private
     bencode::BencodeValue*? root_opt = bencode::decode((String)payload);
     if (catch excuse = root_opt)
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to decode metadata message");
+        log::error("Failed to decode metadata message");
         return;
     }
 
@@ -1372,14 +1371,14 @@ fn void handle_metadata_message(PeerConnection* peer, char[] payload) @private
 
     if (root.type != bencode::BencodeType.DICT)
     {
-        logger::log(logger::LogLevel.ERROR, "Metadata message is not a dictionary");
+        log::error("Metadata message is not a dictionary");
         return;
     }
 
     bencode::BencodeValue* msg_type_val = root.dict_get("msg_type");
     if (!msg_type_val || msg_type_val.type != bencode::BencodeType.INTEGER)
     {
-        logger::log(logger::LogLevel.ERROR, "Metadata message missing msg_type");
+        log::error("Metadata message missing msg_type");
         return;
     }
 
@@ -1397,37 +1396,37 @@ fn void handle_metadata_message(PeerConnection* peer, char[] payload) @private
             metadata_exchange::MetadataRequest? req_opt = metadata_exchange::decode_request(payload);
             if (catch excuse = req_opt)
             {
-                logger::log(logger::LogLevel.ERROR, "Failed to decode metadata REQUEST");
+                log::error("Failed to decode metadata REQUEST");
                 return;
             }
             metadata_msg.piece = req_opt.piece;
-            logger::logf(logger::LogLevel.INFO, "[Metadata] Received REQUEST for piece %d", metadata_msg.piece);
+            log::info("[Metadata] Received REQUEST for piece %d", metadata_msg.piece);
 
         case metadata_exchange::MetadataMessageType.DATA:
             metadata_exchange::MetadataData? data_opt = metadata_exchange::decode_data(payload);
             if (catch excuse = data_opt)
             {
-                logger::log(logger::LogLevel.ERROR, "Failed to decode metadata DATA");
+                log::error("Failed to decode metadata DATA");
                 return;
             }
             metadata_msg.piece = data_opt.piece;
             metadata_msg.total_size = data_opt.total_size;
             metadata_msg.data = data_opt.data;  // Transfer ownership
-            logger::logf(logger::LogLevel.INFO, "[Metadata] Received DATA for piece %d (%d bytes)",
+            log::info("[Metadata] Received DATA for piece %d (%d bytes)",
                          metadata_msg.piece, metadata_msg.data.len);
 
         case metadata_exchange::MetadataMessageType.REJECT:
             metadata_exchange::MetadataReject? reject_opt = metadata_exchange::decode_reject(payload);
             if (catch excuse = reject_opt)
             {
-                logger::log(logger::LogLevel.ERROR, "Failed to decode metadata REJECT");
+                log::error("Failed to decode metadata REJECT");
                 return;
             }
             metadata_msg.piece = reject_opt.piece;
-            logger::logf(logger::LogLevel.INFO, "[Metadata] Received REJECT for piece %d", metadata_msg.piece);
+            log::info("[Metadata] Received REJECT for piece %d", metadata_msg.piece);
 
         default:
-            logger::logf(logger::LogLevel.ERROR, "Unknown metadata message type: %d", msg_type);
+            log::error("Unknown metadata message type: %d", msg_type);
             return;
     }
 
@@ -1472,7 +1471,7 @@ fn void? PeerConnection.send_metadata_message(&self, metadata_exchange::Metadata
         case metadata_exchange::MetadataMessageType.REJECT:
             metadata_payload = metadata_exchange::encode_reject(piece);
         default:
-            logger::logf(logger::LogLevel.ERROR, "Unknown metadata message type: %d", msg_type);
+            log::error("Unknown metadata message type: %d", msg_type);
             return;
     }
     defer free(metadata_payload);
@@ -1485,7 +1484,7 @@ fn void? PeerConnection.send_metadata_message(&self, metadata_exchange::Metadata
     // Send message
     if (catch err = send_message(self, ext_msg))
     {
-        logger::log(logger::LogLevel.ERROR, "Failed to send metadata message");
+        log::error("Failed to send metadata message");
         return err?;
     }
 
@@ -1502,6 +1501,6 @@ fn void? PeerConnection.send_metadata_message(&self, metadata_exchange::Metadata
         default:
             msg_type_str = "UNKNOWN";
     }
-    logger::logf(logger::LogLevel.INFO, "[Metadata] Sent %s for piece %d",
+    log::info("[Metadata] Sent %s for piece %d",
                  msg_type_str, piece);
 }

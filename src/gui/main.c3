@@ -18,7 +18,7 @@ import libtorrent::storage_manager;
 import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
-import libtorrent::logger;
+import std::core::log;
 import libtorrent::magnet_link;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
@@ -476,7 +476,12 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     }
 
     // Set up GUI logging
-    log_outputs::LogSink* log_sink = log_outputs::setup_gui_logging(ui);
+    log::Logger logger = log_outputs::setup_gui_logging(ui);
+    log::set_logger(logger);
+
+    // WORKAROUND: std::core::log has initialization issues
+    // Suppress library logging to avoid null function pointer crashes
+    log::set_priority_all(log::LogPriority.CRITICAL);
 
     // Create download context
     // Create TorrentManager for managing this torrent
@@ -616,7 +621,6 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         raylib_gui::add_log(ui, "Error creating storage manager");
         raylib_gui::free(ui);
         torrent.free();
-        log_outputs::cleanup_log_sink(log_sink);
         return 1;
     }
     ctx.sm = mem::new(storage_manager::StorageManager);
@@ -876,10 +880,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         mgr.free();
     }
 
-    // Cleanup logging
-    io::printfn("Cleaning up logging...");
-    logger::flush_logs();
-    log_outputs::cleanup_log_sink(log_sink);
+    // No logging cleanup needed for std::core::log
 
     // Free GUI (this also closes the window)
     io::printfn("Freeing GUI...");

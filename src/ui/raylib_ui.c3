@@ -3,7 +3,6 @@ module raylib_gui;
 import raylib5::rl;
 import raygui::rg;
 import async::event_loop;
-import libtorrent::logger;
 import libtorrent::peer_pool;
 import libtorrent::tracker_manager;
 import libtorrent::piece_picker;
@@ -208,9 +207,6 @@ fn bool run_frame(UIState* state, event_loop::EventLoop* loop) @public
     // Process async I/O events (non-blocking)
     // Use run_nowait() instead of run_once() to prevent blocking the GUI
     loop.run_nowait();
-
-    // Flush log messages to UI
-    logger::flush_logs();
 
     // Update window dimensions if resized
     if (rl::isWindowResized())

@@ -2,7 +2,7 @@ module libtorrent_test;
 
 import libtorrent::lsd;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 import std::io;
 
 // ============================================================================
@@ -30,8 +30,6 @@ fn common::SocketAddress make_test_address(char a, char b, char c, char d, ushor
 
 fn void test_build_announce_message_format() @test
 {
-    defer logger::free_logger();
-
     common::InfoHash infohash = make_test_infohash(0xAA);
     ushort port = 6881;
     char[16] cookie = "0123456789abcdef";
@@ -61,8 +59,6 @@ fn void test_build_announce_message_format() @test
 
 fn void test_build_announce_message_different_port() @test
 {
-    defer logger::free_logger();
-
     common::InfoHash infohash = make_test_infohash(0x11);
     ushort port = 12345;
     char[16] cookie = "fedcba9876543210";
@@ -75,8 +71,6 @@ fn void test_build_announce_message_different_port() @test
 
 fn void test_build_announce_message_different_infohash() @test
 {
-    defer logger::free_logger();
-
     common::InfoHash infohash = make_test_infohash(0xFF);
     ushort port = 6881;
     char[16] cookie = "0000000000000000";
@@ -109,8 +103,6 @@ fn void test_peer_callback(common::InfoHash* infohash, common::SocketAddress[] p
 
 fn void test_create_lsd_manager() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager*? mgr = lsd::create(&test_peer_callback, &state);
@@ -124,8 +116,6 @@ fn void test_create_lsd_manager() @test
 
 fn void test_lsd_manager_inactive_by_default() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -145,8 +135,6 @@ fn void test_lsd_manager_inactive_by_default() @test
 
 fn void test_handle_valid_announcement() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -178,8 +166,6 @@ fn void test_handle_valid_announcement() @test
 
 fn void test_handle_announcement_with_own_cookie() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -198,8 +184,6 @@ fn void test_handle_announcement_with_own_cookie() @test
 
 fn void test_parse_invalid_announcement_too_short() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -217,8 +201,6 @@ fn void test_parse_invalid_announcement_too_short() @test
 
 fn void test_parse_invalid_announcement_wrong_request_line() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -235,8 +217,6 @@ fn void test_parse_invalid_announcement_wrong_request_line() @test
 
 fn void test_parse_announcement_missing_port() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -253,8 +233,6 @@ fn void test_parse_announcement_missing_port() @test
 
 fn void test_parse_announcement_missing_infohash() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -271,8 +249,6 @@ fn void test_parse_announcement_missing_infohash() @test
 
 fn void test_parse_announcement_invalid_port() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -289,8 +265,6 @@ fn void test_parse_announcement_invalid_port() @test
 
 fn void test_parse_announcement_invalid_infohash_length() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -308,8 +282,6 @@ fn void test_parse_announcement_invalid_infohash_length() @test
 
 fn void test_parse_announcement_invalid_hex() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -331,8 +303,6 @@ fn void test_parse_announcement_invalid_hex() @test
 
 fn void test_roundtrip_build_and_parse() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -366,8 +336,6 @@ fn void test_roundtrip_build_and_parse() @test
 
 fn void test_multiple_announcements() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -409,8 +377,6 @@ fn void test_multiple_announcements() @test
 
 fn void test_announcement_with_zero_port() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -427,8 +393,6 @@ fn void test_announcement_with_zero_port() @test
 
 fn void test_announcement_with_max_port() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -446,8 +410,6 @@ fn void test_announcement_with_max_port() @test
 
 fn void test_announcement_with_extra_headers() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;
@@ -465,8 +427,6 @@ fn void test_announcement_with_extra_headers() @test
 
 fn void test_announcement_case_sensitive_headers() @test
 {
-    defer logger::free_logger();
-
     CallbackState state = { .called = false };
 
     lsd::LsdManager* mgr = lsd::create(&test_peer_callback, &state)!!;

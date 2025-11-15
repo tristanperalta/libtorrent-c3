@@ -3,7 +3,7 @@ module libtorrent::adapters::pex_peer_discovery;
 import libtorrent::ports::peer_discovery;
 import libtorrent::peer_pool;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 
 <*
  * PexPeerDiscovery Adapter
@@ -86,7 +86,7 @@ fn PexPeerDiscovery* create(
 
     adapter.last_peer_count = 0;
 
-    logger::logf(logger::LogLevel.INFO, "[PexDiscovery] Created adapter");
+    log::info( "[PexDiscovery] Created adapter");
 
     return adapter;
 }
@@ -106,14 +106,14 @@ fn void PexPeerDiscovery.start_discovery(
 {
     if (self.active)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[PexDiscovery] Discovery already active");
         return;
     }
 
     if (!self.peer_pool)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[PexDiscovery] Peer pool not available");
         if (complete_callback)
         {
@@ -122,7 +122,7 @@ fn void PexPeerDiscovery.start_discovery(
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[PexDiscovery] Starting discovery (passive mode)");
 
     self.active = true;
@@ -150,7 +150,7 @@ fn void PexPeerDiscovery.stop_discovery(&self) @dynamic
 {
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[PexDiscovery] Stopping discovery");
 
     self.active = false;
@@ -172,7 +172,7 @@ fn peer_discovery::DiscoveryStats PexPeerDiscovery.get_stats(&self) @dynamic
             self.stats.successful_attempts++;
             self.last_peer_count = current_peer_count;
 
-            logger::logf(logger::LogLevel.DEBUG,
+            log::debug(
                          "[PexDiscovery] Detected %d new peers via PEX",
                          new_peers);
         }

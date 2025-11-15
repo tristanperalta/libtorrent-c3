@@ -18,7 +18,7 @@ import libtorrent::storage_manager;
 import libtorrent::bitfield;
 import async::timer;
 import libtorrent::peer_pool;
-import libtorrent::logger;
+import std::core::log;
 import libtorrent::magnet_link;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
@@ -1170,7 +1170,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     io::printfn("");
 
     // Set up console logging (file and/or stderr)
-    log_outputs::LogSink*? log_sink = log_outputs::setup_console_logging(log_file_path, debug_mode);
+    // WORKAROUND: std::core::log has initialization issues - disable library logging for now
+    log::set_priority_all(log::LogPriority.CRITICAL);  // Suppress all library logging
 
     // Create TorrentManager for managing this torrent
     libtorrent::torrent_manager::TorrentManager* mgr = libtorrent::torrent_manager::create(loop, 1);
@@ -1212,30 +1213,6 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
 
     // FastResume: Create download state provider (libtorrent-compatible fastresume format)
     ctx.state_provider = fastresume_state_provider::create();
-
-    // Start periodic log flush timer (every 2 seconds) if logging is enabled
-    async::timer::Timer* flush_timer = null;
-    if (catch excuse = log_sink)
-    {
-        // No logging configured, skip flush timer
-    }
-    else
-    {
-        async::timer::Timer*? flush_timer_opt = async::timer::create(loop);
-        if (catch err = flush_timer_opt)
-        {
-            io::eprintfn("Warning: Failed to create log flush timer");
-        }
-        else
-        {
-            flush_timer = flush_timer_opt;
-            // Start after 2 seconds, then repeat every 2 seconds
-            flush_timer.start(2000, 2000,
-                              fn void(async::timer::Timer* timer, void* user_data) {
-                                  logger::flush_logs();
-                              }, null);
-        }
-    }
 
     // Check if this is a magnet link or torrent file
     if (torrent_path.starts_with("magnet:"))
@@ -1329,26 +1306,11 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         ctx.event_bus.free();
     }
 
-    // Stop and close log flush timer
-    if (flush_timer)
-    {
-        flush_timer.close();
-    }
-
     // Free torrent manager
     if (mgr)
     {
         mgr.free();
     }
-
-    // Flush any remaining logs before cleanup
-    logger::flush_logs();
-
-    // Cleanup log sink
-    (void)log_outputs::cleanup_log_sink(log_sink);
-
-    // Free logger resources
-    logger::free_logger();
 
     return ctx.exit_code;
 }

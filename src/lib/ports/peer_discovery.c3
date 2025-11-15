@@ -2,7 +2,6 @@ module libtorrent::ports::peer_discovery;
 
 import std::time;
 import libtorrent::common;
-import libtorrent::logger;
 
 <*
  * PeerDiscovery Port Interface
@@ -185,9 +184,6 @@ struct DiscoveryOptions
 
     <* Enable debug logging for discovery *>
     bool enable_debug_logging;      // Default: false
-
-    <* Log level for discovery messages *>
-    logger::LogLevel log_level;     // Default: INFO
 }
 
 <*
@@ -246,7 +242,6 @@ fn DiscoveryOptions default_options() @public
 
     // Logging
     opts.enable_debug_logging = false;
-    opts.log_level = logger::LogLevel.INFO;
 
     return opts;
 }

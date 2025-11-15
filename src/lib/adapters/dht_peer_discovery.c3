@@ -5,7 +5,7 @@ import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::dht_routing_table;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 import async::event_loop;
 import async::timer;
 import std::time;
@@ -105,7 +105,7 @@ fn DhtPeerDiscovery* create(
     adapter.discovery_timer = null;
     adapter.check_timer = null;
 
-    logger::logf(logger::LogLevel.INFO, "[DhtDiscovery] Created adapter");
+    log::info( "[DhtDiscovery] Created adapter");
 
     return adapter;
 }
@@ -134,7 +134,7 @@ fn void on_check_peers(timer::Timer* timer, void* user_data)
 
         if (peers.len > 0)
         {
-            logger::logf(logger::LogLevel.INFO,
+            log::info(
                          "[DhtDiscovery] Found %d peers from DHT (elapsed: %d ms)",
                          peers.len, elapsed_ms);
 
@@ -172,7 +172,7 @@ fn void on_check_peers(timer::Timer* timer, void* user_data)
     else if (self.search.is_done())
     {
         // Search completed but no peers found
-        logger::logf(logger::LogLevel.DEBUG,
+        log::debug(
                      "[DhtDiscovery] DHT search completed with no peers (elapsed: %d ms)",
                      elapsed_ms);
 
@@ -186,7 +186,7 @@ fn void on_check_peers(timer::Timer* timer, void* user_data)
     else
     {
         // Search still ongoing
-        logger::logf(logger::LogLevel.DEBUG,
+        log::debug(
                      "[DhtDiscovery] DHT search ongoing... (elapsed: %d ms)",
                      elapsed_ms);
     }
@@ -206,7 +206,7 @@ fn void on_periodic_discovery(timer::Timer* timer, void* user_data)
 
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[DhtDiscovery] Periodic discovery triggered");
 
     self.do_search();
@@ -223,7 +223,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
 {
     if (!self.dht_client)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[DhtDiscovery] DHT client not available");
         if (self.complete_callback)
         {
@@ -235,7 +235,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
     // Check if DHT is bootstrapped
     if (!self.dht_client.is_bootstrapped())
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[DhtDiscovery] DHT not bootstrapped yet");
         if (self.complete_callback)
         {
@@ -247,7 +247,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
     self.stats.total_discovery_attempts++;
     self.last_discovery_start_time = (long)(time::now().to_seconds() * 1000);
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[DhtDiscovery] Starting DHT get_peers search (attempt %d)",
                  self.stats.total_discovery_attempts);
 
@@ -291,7 +291,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
 
     if (nodes.len() == 0)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[DhtDiscovery] No nodes in routing tables yet");
         self.stats.failed_attempts++;
 
@@ -302,7 +302,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
         return;
     }
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[DhtDiscovery] Querying %d DHT nodes (%d IPv4, %d IPv6)",
                  nodes.len(), ipv4_nodes.len, ipv6_nodes.len);
 
@@ -322,7 +322,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
 
     if (queries_sent == 0)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[DhtDiscovery] No DHT nodes available for query");
         self.stats.failed_attempts++;
 
@@ -333,7 +333,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
         return;
     }
 
-    logger::logf(logger::LogLevel.DEBUG,
+    log::debug(
                  "[DhtDiscovery] Sent %d get_peers queries", queries_sent);
 
     // Schedule check timer to collect results
@@ -342,7 +342,7 @@ fn void DhtPeerDiscovery.do_search(&self) @private
     timer::Timer*? timer_opt = timer::create(self.loop);
     if (catch err = timer_opt)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[DhtDiscovery] Failed to create check timer");
         return;
     }
@@ -366,12 +366,12 @@ fn void DhtPeerDiscovery.start_discovery(
 {
     if (self.active)
     {
-        logger::logf(logger::LogLevel.WARN,
+        log::warn(
                      "[DhtDiscovery] Discovery already active");
         return;
     }
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[DhtDiscovery] Starting discovery");
 
     self.active = true;
@@ -395,14 +395,14 @@ fn void DhtPeerDiscovery.start_discovery(
             interval_ms = options.min_discovery_interval_ms;
         }
 
-        logger::logf(logger::LogLevel.DEBUG,
+        log::debug(
                      "[DhtDiscovery] Setting up periodic discovery every %d ms",
                      interval_ms);
 
         timer::Timer*? timer_opt = timer::create(self.loop);
         if (catch err = timer_opt)
         {
-            logger::logf(logger::LogLevel.WARN,
+            log::warn(
                          "[DhtDiscovery] Failed to create periodic timer");
             return;
         }
@@ -417,7 +417,7 @@ fn void DhtPeerDiscovery.stop_discovery(&self) @dynamic
 {
     if (!self.active) return;
 
-    logger::logf(logger::LogLevel.INFO,
+    log::info(
                  "[DhtDiscovery] Stopping discovery");
 
     self.active = false;

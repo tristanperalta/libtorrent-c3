@@ -4,7 +4,7 @@ import libtorrent::ports::peer_discovery;
 import libtorrent::adapters::composite_peer_discovery;
 import libtorrent_test::mocks::mock_peer_discovery;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 import std::io;
 
 // ============================================================================
@@ -39,8 +39,6 @@ fn void on_test_complete(bool success, String error, void* user_data)
 
 fn void test_create_empty_composite() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -56,8 +54,6 @@ fn void test_create_empty_composite() @test
 
 fn void test_add_single_source() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -76,8 +72,6 @@ fn void test_add_single_source() @test
 
 fn void test_add_multiple_sources() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -104,8 +98,6 @@ fn void test_add_multiple_sources() @test
 
 fn void test_start_discovery_no_sources() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -134,8 +126,6 @@ fn void test_start_discovery_no_sources() @test
 
 fn void test_start_discovery_with_sources() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -180,8 +170,6 @@ fn void test_start_discovery_with_sources() @test
 
 fn void test_prevent_double_start() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -216,8 +204,6 @@ fn void test_prevent_double_start() @test
 
 fn void test_stop_discovery() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -249,8 +235,6 @@ fn void test_stop_discovery() @test
 
 fn void test_aggregated_stats_empty() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();
@@ -265,8 +249,6 @@ fn void test_aggregated_stats_empty() @test
 
 fn void test_aggregated_stats_single_source() @test
 {
-    defer logger::free_logger();
-
     composite_peer_discovery::CompositePeerDiscovery* composite =
         composite_peer_discovery::create();
     defer composite.free();

@@ -4,7 +4,7 @@ import libtorrent::upload_manager;
 import libtorrent::storage_manager;
 import libtorrent::peer_connection;
 import libtorrent::common;
-import libtorrent::logger;
+import std::core::log;
 
 /**
  * Upload Handler
@@ -41,7 +41,7 @@ fn void on_block_read(uint piece_index, uint offset, char[] block_data, int stat
     if (status != 0)
     {
         // Read failed - log error and free block data
-        logger::logf(logger::LogLevel.ERROR, "Failed to read block for upload: piece=%d offset=%d status=%d",
+        log::error("Failed to read block for upload: piece=%d offset=%d status=%d",
                     piece_index, offset, status);
         free(block_data);
         return;
@@ -50,13 +50,13 @@ fn void on_block_read(uint piece_index, uint offset, char[] block_data, int stat
     // Send PIECE message to peer using existing method
     if (catch excuse = ctx.peer.send_piece(piece_index, offset, block_data))
     {
-        logger::logf(logger::LogLevel.ERROR, "Failed to send PIECE message to peer %s: piece=%d offset=%d",
+        log::error("Failed to send PIECE message to peer %s: piece=%d offset=%d",
                     ctx.peer_addr, piece_index, offset);
     }
     else
     {
         // Successfully sent PIECE message
-        logger::logf(logger::LogLevel.INFO, "Sent PIECE to peer %s: piece=%d offset=%d length=%d",
+        log::info("Sent PIECE to peer %s: piece=%d offset=%d length=%d",
                     ctx.peer_addr, piece_index, offset, block_data.len);
     }
 
@@ -129,7 +129,7 @@ fn void process_pending_uploads(upload_manager::UploadManager* upload_mgr,
 
     if (processed > 0)
     {
-        logger::logf(logger::LogLevel.DEBUG, "Processed %d upload requests for peer %s",
+        log::debug("Processed %d upload requests for peer %s",
                     processed, peer_addr);
     }
 }
