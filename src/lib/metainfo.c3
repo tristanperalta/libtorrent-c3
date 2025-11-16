@@ -246,53 +246,6 @@ fn TorrentFile*? parse(String data) @public => @pool()
         }
     }
 
-    // Extract 'collections' (optional - BEP 38)
-    // Can be in root dictionary or info dictionary (merge both)
-    BencodeValue* collections_val = root.dict_get("collections");
-    if (collections_val && collections_val.type == bencode::BencodeType.LIST)
-    {
-        usz count = collections_val.list.size;
-        if (count > 0)
-        {
-            torrent.collections = allocator::new_array(&torrent.arena, String, count);
-            for (usz i = 0; i < count; i++)
-            {
-                BencodeValue* collection = collections_val.list.get(i);
-                if (collection.type == bencode::BencodeType.STRING)
-                {
-                    torrent.collections[i] = copy_string(&torrent.arena, collection.string);
-                }
-            }
-        }
-    }
-
-    // Extract 'similar' (optional - BEP 38)
-    // List of info-hashes (20-byte binary strings)
-    BencodeValue* similar_val = root.dict_get("similar");
-    if (similar_val && similar_val.type == bencode::BencodeType.LIST)
-    {
-        usz count = similar_val.list.size;
-        if (count > 0)
-        {
-            torrent.similar_count = count;
-            torrent.similar = allocator::new_array(&torrent.arena, char, count * common::SHA1_HASH_SIZE);
-            for (usz i = 0; i < count; i++)
-            {
-                BencodeValue* info_hash = similar_val.list.get(i);
-                if (info_hash.type == bencode::BencodeType.STRING &&
-                    info_hash.string.len == common::SHA1_HASH_SIZE)
-                {
-                    // Copy SHA1 hash to flat array
-                    usz offset = i * common::SHA1_HASH_SIZE;
-                    foreach (j, byte : info_hash.string)
-                    {
-                        torrent.similar[offset + j] = byte;
-                    }
-                }
-            }
-        }
-    }
-
     // Extract 'created by' (optional)
     BencodeValue* created_by_val = root.dict_get("created by");
     if (created_by_val && created_by_val.type == bencode::BencodeType.STRING)
@@ -482,6 +435,115 @@ fn TorrentFile*? parse(String data) @public => @pool()
         // Copy temp hex to arena for permanent storage
         torrent.info.name = copy_string(&torrent.arena, temp_hex);
     }
+
+    // Extract 'collections' (optional - BEP 38)
+    // Can be in root dictionary or info dictionary - merge both per spec
+    List{String} collections_list;
+    collections_list.init(mem);
+
+    // Check outside info dict
+    BencodeValue* collections_outside = root.dict_get("collections");
+    if (collections_outside && collections_outside.type == bencode::BencodeType.LIST)
+    {
+        for (usz i = 0; i < collections_outside.list.size; i++)
+        {
+            BencodeValue* collection = collections_outside.list.get(i);
+            if (collection.type == bencode::BencodeType.STRING)
+            {
+                collections_list.push(copy_string(&torrent.arena, collection.string));
+            }
+        }
+    }
+
+    // Check inside info dict
+    BencodeValue* collections_inside = info_val.dict_get("collections");
+    if (collections_inside && collections_inside.type == bencode::BencodeType.LIST)
+    {
+        for (usz i = 0; i < collections_inside.list.size; i++)
+        {
+            BencodeValue* collection = collections_inside.list.get(i);
+            if (collection.type == bencode::BencodeType.STRING)
+            {
+                collections_list.push(copy_string(&torrent.arena, collection.string));
+            }
+        }
+    }
+
+    // Convert to array if any collections found
+    if (collections_list.len() > 0)
+    {
+        torrent.collections = allocator::new_array(&torrent.arena, String, collections_list.len());
+        for (usz i = 0; i < collections_list.len(); i++)
+        {
+            torrent.collections[i] = collections_list.get(i);
+        }
+    }
+    collections_list.free();
+
+    // Extract 'similar' (optional - BEP 38)
+    // List of info-hashes (20-byte binary strings) - can be in root or info dict, merge both per spec
+    List{char[]} similar_list;
+    similar_list.init(mem);
+
+    // Check outside info dict
+    BencodeValue* similar_outside = root.dict_get("similar");
+    if (similar_outside && similar_outside.type == bencode::BencodeType.LIST)
+    {
+        for (usz i = 0; i < similar_outside.list.size; i++)
+        {
+            BencodeValue* info_hash = similar_outside.list.get(i);
+            if (info_hash.type == bencode::BencodeType.STRING &&
+                info_hash.string.len == common::SHA1_HASH_SIZE)
+            {
+                // Copy to arena and add to list
+                char[] hash_copy = allocator::new_array(&torrent.arena, char, common::SHA1_HASH_SIZE);
+                foreach (j, byte : info_hash.string)
+                {
+                    hash_copy[j] = byte;
+                }
+                similar_list.push(hash_copy);
+            }
+        }
+    }
+
+    // Check inside info dict
+    BencodeValue* similar_inside = info_val.dict_get("similar");
+    if (similar_inside && similar_inside.type == bencode::BencodeType.LIST)
+    {
+        for (usz i = 0; i < similar_inside.list.size; i++)
+        {
+            BencodeValue* info_hash = similar_inside.list.get(i);
+            if (info_hash.type == bencode::BencodeType.STRING &&
+                info_hash.string.len == common::SHA1_HASH_SIZE)
+            {
+                // Copy to arena and add to list
+                char[] hash_copy = allocator::new_array(&torrent.arena, char, common::SHA1_HASH_SIZE);
+                foreach (j, byte : info_hash.string)
+                {
+                    hash_copy[j] = byte;
+                }
+                similar_list.push(hash_copy);
+            }
+        }
+    }
+
+    // Convert to flat array if any similar torrents found
+    if (similar_list.len() > 0)
+    {
+        torrent.similar_count = similar_list.len();
+        torrent.similar = allocator::new_array(&torrent.arena, char, similar_list.len() * common::SHA1_HASH_SIZE);
+
+        for (usz i = 0; i < similar_list.len(); i++)
+        {
+            usz offset = i * common::SHA1_HASH_SIZE;
+            char[] hash = similar_list.get(i);
+            foreach (j, byte : hash)
+            {
+                torrent.similar[offset + j] = byte;
+            }
+        }
+    }
+    similar_list.free();
 
     return torrent;
 }
