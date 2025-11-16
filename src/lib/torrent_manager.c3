@@ -2,6 +2,7 @@ module libtorrent::torrent_manager;
 
 import std::io;
 import std::collections::map;
+import std::collections::list;
 import libtorrent::common;
 import libtorrent::metainfo;
 import libtorrent::dht_client;
@@ -9,6 +10,7 @@ import libtorrent::lsd;
 import libtorrent::ports::peer_discovery;
 import libtorrent::adapters::composite_peer_discovery;
 import libtorrent::session;
+import libtorrent::resolve_links;
 import async::event_loop;
 import async::timer;
 
@@ -323,6 +325,127 @@ fn common::InfoHash[] TorrentManager.get_all_info_hashes(&self) @public
     };
 
     return hashes;
+}
+
+// ============================================================================
+// BEP 38: Swarm Metadata - File Reuse
+// ============================================================================
+
+/**
+ * Find all torrents that belong to a specific collection (BEP 38).
+ *
+ * @param collection_name Name of collection to search for
+ * @return Array of sessions in this collection (caller must free)
+ */
+fn session::Session*[] TorrentManager.find_by_collection(&self, String collection_name) @public
+{
+    if (self.sessions.count == 0) return {};
+
+    // Use temp List to accumulate matching sessions
+    List{session::Session*} matches;
+    matches.init(mem);
+    defer matches.free();
+
+    self.sessions.@each(; common::InfoHash hash, session::Session* ctx)
+    {
+        // Check if this torrent has the collection
+        foreach (collection : ctx.torrent.collections)
+        {
+            if (collection == collection_name)
+            {
+                matches.push(ctx);
+                break;  // Only add once even if collection appears multiple times
+            }
+        }
+    };
+
+    // Convert List to array
+    if (matches.len() == 0) return {};
+
+    session::Session*[] result = mem::new_array(session::Session*, matches.len());
+    foreach (i, ctx : matches)
+    {
+        result[i] = ctx;
+    }
+
+    return result;
+}
+
+/**
+ * Check if files from existing torrents can be reused for a new torrent (BEP 38).
+ *
+ * This implements the core BEP 38 file reuse algorithm:
+ * 1. Search torrents in the same collection
+ * 2. Search similar torrents (from similar field)
+ * 3. Match files by piece hash comparison
+ * 4. Return ResolveLinks with matched files
+ *
+ * @param target New torrent being added
+ * @return ResolveLinks with matched files (caller must call .free())
+ */
+fn resolve_links::ResolveLinks TorrentManager.check_similar_torrents(
+    &self,
+    metainfo::TorrentFile* target
+) @public
+{
+    resolve_links::ResolveLinks links = resolve_links::create(target);
+
+    io::printfn("[BEP 38] Checking for reusable files (target: %s)", target.info.name);
+
+    // Strategy 1: Search torrents in the same collection
+    foreach (collection : target.collections)
+    {
+        session::Session*[] collection_torrents = self.find_by_collection(collection);
+        defer free(collection_torrents);
+
+        io::printfn("[BEP 38] Found %d torrents in collection '%s'",
+            collection_torrents.len, collection);
+
+        foreach (source_session : collection_torrents)
+        {
+            // Skip self (shouldn't happen but be safe)
+            if (source_session.torrent == target) continue;
+
+            // Try to match files from this source
+            links.match_torrent(
+                source_session.torrent,
+                source_session.save_path
+            );
+        }
+    }
+
+    // Strategy 2: Search similar torrents (from similar field)
+    if (target.similar_count > 0)
+    {
+        io::printfn("[BEP 38] Checking %d similar torrents", target.similar_count);
+
+        for (usz i = 0; i < target.similar_count; i++)
+        {
+            // Extract info hash (20 bytes)
+            usz offset = i * common::SHA1_HASH_SIZE;
+            common::InfoHash similar_hash;
+            foreach (j, byte : target.similar[offset:common::SHA1_HASH_SIZE])
+            {
+                similar_hash[j] = byte;
+            }
+
+            // Look up session by info hash
+            session::Session* source_session = self.get_session(&similar_hash);
+            if (source_session)
+            {
+                // Try to match files from this source
+                links.match_torrent(
+                    source_session.torrent,
+                    source_session.save_path
+                );
+            }
+        }
+    }
+
+    io::printfn("[BEP 38] File reuse check complete: %d matches found",
+        links.get_match_count());
+
+    return links;
 }
 
 /**
