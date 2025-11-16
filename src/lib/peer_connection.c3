@@ -75,6 +75,8 @@ faultdef PEER_HANDSHAKE_FAILED;
 faultdef PEER_MESSAGE_SEND_FAILED;
 faultdef PEER_INVALID_STATE;
 faultdef PEER_NO_FAST_EXTENSION;
+faultdef PEER_NO_V2_SUPPORT;
+faultdef PEER_INVALID_HASH_REQUEST;
 
 <*
  Connection state for a peer.
@@ -129,6 +131,19 @@ struct MetadataMessage
 // Callback for when metadata message is received (BEP 9).
 // Parameters: peer (connection), metadata_message (decoded metadata message), user_data (context)
 alias MetadataCallback = fn void(PeerConnection* peer, MetadataMessage* metadata_msg, void* user_data);
+
+// Callback for when HASH_REQUEST message is received (BEP 52).
+// Parameters: peer (connection), hash_request (decoded request), user_data (context)
+// The application should respond by calling send_hashes() or send_hash_reject()
+alias HashRequestCallback = fn void(PeerConnection* peer, peer_wire::HashRequestMsg* request, void* user_data);
+
+// Callback for when HASHES message is received (BEP 52).
+// Parameters: peer (connection), hashes (decoded hashes with proofs), user_data (context)
+alias HashesCallback = fn void(PeerConnection* peer, peer_wire::HashesMsg* hashes, void* user_data);
+
+// Callback for when HASH_REJECT message is received (BEP 52).
+// Parameters: peer (connection), reject (decoded reject message), user_data (context)
+alias HashRejectCallback = fn void(PeerConnection* peer, peer_wire::HashRejectMsg* reject, void* user_data);
 
 // Peer connection structure.
 // Manages the connection to a single peer.
@@ -185,6 +200,9 @@ struct PeerConnection
     List{uint} peer_allowed_fast;        // Pieces we allow peer to download when choked
     List{uint} suggested_pieces;         // Pieces peer has suggested we download
 
+    // BitTorrent v2 Protocol (BEP 52) - Merkle tree hash exchange
+    bool supports_v2;                    // Peer supports v2 protocol (reserved bit 4)
+
     // Message buffering
     DString recv_buffer;     // Accumulates TCP chunks
 
@@ -197,6 +215,9 @@ struct PeerConnection
     StateCallback state_cb;
     PexCallback pex_cb;
     MetadataCallback metadata_cb;
+    HashRequestCallback hash_request_cb;  // BEP 52: Hash request received
+    HashesCallback hashes_cb;              // BEP 52: Hashes received
+    HashRejectCallback hash_reject_cb;     // BEP 52: Hash request rejected
     void* user_data;
 }
 
@@ -212,6 +233,9 @@ struct PeerConnection
  @param state_cb : "Callback for state changes (can be null)"
  @param pex_cb : "Callback for PEX messages (can be null)"
  @param metadata_cb : "Callback for metadata messages (can be null, BEP 9)"
+ @param hash_request_cb : "Callback for hash requests (can be null, BEP 52)"
+ @param hashes_cb : "Callback for hashes (can be null, BEP 52)"
+ @param hash_reject_cb : "Callback for hash rejects (can be null, BEP 52)"
  @param user_data : "User context for callbacks"
  @param is_private : "BEP 27: Private torrent flag (disables PEX)"
  @return "Peer connection or fault"
@@ -220,6 +244,8 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
                               common::InfoHash info_hash, common::PeerId our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
                               PexCallback pex_cb, MetadataCallback metadata_cb,
+                              HashRequestCallback hash_request_cb, HashesCallback hashes_cb,
+                              HashRejectCallback hash_reject_cb,
                               void* user_data, bool is_private, bool upload_only = false) @public
 {
     PeerConnection* peer = mem::new(PeerConnection);
@@ -271,6 +297,9 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.peer_allowed_fast.init(mem);
     peer.suggested_pieces.init(mem);
 
+    // Initialize v2 protocol state (BEP 52)
+    peer.supports_v2 = false;  // Detected from handshake reserved bits
+
     // Initialize arena allocator for message encoding (16KB buffer)
     peer.arena_buffer = mem::new_array(char, 16 * 1024);
     peer.msg_arena.init(peer.arena_buffer);
@@ -280,6 +309,9 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.state_cb = state_cb;
     peer.pex_cb = pex_cb;
     peer.metadata_cb = metadata_cb;
+    peer.hash_request_cb = hash_request_cb;
+    peer.hashes_cb = hashes_cb;
+    peer.hash_reject_cb = hash_reject_cb;
     peer.user_data = user_data;
 
     // Connect to peer (macro auto-increments refcount on success)
@@ -611,6 +643,13 @@ fn void process_handshake(PeerConnection* peer)
     // Check if peer supports Fast Extension (BEP 6)
     peer.supports_fast = peer_wire::handshake_supports_fast(&handshake);
 
+    // Check if peer supports v2 protocol (BEP 52)
+    peer.supports_v2 = peer_wire::handshake_supports_v2(&handshake);
+    if (peer.supports_v2)
+    {
+        log::info("Peer supports BitTorrent v2 protocol");
+    }
+
     // Remove handshake from buffer
     peer.recv_buffer.delete(0, 68);
 
@@ -763,6 +802,54 @@ fn void handle_state_message(PeerConnection* peer, peer_wire::Message* msg)
             {
                 uint piece_index = peer_wire::decode_fast_piece_index(msg.payload)!!;
                 add_to_allowed_fast_set(peer, piece_index);
+            }
+        case peer_wire::MessageType.HASH_REQUEST:
+            // BEP 52: Handle hash request
+            if (peer.supports_v2 && peer.hash_request_cb)
+            {
+                if (catch excuse = peer_wire::decode_hash_request(msg.payload))
+                {
+                    log::error("Failed to decode HASH_REQUEST");
+                }
+                else
+                {
+                    peer_wire::HashRequestMsg request = peer_wire::decode_hash_request(msg.payload)!!;
+                    peer.hash_request_cb(peer, &request, peer.user_data);
+                }
+            }
+        case peer_wire::MessageType.HASHES:
+            // BEP 52: Handle hashes response
+            if (peer.supports_v2 && peer.hashes_cb)
+            {
+                if (catch excuse = peer_wire::decode_hashes(msg.payload))
+                {
+                    log::error("Failed to decode HASHES");
+                }
+                else
+                {
+                    peer_wire::HashesMsg hashes = peer_wire::decode_hashes(msg.payload)!!;
+                    peer.hashes_cb(peer, &hashes, peer.user_data);
+                    // Free hash arrays allocated by decoder
+                    foreach (hash : hashes.hashes)
+                    {
+                        free(hash);
+                    }
+                    free(hashes.hashes);
+                }
+            }
+        case peer_wire::MessageType.HASH_REJECT:
+            // BEP 52: Handle hash reject
+            if (peer.supports_v2 && peer.hash_reject_cb)
+            {
+                if (catch excuse = peer_wire::decode_hash_reject(msg.payload))
+                {
+                    log::error("Failed to decode HASH_REJECT");
+                }
+                else
+                {
+                    peer_wire::HashRejectMsg reject = peer_wire::decode_hash_reject(msg.payload)!!;
+                    peer.hash_reject_cb(peer, &reject, peer.user_data);
+                }
             }
         default:
             // Other messages don't change state
@@ -977,6 +1064,67 @@ fn fault? PeerConnection.send_allowed_fast(&self, uint piece_index) @public
 
     usz mark = self.msg_arena.mark();
     char[] msg = peer_wire::encode_allowed_fast(piece_index, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
+    return send_message(self, msg);
+}
+
+// ============================================================================
+// v2 Protocol Messages (BEP 52)
+// ============================================================================
+
+<*
+ Send HASH_REQUEST message to peer (BEP 52).
+
+ Requests Merkle tree hashes from peer for v2 torrents.
+
+ @param request : "Hash request parameters"
+*>
+fn fault? PeerConnection.send_hash_request(&self, peer_wire::HashRequestMsg* request) @public
+{
+    if (!self.supports_v2) return PEER_NO_V2_SUPPORT?;
+
+    // Validate request parameters
+    if (!peer_wire::validate_hash_request(request))
+    {
+        return PEER_INVALID_HASH_REQUEST?;
+    }
+
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_hash_request(request, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
+    return send_message(self, msg);
+}
+
+<*
+ Send HASHES message to peer (BEP 52).
+
+ Responds to a HASH_REQUEST with Merkle tree hashes and proofs.
+
+ @param hashes : "Hashes response (requested hashes + proof hashes)"
+*>
+fn fault? PeerConnection.send_hashes(&self, peer_wire::HashesMsg* hashes) @public
+{
+    if (!self.supports_v2) return PEER_NO_V2_SUPPORT?;
+
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_hashes(hashes, &self.msg_arena);
+    defer self.msg_arena.reset(mark);
+    return send_message(self, msg);
+}
+
+<*
+ Send HASH_REJECT message to peer (BEP 52).
+
+ Rejects a HASH_REQUEST (peer doesn't have the hashes or invalid request).
+
+ @param reject : "Rejection parameters (same fields as request minus proof_layers)"
+*>
+fn fault? PeerConnection.send_hash_reject(&self, peer_wire::HashRejectMsg* reject) @public
+{
+    if (!self.supports_v2) return PEER_NO_V2_SUPPORT?;
+
+    usz mark = self.msg_arena.mark();
+    char[] msg = peer_wire::encode_hash_reject(reject, &self.msg_arena);
     defer self.msg_arena.reset(mark);
     return send_message(self, msg);
 }

@@ -704,7 +704,12 @@ fn void on_download_piece_complete(uint piece_index, char[] piece_data, bool suc
         };
 
         // Mark piece as failed for retry
-        ctx.dm.fail_piece(piece_index)!!;
+        // Note: This can fail if the piece was already cancelled/cleaned up (race condition)
+        // This is fine - just log and continue
+        if (catch excuse = ctx.dm.fail_piece(piece_index))
+        {
+            io::eprintfn("  Note: Could not mark piece %d as failed (already cleaned up)", piece_index);
+        }
         return;
     }
 
@@ -2362,6 +2367,19 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         ctx.upload_timer = upload_timer_opt;
         ctx.upload_timer.start(1000, 1000, &on_upload_timer_tick, ctx);
         io::printfn("Started upload request processor (1s interval)");
+    }
+
+    // Create flush timer (sync files and save fastresume every 30 seconds)
+    async::timer::Timer*? flush_timer_opt = async::timer::create(ctx.get_loop());
+    if (catch err = flush_timer_opt)
+    {
+        io::eprintfn("  Warning: Failed to create flush timer");
+    }
+    else
+    {
+        ctx.flush_timer = flush_timer_opt;
+        ctx.flush_timer.start(30000, 30000, &on_flush_timer_tick, ctx);
+        io::printfn("Started periodic file sync and fastresume saves (30s interval)");
     }
 
     // Initialize tracker configuration (parallel announce settings)

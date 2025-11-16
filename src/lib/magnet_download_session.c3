@@ -16,6 +16,7 @@ import libtorrent::peer_connection;
 import libtorrent::bencode;
 import libtorrent::storage_manager;
 import libtorrent::download_manager;
+import libtorrent::upload_manager;
 import libtorrent::session;
 
 /**
@@ -351,6 +352,36 @@ fn void on_metadata_complete(session::Session* ctx) @private
     ctx.num_pieces = num_pieces;
     ctx.pieces_verified_count = 0;
     ctx.next_piece_to_verify = 0;
+
+    // Create upload manager
+    ctx.upload_mgr = upload_manager::create();
+    io::printfn("[Metadata] Created upload manager");
+
+    // Create upload timer (process upload requests every 1 second)
+    async::timer::Timer*? upload_timer_opt = async::timer::create(ctx.get_loop());
+    if (catch err = upload_timer_opt)
+    {
+        io::printfn("[Metadata] Warning: Failed to create upload timer");
+    }
+    else
+    {
+        ctx.upload_timer = upload_timer_opt;
+        ctx.upload_timer.start(1000, 1000, &session::on_upload_timer_tick, ctx);
+        io::printfn("[Metadata] Started upload request processor (1s interval)");
+    }
+
+    // Create flush timer (sync files and save fastresume every 30 seconds)
+    async::timer::Timer*? flush_timer_opt = async::timer::create(ctx.get_loop());
+    if (catch err = flush_timer_opt)
+    {
+        io::printfn("[Metadata] Warning: Failed to create flush timer");
+    }
+    else
+    {
+        ctx.flush_timer = flush_timer_opt;
+        ctx.flush_timer.start(30000, 30000, &session::on_flush_timer_tick, ctx);
+        io::printfn("[Metadata] Started periodic file sync and fastresume saves (30s interval)");
+    }
 
     // Initialize storage (will trigger on_storage_initialized callback)
     io::printfn("[Metadata] Starting storage initialization and piece verification...");

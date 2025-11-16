@@ -498,6 +498,8 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.flush_timer = null;
     ctx.block_timeout_timer = null;
     ctx.peer_pool = null;
+    ctx.upload_mgr = null;
+    ctx.upload_timer = null;
     ctx.dht_search = null;
     ctx.dht_timer = null;
     ctx.dht_check_timer = null;
@@ -660,6 +662,36 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         &ctx
     );
 
+    // Create upload manager
+    ctx.upload_mgr = upload_manager::create();
+    raylib_gui::add_log(ui, "Created upload manager");
+
+    // Create upload timer (process upload requests every 1 second)
+    async::timer::Timer*? upload_timer_opt = async::timer::create(loop);
+    if (catch err = upload_timer_opt)
+    {
+        raylib_gui::add_log(ui, "Warning: Failed to create upload timer");
+    }
+    else
+    {
+        ctx.upload_timer = upload_timer_opt;
+        ctx.upload_timer.start(1000, 1000, &session::on_upload_timer_tick, &ctx);
+        raylib_gui::add_log(ui, "Started upload request processor (1s interval)");
+    }
+
+    // Create flush timer (sync files and save fastresume every 30 seconds)
+    async::timer::Timer*? flush_timer_opt = async::timer::create(loop);
+    if (catch err = flush_timer_opt)
+    {
+        raylib_gui::add_log(ui, "Warning: Failed to create flush timer");
+    }
+    else
+    {
+        ctx.flush_timer = flush_timer_opt;
+        ctx.flush_timer.start(30000, 30000, &session::on_flush_timer_tick, &ctx);
+        raylib_gui::add_log(ui, "Started periodic file sync and fastresume saves (30s interval)");
+    }
+
     // Initialize DHT for peer discovery
     raylib_gui::add_log(ui, "Starting DHT on port 6881...");
     session::init_dht(&ctx, 6881);
@@ -765,6 +797,11 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     {
         ctx.block_timeout_timer.close();
         ctx.block_timeout_timer = null;
+    }
+    if (ctx.upload_timer)
+    {
+        ctx.upload_timer.close();
+        ctx.upload_timer = null;
     }
 
     // Close DHT timers
