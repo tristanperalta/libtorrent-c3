@@ -1179,57 +1179,24 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     // Create TorrentManager for managing this torrent
     libtorrent::torrent_manager::TorrentManager* mgr = libtorrent::torrent_manager::create(loop, 1);
 
-    Session ctx;
-    ctx.manager = mgr;
-    ctx.torrent = null;
-    ctx.dm = null;
-    ctx.sm = null;
-    ctx.tracker_completed = false;
-    ctx.tracker_response = null;
-    ctx.pex_timer = null;
-    ctx.keepalive_timer = null;
-    ctx.flush_timer = null;
-    ctx.block_timeout_timer = null;
-    ctx.peer_pool = null;
-    ctx.upload_mgr = null;
-    ctx.upload_timer = null;
-    ctx.download_complete = false;
-    ctx.is_partial_seed = false;  // BEP 21: TODO - set true if selective download
-    ctx.exit_code = 0;
-    ctx.num_pieces = 0;
-    ctx.pieces_verified_count = 0;
-    ctx.next_piece_to_verify = 0;
-    ctx.numwant = numwant;
-    ctx.save_path = save_path;
-    ctx.max_concurrent_pieces = session::DEFAULT_MAX_CONCURRENT_PIECES;
-    ctx.torrent_path = torrent_path;          // BEP 21: Torrent file path for resume data
-    ctx.select_files_str = select_files_str;  // BEP 21: File selection for partial seeds
-    ctx.gui_state = null;  // Console mode has no GUI
-    ctx.webseed_mgr = null;
-    ctx.webseed_timer = null;
-    ctx.total_bytes_downloaded = 0;
-    ctx.webseed_bytes_downloaded = 0;
-    ctx.last_speed_update_time = 0;
-    ctx.current_download_speed = 0.0;
-    ctx.last_gui_update_ms = 0;
+    // Create session with default configuration
+    libtorrent::session::SessionOptions options = libtorrent::session::create_default_session_options(save_path, torrent_path);
+    options.numwant = numwant;
+    options.select_files_str = select_files_str;  // BEP 21: File selection for partial seeds
 
-    // Initialize event bus for pub/sub
-    ctx.event_bus = libtorrent::event_bus::create(loop);
-
-    // FastResume: Create download state provider (libtorrent-compatible fastresume format)
-    ctx.state_provider = fastresume_state_provider::create();
+    Session* ctx = libtorrent::session::create_session(mgr, options);
 
     // Check if this is a magnet link or torrent file
     if (torrent_path.starts_with("magnet:"))
     {
         // Magnet link download - start metadata download process
-        magnet_download_session::start_magnet_download(&ctx, torrent_path);
+        magnet_download_session::start_magnet_download(ctx, torrent_path);
     }
     else
     {
         // Load torrent file async
         torrent_loader::load_file_async(loop, torrent_path,
-                                         &session::on_download_load_complete, &ctx);
+                                         &session::on_download_load_complete, ctx);
     }
 
     // Run event loop - blocks until user interrupts (Ctrl+C) or error
@@ -1311,11 +1278,35 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
         ctx.event_bus.free();
     }
 
+    // Free state provider
+    if (ctx.state_provider)
+    {
+        free(ctx.state_provider);
+    }
+
+    // Free composite peer discovery
+    if (ctx.peer_discovery_composite)
+    {
+        ctx.peer_discovery_composite.free();
+    }
+
+    // Free httpseed manager
+    if (ctx.httpseed_mgr)
+    {
+        ctx.httpseed_mgr.free();
+    }
+
+    // Save exit code before freeing ctx
+    int exit_code = ctx.exit_code;
+
+    // Free the session itself
+    free(ctx);
+
     // Free torrent manager
     if (mgr)
     {
         mgr.free();
     }
 
-    return ctx.exit_code;
+    return exit_code;
 }

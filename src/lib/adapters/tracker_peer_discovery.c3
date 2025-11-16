@@ -59,6 +59,7 @@ struct TrackerConfig
     bool announce_to_all_trackers;      // Announce to all trackers in same tier?
     bool announce_to_all_tiers;         // Announce to one tracker from each tier?
     uint max_concurrent_http_announces; // HTTP concurrency limit (UDP unlimited)
+    int tracker_timeout;                 // Tracker announce timeout in seconds (default: 60)
 }
 
 <*
@@ -71,7 +72,8 @@ fn TrackerConfig default_tracker_config() @public
     return (TrackerConfig) {
         .announce_to_all_trackers = DEFAULT_ANNOUNCE_TO_ALL_TRACKERS,
         .announce_to_all_tiers = DEFAULT_ANNOUNCE_TO_ALL_TIERS,
-        .max_concurrent_http_announces = DEFAULT_MAX_CONCURRENT_HTTP_ANNOUNCES
+        .max_concurrent_http_announces = DEFAULT_MAX_CONCURRENT_HTTP_ANNOUNCES,
+        .tracker_timeout = 60  // Default: 60 seconds
     };
 }
 
@@ -637,7 +639,8 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
         // Fire the announce (async)
         tracker::announce_to_url(self.loop, self.torrent, tracker_url,
                                   self.options.local_port, event,
-                                  &on_announce_complete_internal, ctx);
+                                  &on_announce_complete_internal, ctx,
+                                  self.tracker_config.tracker_timeout);
     }
 
     // Free tracker list if it was allocated (modes 3 and 4)

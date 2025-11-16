@@ -494,6 +494,7 @@ alias AnnounceCallback = fn void(TrackerResponse* response, int status, void* us
  @param event : "Event type (started/stopped/completed or empty string)"
  @param callback : "Completion callback"
  @param user_data : "User data passed to callback"
+ @param timeout_seconds : "Tracker announce timeout in seconds (0 = use tracker default)"
 *>
 fn void announce_to_url(event_loop::EventLoop* loop,
                         metainfo::TorrentFile* torrent,
@@ -501,13 +502,14 @@ fn void announce_to_url(event_loop::EventLoop* loop,
                         ushort our_port,
                         String event,
                         AnnounceCallback callback,
-                        void* user_data) @public
+                        void* user_data,
+                        int timeout_seconds) @public
 {
     if (tracker_url.starts_with("udp://"))
     {
         // Use UDP tracker async with URL override
         udp_tracker::async_announce(loop, torrent, our_port, event,
-                                     callback, user_data, 0, tracker_url);
+                                     callback, user_data, timeout_seconds, tracker_url);
     }
     else if (tracker_url.starts_with("http://") || tracker_url.starts_with("https://"))
     {
@@ -536,15 +538,17 @@ fn void announce_to_url(event_loop::EventLoop* loop,
  @param event : "Event type (started/stopped/completed or empty string)"
  @param callback : "Completion callback"
  @param user_data : "User data passed to callback"
+ @param timeout_seconds : "Tracker announce timeout in seconds (0 = use tracker default)"
 *>
 fn void announce(event_loop::EventLoop* loop,
                  metainfo::TorrentFile* torrent,
                  ushort our_port,
                  String event,
                  AnnounceCallback callback,
-                 void* user_data) @public
+                 void* user_data,
+                 int timeout_seconds) @public
 {
     // Use torrent.announce as the tracker URL
-    announce_to_url(loop, torrent, torrent.announce, our_port, event, callback, user_data);
+    announce_to_url(loop, torrent, torrent.announce, our_port, event, callback, user_data, timeout_seconds);
 }
 

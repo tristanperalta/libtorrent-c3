@@ -109,13 +109,15 @@ struct UploadManager
 {
     HashMap{common::SocketAddress, PeerUploadQueue*} peer_queues;
     DynamicArenaAllocator arena;
+    int unchoke_slots_limit;  // Maximum number of unchoked peers (-1 = unlimited)
 }
 
-fn UploadManager* create() @public
+fn UploadManager* create(int unchoke_slots_limit) @public
 {
     UploadManager* mgr = mem::new(UploadManager);
     mgr.peer_queues.init(mem);
     mgr.arena.init(mem, 4096);  // 4KB initial size
+    mgr.unchoke_slots_limit = unchoke_slots_limit;
     return mgr;
 }
 

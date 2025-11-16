@@ -167,6 +167,134 @@ struct HttpSeedVerifyContext
     char[] piece_data;  // Must be freed after verification
 }
 
+// ============================================================================
+// Session Configuration (inspired by libtorrent-rasterbar session_params)
+// ============================================================================
+
+<*
+ * SessionOptions - Configuration for creating a new BitTorrent session.
+ *
+ * This structure provides a clean, type-safe way to configure session behavior
+ * before creating a Session. Inspired by libtorrent-rasterbar's session_params.
+ *
+ * Use preset factory functions for common scenarios:
+ * - create_default_session_options()         - Balanced default settings
+ * - create_min_memory_session_options()      - Optimized for low memory usage
+ * - create_high_performance_session_options() - Optimized for maximum throughput
+ *
+ * Example usage:
+ * ```
+ * SessionOptions options = create_default_session_options("/downloads", "ubuntu.torrent");
+ * options.max_concurrent_pieces = 50;  // Override specific settings
+ * Session* session = create_session(mgr, options);
+ * ```
+ *>
+struct SessionOptions
+{
+    // ========================================================================
+    // Network Settings
+    // ========================================================================
+
+    // Listen interfaces (comma-separated list of interface:port pairs)
+    // Default: "0.0.0.0:6881,[::]:6881" (IPv4 and IPv6 on port 6881)
+    // Examples: "0.0.0.0:6881", "192.168.1.100:8080", "eth0:6881"
+    String listen_interfaces;
+
+    // Maximum number of peer connections
+    // Default: 200
+    // Range: 10-1000 (min_memory: 50, high_performance: 500)
+    int connections_limit;
+
+    // Maximum retries for binding to listen port (increments port on failure)
+    // Default: 10
+    int max_retry_port_bind;
+
+    // ========================================================================
+    // Performance Settings
+    // ========================================================================
+
+    // Maximum number of unchoked peers (upload slots)
+    // Default: 8 (-1 for unlimited)
+    // Range: 2-50 (min_memory: 4, high_performance: 20)
+    int unchoke_slots_limit;
+
+    // Maximum number of pieces to download concurrently
+    // Default: 30 pieces (good balance for 256KB-1MB piece sizes)
+    // Range: 5-100 (min_memory: 10, high_performance: 50)
+    int max_concurrent_pieces;
+
+    // Maximum connection attempts per second
+    // Default: 50 connections/sec
+    // Range: 10-200 (min_memory: 20, high_performance: 100)
+    int connection_speed;
+
+    // ========================================================================
+    // Download Settings
+    // ========================================================================
+
+    // Number of peers to request from tracker
+    // Default: 50 peers
+    // Range: 20-200 (min_memory: 30, high_performance: 100)
+    int numwant;
+
+    // Directory where downloaded files will be saved (REQUIRED)
+    String save_path;
+
+    // Comma-separated list of file indices to download (BEP 21 selective download)
+    // Default: "" (empty = download all files)
+    // Example: "0,2,4" (download only files at indices 0, 2, and 4)
+    String select_files_str;
+
+    // ========================================================================
+    // Tracker Settings
+    // ========================================================================
+
+    // Tracker announce timeout in seconds
+    // Default: 60 seconds
+    // Range: 15-180 seconds
+    int tracker_timeout;
+
+    // Prefer UDP trackers over HTTP trackers
+    // Default: true (UDP is more efficient)
+    bool prefer_udp_trackers;
+
+    // Tracker parallel announce configuration
+    // Controls multi-tracker announce behavior (BEP 12)
+    tracker_peer_discovery::TrackerConfig tracker_config;
+
+    // ========================================================================
+    // DHT Settings (BEP 5)
+    // ========================================================================
+
+    // Enable DHT for trackerless peer discovery
+    // Default: true
+    bool enable_dht;
+
+    // DHT listen port
+    // Default: 6881 (same as peer protocol port)
+    int dht_port;
+
+    // ========================================================================
+    // Resume Data Settings (BEP 21)
+    // ========================================================================
+
+    // Enable fastresume (save/load download state)
+    // Default: true
+    bool enable_fastresume;
+
+    // Path to .torrent file (REQUIRED for fastresume and metadata)
+    String torrent_path;
+
+    // ========================================================================
+    // Advanced Settings
+    // ========================================================================
+
+    // Upload-only mode (seeding without downloading)
+    // Default: false
+    // Set to true for dedicated seeders
+    bool upload_only;
+}
+
 <*
  Download session context for managing the download workflow.
 *>
@@ -254,11 +382,333 @@ struct Session
     int max_concurrent_pieces;          // Max pieces to download simultaneously
     String select_files_str;            // BEP 21: File selection string (e.g., "0,2,4")
 
+    // Network options
+    String listen_interfaces;            // Listen interfaces (e.g., "0.0.0.0:6881,[::]:6881")
+    int connections_limit;               // Maximum peer connections
+    int max_retry_port_bind;             // Max port bind retries
+
+    // Performance options
+    int unchoke_slots_limit;             // Maximum upload slots
+    int connection_speed;                // Max connections per second
+
+    // Tracker options
+    int tracker_timeout;                 // Tracker announce timeout (seconds)
+    bool prefer_udp_trackers;            // Prefer UDP over HTTP trackers
+
+    // DHT options
+    int dht_port;                        // DHT listen port
+
+    // Advanced options
+    bool upload_only;                    // Upload-only (seeding) mode
+
     // GUI integration (null in CLI mode, cast to GUI type in GUI code)
     void* gui_state;
 
     // Event bus for pub/sub (decouples GUI from download logic)
     event_bus::EventBus* event_bus;
+}
+
+// ============================================================================
+// SessionOptions Factory Functions
+// ============================================================================
+
+<*
+ * Create default SessionOptions with balanced settings.
+ *
+ * This preset provides a good balance between performance and resource usage,
+ * suitable for most use cases.
+ *
+ * @param save_path "Directory where files will be saved"
+ * @param torrent_path "Path to .torrent file (or magnet link)"
+ * @return "SessionOptions with default settings"
+ *>
+fn SessionOptions create_default_session_options(String save_path, String torrent_path) @public
+{
+    SessionOptions options;
+
+    // Network settings
+    options.listen_interfaces = "0.0.0.0:6881,[::]:6881";
+    options.connections_limit = 200;
+    options.max_retry_port_bind = 10;
+
+    // Performance settings
+    options.unchoke_slots_limit = 8;
+    options.max_concurrent_pieces = DEFAULT_MAX_CONCURRENT_PIECES;  // 30
+    options.connection_speed = 50;
+
+    // Download settings
+    options.numwant = 50;
+    options.save_path = save_path;
+    options.select_files_str = "";
+
+    // Tracker settings
+    options.tracker_timeout = 60;
+    options.prefer_udp_trackers = true;
+    options.tracker_config = tracker_peer_discovery::default_tracker_config();
+
+    // DHT settings
+    options.enable_dht = true;
+    options.dht_port = 6881;
+
+    // Resume settings
+    options.enable_fastresume = true;
+    options.torrent_path = torrent_path;
+
+    // Advanced settings
+    options.upload_only = false;
+
+    return options;
+}
+
+<*
+ * Create SessionOptions optimized for minimal memory usage.
+ *
+ * This preset reduces memory consumption at the cost of some performance.
+ * Suitable for:
+ * - Systems with limited RAM
+ * - Running many simultaneous torrents
+ * - Low-priority background downloads
+ *
+ * @param save_path "Directory where files will be saved"
+ * @param torrent_path "Path to .torrent file (or magnet link)"
+ * @return "SessionOptions optimized for low memory"
+ *>
+fn SessionOptions create_min_memory_session_options(String save_path, String torrent_path) @public
+{
+    SessionOptions options;
+
+    // Network settings - reduced connections
+    options.listen_interfaces = "0.0.0.0:6881,[::]:6881";
+    options.connections_limit = 50;
+    options.max_retry_port_bind = 10;
+
+    // Performance settings - conservative limits
+    options.unchoke_slots_limit = 4;
+    options.max_concurrent_pieces = 10;  // Fewer concurrent pieces = less memory
+    options.connection_speed = 20;       // Slower connection rate
+
+    // Download settings - fewer peers
+    options.numwant = 30;
+    options.save_path = save_path;
+    options.select_files_str = "";
+
+    // Tracker settings
+    options.tracker_timeout = 60;
+    options.prefer_udp_trackers = true;
+    options.tracker_config = tracker_peer_discovery::default_tracker_config();
+
+    // DHT settings
+    options.enable_dht = true;
+    options.dht_port = 6881;
+
+    // Resume settings
+    options.enable_fastresume = true;
+    options.torrent_path = torrent_path;
+
+    // Advanced settings
+    options.upload_only = false;
+
+    return options;
+}
+
+<*
+ * Create SessionOptions optimized for maximum performance.
+ *
+ * This preset maximizes download speed and throughput at the cost of higher
+ * resource usage. Suitable for:
+ * - High-bandwidth connections
+ * - Systems with plenty of RAM and CPU
+ * - Priority downloads that need maximum speed
+ * - Dedicated seeders
+ *
+ * @param save_path "Directory where files will be saved"
+ * @param torrent_path "Path to .torrent file (or magnet link)"
+ * @return "SessionOptions optimized for high performance"
+ *>
+fn SessionOptions create_high_performance_session_options(String save_path, String torrent_path) @public
+{
+    SessionOptions options;
+
+    // Network settings - maximum connections
+    options.listen_interfaces = "0.0.0.0:6881,[::]:6881";
+    options.connections_limit = 500;
+    options.max_retry_port_bind = 10;
+
+    // Performance settings - aggressive limits
+    options.unchoke_slots_limit = 20;    // More upload slots
+    options.max_concurrent_pieces = 50;  // More concurrent downloads
+    options.connection_speed = 100;      // Faster connection rate
+
+    // Download settings - request more peers
+    options.numwant = 100;
+    options.save_path = save_path;
+    options.select_files_str = "";
+
+    // Tracker settings
+    options.tracker_timeout = 60;
+    options.prefer_udp_trackers = true;
+    options.tracker_config = tracker_peer_discovery::default_tracker_config();
+
+    // DHT settings
+    options.enable_dht = true;
+    options.dht_port = 6881;
+
+    // Resume settings
+    options.enable_fastresume = true;
+    options.torrent_path = torrent_path;
+
+    // Advanced settings
+    options.upload_only = false;
+
+    return options;
+}
+
+// ============================================================================
+// Session Factory Methods
+// ============================================================================
+
+<*
+ * Create a new BitTorrent session with the given configuration.
+ *
+ * This factory method creates and initializes a Session from SessionOptions,
+ * encapsulating all the boilerplate initialization logic in one place.
+ *
+ * The created session is heap-allocated and must be freed by the caller using
+ * Session.free() when done.
+ *
+ * Example usage:
+ * ```
+ * SessionOptions options = create_default_session_options("/downloads", "ubuntu.torrent");
+ * options.max_concurrent_pieces = 50;  // Override if needed
+ *
+ * TorrentManager* mgr = torrent_manager::create(loop, 1);
+ * Session* session = create_session(mgr, options);
+ *
+ * // ... use session ...
+ *
+ * free(session);
+ * mgr.free();
+ * ```
+ *
+ * @param manager "TorrentManager that owns this session"
+ * @param options "Configuration options for the session"
+ * @return "Newly created Session pointer (must be freed)"
+ *>
+fn Session* create_session(torrent_manager::TorrentManager* manager, SessionOptions options) @public
+{
+    Session* ctx = mem::new(Session);
+
+    // Set manager (borrowed reference)
+    ctx.manager = manager;
+
+    // Initialize torrent-specific resources (null until torrent loads)
+    ctx.torrent = null;
+    ctx.dm = null;
+    ctx.sm = null;
+
+    // Initialize tracker state
+    ctx.tracker_completed = false;
+    ctx.tracker_response = null;
+    ctx.pex_timer = null;
+    ctx.keepalive_timer = null;
+    ctx.flush_timer = null;
+    ctx.block_timeout_timer = null;
+
+    // Initialize multi-tracker support
+    ctx.tracker_mgr = null;
+    ctx.current_tracker_url = "";
+    ctx.tracker_config = options.tracker_config;
+
+    // Initialize peer discovery
+    ctx.peer_discovery_composite = null;
+    ctx.tracker_discovery = null;
+
+    // Initialize peer management
+    ctx.peer_pool = null;
+
+    // Initialize upload/seeding
+    ctx.upload_mgr = null;
+    ctx.upload_timer = null;
+
+    // Initialize DHT search
+    ctx.dht_search = null;
+    ctx.dht_timer = null;
+    ctx.dht_check_timer = null;
+
+    // Initialize web seeding
+    ctx.webseed_mgr = null;
+    ctx.webseed_timer = null;
+
+    // Initialize HTTP seeding
+    ctx.httpseed_mgr = null;
+    ctx.httpseed_timer = null;
+
+    // Initialize magnet link support
+    ctx.is_magnet_download = false;
+    ctx.metadata_dl = null;
+    ctx.metadata_timer = null;
+
+    // Initialize download state
+    ctx.download_complete = false;
+    ctx.is_partial_seed = false;
+    ctx.exit_code = 0;
+    ctx.torrent_path = options.torrent_path;
+
+    // Create download state provider (FastResume)
+    if (options.enable_fastresume)
+    {
+        ctx.state_provider = fastresume_state_provider::create();
+    }
+    else
+    {
+        ctx.state_provider = null;
+    }
+
+    // Initialize download statistics
+    ctx.total_bytes_downloaded = 0;
+    ctx.webseed_bytes_downloaded = 0;
+    ctx.last_speed_update_time = 0;
+    ctx.current_download_speed = 0.0;
+    ctx.speed_tracker = null;  // Created later during torrent setup
+    ctx.last_gui_update_ms = 0;
+
+    // Initialize resume verification
+    ctx.num_pieces = 0;
+    ctx.pieces_verified_count = 0;
+    ctx.next_piece_to_verify = 0;
+
+    // Set options from SessionOptions
+    ctx.numwant = options.numwant;
+    ctx.save_path = options.save_path;
+    ctx.max_concurrent_pieces = options.max_concurrent_pieces;
+    ctx.select_files_str = options.select_files_str;
+
+    // Network options
+    ctx.listen_interfaces = options.listen_interfaces;
+    ctx.connections_limit = options.connections_limit;
+    ctx.max_retry_port_bind = options.max_retry_port_bind;
+
+    // Performance options
+    ctx.unchoke_slots_limit = options.unchoke_slots_limit;
+    ctx.connection_speed = options.connection_speed;
+
+    // Tracker options
+    ctx.tracker_timeout = options.tracker_timeout;
+    ctx.prefer_udp_trackers = options.prefer_udp_trackers;
+
+    // DHT options
+    ctx.dht_port = options.dht_port;
+
+    // Advanced options
+    ctx.upload_only = options.upload_only;
+
+    // Initialize GUI integration (null by default, set later if needed)
+    ctx.gui_state = null;
+
+    // Create event bus for pub/sub
+    ctx.event_bus = event_bus::create(ctx.get_loop());
+
+    return ctx;
 }
 
 // ============================================================================
@@ -2331,10 +2781,10 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
-        .max_peerlist_size = 1000,     // Track up to 1000 peers (vs old limit of 10)
-        .max_active_connections = 25,   // Future: Phase 3 will manage connections
-        .max_failcount = 3,             // Future: Phase 3 will track failures
-        .min_reconnect_time = 60        // Future: Phase 3 will handle retries
+        .max_peerlist_size = 1000,                          // Track up to 1000 peers (vs old limit of 10)
+        .max_active_connections = (usz)ctx.connections_limit,  // From SessionOptions
+        .max_failcount = 3,                                 // Future: Phase 3 will track failures
+        .min_reconnect_time = 60                            // Future: Phase 3 will handle retries
     };
     ctx.peer_pool = peer_pool::create(ctx.get_loop(), pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
     io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);
@@ -2350,11 +2800,18 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         &on_download_peer_disconnected,
         ctx
     );
+
+    // Set upload-only mode if requested (for dedicated seeders)
+    if (ctx.upload_only)
+    {
+        ctx.peer_pool.set_upload_only(true);
+        io::printfn("Upload-only mode enabled (dedicated seeding)");
+    }
     io::printfn("");
 
     // Create upload manager
-    ctx.upload_mgr = upload_manager::create();
-    io::printfn("Created upload manager");
+    ctx.upload_mgr = upload_manager::create(ctx.unchoke_slots_limit);
+    io::printfn("Created upload manager (unchoke slots: %d)", ctx.unchoke_slots_limit);
 
     // Create upload timer (process upload requests every 1 second)
     async::timer::Timer*? upload_timer_opt = async::timer::create(ctx.get_loop());
@@ -2439,7 +2896,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Initialize DHT for peer discovery (skip for private torrents per BEP 27)
     if (!ctx.torrent.info.private)
     {
-        init_dht(ctx, 6881);  // Use same port as BitTorrent protocol
+        init_dht(ctx, (ushort)ctx.dht_port);  // From SessionOptions
     }
     else
     {

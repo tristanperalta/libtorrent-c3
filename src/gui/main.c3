@@ -487,75 +487,46 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     // Create TorrentManager for managing this torrent
     libtorrent::torrent_manager::TorrentManager* mgr = libtorrent::torrent_manager::create(loop, 1);
 
-    Session ctx;
-    ctx.manager = mgr;
+    // Create session with default configuration
+    libtorrent::session::SessionOptions options = libtorrent::session::create_high_performance_session_options(save_path, torrent_path);
+    options.numwant = numwant;
+    options.select_files_str = "";  // BEP 21: File selection loaded from resume data if available
+
+    Session* ctx = libtorrent::session::create_session(mgr, options);
+
+    // Set torrent (already loaded in GUI mode, unlike CLI which loads async)
     ctx.torrent = torrent;
-    ctx.dm = null;
-    ctx.sm = null;
-    ctx.tracker_completed = false;
-    ctx.pex_timer = null;
-    ctx.keepalive_timer = null;
-    ctx.flush_timer = null;
-    ctx.block_timeout_timer = null;
-    ctx.peer_pool = null;
-    ctx.upload_mgr = null;
-    ctx.upload_timer = null;
-    ctx.dht_search = null;
-    ctx.dht_timer = null;
-    ctx.dht_check_timer = null;
-    // Note: dht_tick_timer and lsd_timer moved to SharedResources
-    ctx.download_complete = false;
-    ctx.is_partial_seed = false;  // BEP 21: TODO - set true if selective download
-    ctx.exit_code = 0;
     ctx.num_pieces = num_pieces;
-    ctx.pieces_verified_count = 0;
-    ctx.next_piece_to_verify = 0;
-    ctx.numwant = numwant;
-    ctx.save_path = save_path;
-    ctx.max_concurrent_pieces = session::DEFAULT_MAX_CONCURRENT_PIECES;
-    ctx.torrent_path = torrent_path;  // BEP 21: Torrent file path for resume data
-    ctx.select_files_str = "";  // BEP 21: File selection loaded from resume data if available
+
+    // Set GUI state
     ctx.gui_state = (void*)ui;
-    ctx.webseed_mgr = null;
-    ctx.webseed_timer = null;
-    ctx.total_bytes_downloaded = 0;
-    ctx.webseed_bytes_downloaded = 0;
-    ctx.last_speed_update_time = 0;
-    ctx.current_download_speed = 0.0;
-    ctx.last_gui_update_ms = 0;
-
-    // Initialize event bus for pub/sub
-    ctx.event_bus = libtorrent::event_bus::create(loop);
-
-    // FastResume: Create download state provider (libtorrent-compatible fastresume format)
-    ctx.state_provider = fastresume_state_provider::create();
 
     // Subscribe GUI event handlers to EventBus
-    ctx.event_bus.subscribe(event_types::EVENT_PROGRESS_UPDATED, &on_progress_updated_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_ANNOUNCE_FAILED, &on_tracker_announce_failed_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_NO_PEERS, &on_tracker_no_peers_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_ANNOUNCE_SUCCESS, &on_tracker_announce_success_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_PEER_STATS_UPDATED, &on_peer_stats_updated_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_STATUS_CHANGED, &on_tracker_status_changed_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_PROGRESS_UPDATED, &on_progress_updated_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_ANNOUNCE_FAILED, &on_tracker_announce_failed_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_NO_PEERS, &on_tracker_no_peers_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_ANNOUNCE_SUCCESS, &on_tracker_announce_success_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_PEER_STATS_UPDATED, &on_peer_stats_updated_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_TRACKER_STATUS_CHANGED, &on_tracker_status_changed_event, ctx);
 
     // Subscribe DHT event handlers
-    ctx.event_bus.subscribe(event_types::EVENT_DHT_STARTED, &on_dht_started_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_DHT_BOOTSTRAPPED, &on_dht_bootstrapped_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_DHT_PEERS_FOUND, &on_dht_peers_found_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_DHT_QUERY_COMPLETE, &on_dht_query_complete_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_STARTED, &on_dht_started_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_BOOTSTRAPPED, &on_dht_bootstrapped_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_PEERS_FOUND, &on_dht_peers_found_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_DHT_QUERY_COMPLETE, &on_dht_query_complete_event, ctx);
 
     // Subscribe WebSeed event handlers
-    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_STARTED, &on_webseed_download_started_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_COMPLETE, &on_webseed_download_complete_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_FAILED, &on_webseed_download_failed_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_URL_DISABLED, &on_webseed_url_disabled_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_STARTED, &on_webseed_download_started_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_COMPLETE, &on_webseed_download_complete_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_DOWNLOAD_FAILED, &on_webseed_download_failed_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_WEBSEED_URL_DISABLED, &on_webseed_url_disabled_event, ctx);
 
     // Subscribe to file progress events (BEP 21 Phase 2)
-    ctx.event_bus.subscribe(event_types::EVENT_FILE_PROGRESS_UPDATED, &on_file_progress_updated_event, &ctx);
-    ctx.event_bus.subscribe(event_types::EVENT_FILE_COMPLETED, &on_file_completed_event, &ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_FILE_PROGRESS_UPDATED, &on_file_progress_updated_event, ctx);
+    ctx.event_bus.subscribe(event_types::EVENT_FILE_COMPLETED, &on_file_completed_event, ctx);
 
     // Register file selection callback (BEP 21 Phase 3)
-    raylib_gui::set_file_selection_callback(ui, &on_file_selection_toggled, &ctx);
+    raylib_gui::set_file_selection_callback(ui, &on_file_selection_toggled, ctx);
 
     // Initialize tracker configuration (parallel announce settings)
     ctx.tracker_config = tracker_peer_discovery::default_tracker_config();
@@ -647,7 +618,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
 
     // Initialize file list in GUI (BEP 21)
     // Call after both storage and download managers are created
-    update_gui_file_list(&ctx);
+    update_gui_file_list(ctx);
 
     // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();
@@ -659,7 +630,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         &session::on_download_peer_connected,
         &session::on_download_peer_message,
         &session::on_download_peer_disconnected,
-        &ctx
+        ctx
     );
 
     // Create upload manager
@@ -675,7 +646,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     else
     {
         ctx.upload_timer = upload_timer_opt;
-        ctx.upload_timer.start(1000, 1000, &session::on_upload_timer_tick, &ctx);
+        ctx.upload_timer.start(1000, 1000, &session::on_upload_timer_tick, ctx);
         raylib_gui::add_log(ui, "Started upload request processor (1s interval)");
     }
 
@@ -688,28 +659,28 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     else
     {
         ctx.flush_timer = flush_timer_opt;
-        ctx.flush_timer.start(30000, 30000, &session::on_flush_timer_tick, &ctx);
+        ctx.flush_timer.start(30000, 30000, &session::on_flush_timer_tick, ctx);
         raylib_gui::add_log(ui, "Started periodic file sync and fastresume saves (30s interval)");
     }
 
     // Initialize DHT for peer discovery
     raylib_gui::add_log(ui, "Starting DHT on port 6881...");
-    session::init_dht(&ctx, 6881);
+    session::init_dht(ctx, 6881);
 
     // Initialize unified peer discovery (Hexagonal Architecture - Composite Pattern)
     raylib_gui::add_log(ui, "Initializing peer discovery...");
 
     // Build composite with all applicable discovery sources
-    ctx.peer_discovery_composite = session::build_peer_discovery_composite(&ctx);
+    ctx.peer_discovery_composite = session::build_peer_discovery_composite(ctx);
 
     // Start unified discovery through composite
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    peer_discovery::DiscoveryOptions discovery_options = peer_discovery::default_options();
     ctx.peer_discovery_composite.start_discovery(
         &ctx.torrent.info_hash,
-        &options,
+        &discovery_options,
         &session::on_peer_discovery_peers,
         &session::on_peer_discovery_complete,
-        &ctx
+        ctx
     );
 
     usz source_count = ctx.peer_discovery_composite.get_source_count();
@@ -737,7 +708,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
             else
             {
                 ctx.webseed_timer = timer_opt;
-                ctx.webseed_timer.start(2000, 2000, &session::on_webseed_timer_tick, &ctx);
+                ctx.webseed_timer.start(2000, 2000, &session::on_webseed_timer_tick, ctx);
                 raylib_gui::add_log(ui, "Web seed timer started");
             }
         }
@@ -745,7 +716,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
 
     // Initialize storage manager (create directories, open files)
     raylib_gui::add_log(ui, "Initializing storage...");
-    ctx.sm.initialize(&session::on_storage_initialized, &ctx);
+    ctx.sm.initialize(&session::on_storage_initialized, ctx);
 
     // Main GUI loop - run until window closes
     // Continue running after download completes for seeding
@@ -915,6 +886,30 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
         ctx.event_bus.free();
     }
 
+    // Free state provider
+    if (ctx.state_provider)
+    {
+        free(ctx.state_provider);
+    }
+
+    // Free composite peer discovery
+    if (ctx.peer_discovery_composite)
+    {
+        ctx.peer_discovery_composite.free();
+    }
+
+    // Free httpseed manager
+    if (ctx.httpseed_mgr)
+    {
+        ctx.httpseed_mgr.free();
+    }
+
+    // Save exit code before freeing ctx
+    int exit_code = ctx.exit_code;
+
+    // Free the session itself
+    free(ctx);
+
     // Release shared resources (auto-frees when ref_count reaches 0)
     io::printfn("Freeing torrent manager...");
     if (mgr)
@@ -929,5 +924,5 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     raylib_gui::free(ui);
 
     io::printfn("Cleanup complete");
-    return ctx.exit_code;
+    return exit_code;
 }

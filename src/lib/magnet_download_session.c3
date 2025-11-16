@@ -181,7 +181,7 @@ fn void start_tracker_announce(session::Session* ctx) @private
 
     // Announce with "started" event
     tracker::announce_to_url(ctx.get_loop(), ctx.torrent, tracker_url, 6881, "started",
-                             &on_announce_complete, ctx);
+                             &on_announce_complete, ctx, ctx.tracker_timeout);
 }
 
 /**
@@ -202,7 +202,7 @@ fn void on_announce_complete(tracker::TrackerResponse* response, int status, voi
             ctx.current_tracker_url = next_tracker;
             io::printfn("Trying next tracker: %s", next_tracker);
             tracker::announce_to_url(ctx.get_loop(), ctx.torrent, next_tracker, 6881, "started",
-                                     &on_announce_complete, ctx);
+                                     &on_announce_complete, ctx, ctx.tracker_timeout);
         }
         else
         {
@@ -354,8 +354,8 @@ fn void on_metadata_complete(session::Session* ctx) @private
     ctx.next_piece_to_verify = 0;
 
     // Create upload manager
-    ctx.upload_mgr = upload_manager::create();
-    io::printfn("[Metadata] Created upload manager");
+    ctx.upload_mgr = upload_manager::create(ctx.unchoke_slots_limit);
+    io::printfn("[Metadata] Created upload manager (unchoke slots: %d)", ctx.unchoke_slots_limit);
 
     // Create upload timer (process upload requests every 1 second)
     async::timer::Timer*? upload_timer_opt = async::timer::create(ctx.get_loop());
