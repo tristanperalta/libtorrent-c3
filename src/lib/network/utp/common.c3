@@ -43,6 +43,7 @@ const usz MAX_PACKET_SIZE = 1400;
 faultdef UTP_INVALID_PACKET;     // Malformed packet
 faultdef UTP_PACKET_TOO_SHORT;   // Packet smaller than header size
 faultdef UTP_INVALID_VERSION;    // Unsupported protocol version
+faultdef UTP_PACKET_NOT_FOUND;   // Packet not found in send buffer (Week 2)
 
 // NOTE: For socket addresses, use common::SocketAddress directly.
 // This provides robust IPv4/IPv6 support with std::net::InetAddress integration.

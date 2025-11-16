@@ -8,6 +8,7 @@ import async::udp;
 import async::event_loop;
 import uv;
 import std::io;
+import std::time;
 import std::collections::map;
 
 // Module alias to distinguish between libtorrent::common and libtorrent::utp::common
@@ -192,6 +193,113 @@ fn void UtpSocket.send_packet(&self, lib_common::SocketAddress remote_addr,
     self.udp_socket.send(ip_str, (int)remote_addr.port, packet_data, null, null);
 }
 
+/**
+ * Send a SYN packet to initiate a connection (Week 2).
+ *
+ * @param conn : Connection to send SYN for
+ */
+fn void UtpSocket.send_syn(&self, connection::UtpConnection* conn) @public
+{
+    // Build SYN packet header
+    packet::UtpHeader header;
+    header.packet_type = common::ST_SYN;
+    header.version = 1;
+    header.extension = 0;
+    header.connection_id = conn.send_id;
+    header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
+    header.timestamp_difference_microseconds = 0;  // No delay measurement yet
+    header.wnd_size = conn.local_window;
+    header.seq_nr = conn.seq_nr;
+    header.ack_nr = 0;  // No ACK in SYN
+
+    // Send packet
+    self.send_packet(conn.remote_addr, &header, {});
+
+    // Update connection state
+    conn.last_send_time = (long)time::now().to_seconds() * 1_000_000;
+}
+
+/**
+ * Send a SYN-ACK packet in response to a SYN (Week 2).
+ *
+ * @param conn : Connection to send SYN-ACK for
+ */
+fn void UtpSocket.send_syn_ack(&self, connection::UtpConnection* conn) @public
+{
+    // Build SYN-ACK packet header (ST_STATE with ack_nr set)
+    packet::UtpHeader header;
+    header.packet_type = common::ST_STATE;
+    header.version = 1;
+    header.extension = 0;
+    header.connection_id = conn.send_id;
+    header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
+    header.timestamp_difference_microseconds = conn.their_delay;
+    header.wnd_size = conn.local_window;
+    header.seq_nr = conn.seq_nr;
+    header.ack_nr = conn.ack_nr;  // ACK their SYN
+
+    // Send packet
+    self.send_packet(conn.remote_addr, &header, {});
+
+    // Update connection state
+    conn.last_send_time = (long)time::now().to_seconds() * 1_000_000;
+}
+
+/**
+ * Send a FIN packet to gracefully close a connection (Week 3).
+ *
+ * @param conn : Connection to send FIN for
+ */
+fn void UtpSocket.send_fin(&self, connection::UtpConnection* conn) @public
+{
+    // Build FIN packet header
+    packet::UtpHeader header;
+    header.packet_type = common::ST_FIN;
+    header.version = 1;
+    header.extension = 0;
+    header.connection_id = conn.send_id;
+    header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
+    header.timestamp_difference_microseconds = conn.their_delay;
+    header.wnd_size = conn.local_window;
+    header.seq_nr = conn.seq_nr;
+    header.ack_nr = conn.ack_nr;
+
+    // Send packet (no payload)
+    self.send_packet(conn.remote_addr, &header, {});
+
+    // Update connection state
+    conn.last_send_time = (long)time::now().to_seconds() * 1_000_000;
+}
+
+/**
+ * Send a RESET packet to forcefully close a connection (Week 3).
+ *
+ * Used for unknown connection IDs, protocol errors, or forceful close.
+ *
+ * @param remote_addr : Destination address
+ * @param conn_id : Connection ID to reset
+ * @param seq_nr : Sequence number (usually 0 for unknown connections)
+ * @param ack_nr : Acknowledgment number (from received packet)
+ */
+fn void UtpSocket.send_reset(&self, lib_common::SocketAddress remote_addr,
+                             ushort conn_id, ushort seq_nr, ushort ack_nr) @public
+{
+    // Build RESET packet header
+    packet::UtpHeader header;
+    header.packet_type = common::ST_RESET;
+    header.version = 1;
+    header.extension = 0;
+    header.connection_id = conn_id;
+    header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
+    header.timestamp_difference_microseconds = 0;
+    header.wnd_size = 0;  // Not applicable for RESET
+    header.seq_nr = seq_nr;
+    header.ack_nr = ack_nr;
+
+    // Send packet (no payload)
+    self.send_packet(remote_addr, &header, {});
+}
+
 // ============================================================================
 // Packet Reception (Internal)
 // ============================================================================
@@ -241,7 +349,15 @@ fn void on_packet_received(udp::UdpSocket* udp_socket, char[] data,
                 socket.new_conn_cb(socket, remote_addr, &header, socket.user_data);
             }
         }
-        // else: Packet for unknown connection, ignore
+        else
+        {
+            // Week 3: Packet for unknown connection - send RESET
+            // Don't send RESET for RESET packets (avoid loops)
+            if (header.packet_type != common::ST_RESET)
+            {
+                socket.send_reset(remote_addr, conn_id, 0, header.seq_nr);
+            }
+        }
     }
     else
     {

@@ -4,13 +4,14 @@ import libtorrent::utp::common;
 import libtorrent::utp::packet;
 import libtorrent::common;
 import std::time;
+import std::collections::list;
 
 <*
  μTP Connection State Machine
  =============================
 
  Implements the connection lifecycle and state transitions for μTP (BEP 29).
- Phase 1: Basic state machine skeleton with essential fields and transitions.
+ Basic state machine skeleton with essential fields and transitions.
 
  Connection States (BEP 29):
  - NONE: Uninitialized/closed
@@ -20,6 +21,60 @@ import std::time;
  - ERROR_WAIT: Error state, waiting before cleanup
  - DELETING: Marked for deletion
 *>
+
+// ============================================================================
+// Send Buffer
+// ============================================================================
+
+/**
+ * Sent packet awaiting acknowledgment.
+ * Stored in send buffer until ACKed or retransmit limit reached.
+ */
+struct SentPacket
+{
+    ushort seq_nr;              // Sequence number
+    char[] data;                // Full packet data (header + payload) - owned
+    long send_time;             // Timestamp when sent (microseconds)
+    char num_transmissions;     // Retry counter (max 5 in later phase)
+}
+
+/**
+ * Send buffer - tracks unacknowledged packets.
+ *
+ * Simple in-order tracking
+ * - Packets stored in send order
+ * - ACK removes packets ≤ ack_nr
+ * - Backpressure when buffer full
+ * - No out-of-order ACK complexity yet
+ */
+struct SendBuffer
+{
+    List{SentPacket*} packets;  // Sent packets awaiting ACK
+    ushort oldest_seq;          // First unACKed sequence number
+    usz max_buffered;           // Backpressure limit (default: 256 packets)
+}
+
+// ============================================================================
+// Receive Buffer
+// ============================================================================
+
+/**
+ * Receive buffer - stores received data chunks in order.
+ *
+ * In-order delivery
+ * - Stores data chunks in arrival order
+ * - read() returns first chunk (or partial chunk) - "Option B"
+ * - Tracks partial chunk reads with offset
+ * - No out-of-order buffering yet
+ */
+struct ReceiveBuffer
+{
+    List{char[]} chunks;         // Data chunks in order (each chunk is owned)
+    ushort expected_seq;         // Next expected sequence number
+    usz total_buffered;          // Total bytes buffered
+    usz max_buffered;            // Backpressure limit (default: 1MB)
+    usz current_chunk_offset;    // Offset into first chunk for partial reads
+}
 
 // ============================================================================
 // Connection State
@@ -46,7 +101,7 @@ enum ConnectionState : char
  * μTP connection instance.
  *
  * Tracks connection state, sequence numbers, remote address, and timing info.
- * Phase 1: Essential fields only. Buffers are managed separately.
+ * Added send buffer for packet tracking and retransmission.
  */
 struct UtpConnection
 {
@@ -78,6 +133,78 @@ struct UtpConnection
 
     // Flags
     bool is_outgoing;    // true = we initiated, false = they initiated
+
+    // Send buffer for reliable delivery
+    SendBuffer send_buf;
+
+    // Receive buffer for in-order data delivery
+    ReceiveBuffer recv_buf;
+
+    // FIN handling
+    bool fin_sent;       // true if we've sent a FIN packet
+    ushort fin_seq_nr;   // Sequence number of our FIN packet
+    bool remote_fin_received;  // true if remote sent FIN
+
+    // Error handling
+    ErrorReason error_reason;  // Why connection failed (if in error state)
+}
+
+/**
+ * Reasons for connection errors.
+ */
+enum ErrorReason : char
+{
+    NONE,              // No error
+    RESET_RECEIVED,    // Remote sent RESET packet
+    TIMEOUT,           // Connection timed out
+    PROTOCOL_ERROR,    // Protocol violation
+    UNKNOWN            // Unknown/generic error
+}
+
+// ============================================================================
+// Connection ID Management
+// ============================================================================
+
+/**
+ * Allocate a new outgoing connection ID (odd numbers).
+ *
+ * Uses a simple counter-based allocation. In production, this should be
+ * randomized and check for collisions.
+ *
+ * @param seed : Random seed for ID generation
+ * @return Odd connection ID for outgoing connection
+ */
+fn ushort allocate_outgoing_id(ushort seed) @public
+{
+    // Ensure odd by setting low bit
+    return seed | 1;
+}
+
+/**
+ * Get the corresponding receive ID for a send ID.
+ *
+ * BEP 29: recv_id = send_id + 1 for outgoing, send_id - 1 for incoming
+ *
+ * @param send_id : Send connection ID
+ * @param is_outgoing : true if outgoing connection
+ * @return Corresponding receive ID
+ */
+fn ushort get_recv_id_for_send_id(ushort send_id, bool is_outgoing) @public
+{
+    return is_outgoing ? (ushort)(send_id + 1) : (ushort)(send_id - 1);
+}
+
+/**
+ * Validate connection ID (check odd/even correctness).
+ *
+ * @param conn_id : Connection ID to validate
+ * @param should_be_odd : true if ID should be odd
+ * @return true if ID is valid
+ */
+fn bool validate_connection_id(ushort conn_id, bool should_be_odd) @public
+{
+    bool is_odd = (conn_id & 1) == 1;
+    return is_odd == should_be_odd;
 }
 
 // ============================================================================
@@ -110,7 +237,7 @@ fn UtpConnection* create_outgoing(common::SocketAddress remote_addr, ushort conn
 
     conn.remote_addr = remote_addr;
 
-    // Default window size (Phase 1: static 1MB)
+    // Default window size
     conn.local_window = 1024 * 1024;
     conn.remote_window = 1024 * 1024;  // Assume max until we learn actual
 
@@ -121,6 +248,20 @@ fn UtpConnection* create_outgoing(common::SocketAddress remote_addr, ushort conn
 
     conn.our_delay = 0;
     conn.their_delay = 0;
+
+    // Initialize send buffer
+    conn.send_buf.init();
+
+    // Initialize receive buffer
+    conn.recv_buf.init();
+
+    // Initialize FIN tracking
+    conn.fin_sent = false;
+    conn.fin_seq_nr = 0;
+    conn.remote_fin_received = false;
+
+    // Initialize error tracking
+    conn.error_reason = ErrorReason.NONE;
 
     return conn;
 }
@@ -163,7 +304,399 @@ fn UtpConnection* create_incoming(common::SocketAddress remote_addr, packet::Utp
     conn.our_delay = 0;
     conn.their_delay = 0;
 
+    // Initialize send buffer
+    conn.send_buf.init();
+
+    // Initialize receive buffer
+    conn.recv_buf.init();
+
+    // Initialize FIN tracking
+    conn.fin_sent = false;
+    conn.fin_seq_nr = 0;
+    conn.remote_fin_received = false;
+
+    // Initialize error tracking
+    conn.error_reason = ErrorReason.NONE;
+
     return conn;
+}
+
+// ============================================================================
+// Send Buffer Implementation
+// ============================================================================
+
+/**
+ * Compare sequence numbers with wraparound handling.
+ *
+ * Uses signed arithmetic to handle 16-bit wraparound correctly.
+ * Example: seq 65535 vs 0 should treat 0 as "greater"
+ *
+ * @param a : First sequence number
+ * @param b : Second sequence number
+ * @return < 0 if a < b, 0 if a == b, > 0 if a > b
+ */
+fn int compare_seq_nr(ushort a, ushort b) @private
+{
+    // Cast to signed short for correct wraparound behavior
+    short diff = (short)(a - b);
+    return (int)diff;
+}
+
+/**
+ * Initialize send buffer.
+ *
+ * @param max_buffered : Maximum packets to buffer (default: 256)
+ */
+fn void SendBuffer.init(&self, usz max_buffered = 256) @private
+{
+    self.packets.init(mem);
+    self.oldest_seq = 0;
+    self.max_buffered = max_buffered;
+}
+
+/**
+ * Check if we can send more packets (backpressure check).
+ *
+ * @return true if buffer has room for more packets
+ */
+fn bool SendBuffer.can_send(&self) @public
+{
+    return self.packets.len() < self.max_buffered;
+}
+
+/**
+ * Add sent packet to buffer.
+ * Packet data is copied (caller retains ownership of original).
+ *
+ * @param seq_nr : Sequence number of packet
+ * @param packet_data : Full packet bytes (header + payload)
+ */
+fn void SendBuffer.add_packet(&self, ushort seq_nr, char[] packet_data) @public
+{
+    // Create packet structure
+    SentPacket* pkt = mem::new(SentPacket);
+    pkt.seq_nr = seq_nr;
+    pkt.num_transmissions = 1;
+    pkt.send_time = (long)time::now().to_seconds() * 1_000_000;
+
+    // Copy packet data (we own this copy)
+    pkt.data = mem::new_array(char, packet_data.len);
+    for (usz i = 0; i < packet_data.len; i++)
+    {
+        pkt.data[i] = packet_data[i];
+    }
+
+    // Add to buffer
+    self.packets.push(pkt);
+
+    // Update oldest_seq if this is the first packet
+    if (self.packets.len() == 1)
+    {
+        self.oldest_seq = seq_nr;
+    }
+}
+
+/**
+ * Process ACK - remove all packets with seq_nr ≤ ack_nr.
+ * Handles sequence number wraparound correctly.
+ *
+ * @param ack_nr : Acknowledgment number from peer
+ */
+fn void SendBuffer.ack_packet(&self, ushort ack_nr) @public
+{
+    // Remove packets in order until we hit one not ACKed
+    while (self.packets.len() > 0)
+    {
+        SentPacket* pkt = self.packets[0];
+
+        // Check if this packet is ACKed (seq_nr <= ack_nr with wraparound)
+        if (compare_seq_nr(pkt.seq_nr, ack_nr) <= 0)
+        {
+            // This packet is acknowledged - remove it
+            free(pkt.data);
+            free(pkt);
+            self.packets.remove_at(0);
+
+            // Update oldest_seq if buffer not empty
+            if (self.packets.len() > 0)
+            {
+                self.oldest_seq = self.packets[0].seq_nr;
+            }
+        }
+        else
+        {
+            // This packet (and all following) not yet ACKed
+            break;
+        }
+    }
+}
+
+/**
+ * Get packet by sequence number (for retransmission).
+ *
+ * @param seq_nr : Sequence number to find
+ * @return Packet if found, fault otherwise
+ */
+fn SentPacket*? SendBuffer.get_packet(&self, ushort seq_nr) @public
+{
+    foreach (pkt : self.packets)
+    {
+        if (pkt.seq_nr == seq_nr)
+        {
+            return pkt;
+        }
+    }
+    // Packet not found - return fault
+    return common::UTP_PACKET_NOT_FOUND?;
+}
+
+/**
+ * Get number of packets in flight (unacknowledged).
+ *
+ * @return Number of packets awaiting ACK
+ */
+fn usz SendBuffer.packets_in_flight(&self) @public
+{
+    return self.packets.len();
+}
+
+/**
+ * Check if send buffer is empty
+ *
+ * @return true if no packets are waiting for ACK
+ */
+fn bool SendBuffer.is_empty(&self) @public
+{
+    return self.packets.len() == 0;
+}
+
+/**
+ * Free send buffer and all buffered packets.
+ */
+fn void SendBuffer.free(&self) @private
+{
+    // Free each packet's data and struct
+    foreach (pkt : self.packets)
+    {
+        free(pkt.data);
+        free(pkt);
+    }
+
+    // Free the list
+    self.packets.free();
+}
+
+// ============================================================================
+// Receive Buffer Implementation
+// ============================================================================
+
+/**
+ * Initialize receive buffer.
+ *
+ * @param max_buffered : Maximum bytes to buffer (default: 1MB)
+ */
+fn void ReceiveBuffer.init(&self, usz max_buffered = 1024 * 1024) @private
+{
+    self.chunks.init(mem);
+    self.expected_seq = 0;
+    self.total_buffered = 0;
+    self.max_buffered = max_buffered;
+    self.current_chunk_offset = 0;
+}
+
+/**
+ * Add received data packet to buffer.
+ *
+ * Only accepts in-order packets (seq == expected_seq).
+ * Data is copied (caller retains ownership of original).
+ *
+ * @param seq_nr : Sequence number of packet
+ * @param data : Packet payload data
+ * @return true if packet was accepted and buffered
+ */
+fn bool ReceiveBuffer.add_packet(&self, ushort seq_nr, char[] data) @public
+{
+    // Only accept in-order packets
+    if (seq_nr != self.expected_seq)
+    {
+        return false;  // Out of order - drop for now
+    }
+
+    // Check backpressure
+    if (self.total_buffered + data.len > self.max_buffered)
+    {
+        return false;  // Buffer full
+    }
+
+    // Copy data (we own this copy)
+    char[] chunk = mem::new_array(char, data.len);
+    for (usz i = 0; i < data.len; i++)
+    {
+        chunk[i] = data[i];
+    }
+
+    // Add to chunks
+    self.chunks.push(chunk);
+    self.total_buffered += data.len;
+
+    // Advance expected sequence number (with wraparound)
+    self.expected_seq = (ushort)(self.expected_seq + 1);
+
+    return true;
+}
+
+/**
+ * Read data from buffer (Option B: Return first chunk or partial).
+ *
+ * Returns the first chunk up to max_bytes. If the first chunk is larger than
+ * max_bytes, returns a partial chunk and tracks offset for next read.
+ * After returning a complete chunk, it's removed from the buffer.
+ *
+ * @param max_bytes : Maximum bytes to read
+ * @return Data chunk (may be less than max_bytes), or empty if no data
+ */
+fn char[] ReceiveBuffer.read(&self, usz max_bytes) @public
+{
+    if (self.chunks.len() == 0)
+    {
+        // No data available
+        return {};
+    }
+
+    char[] first_chunk = self.chunks[0];
+    usz available = first_chunk.len - self.current_chunk_offset;
+    usz to_read = (available < max_bytes) ? available : max_bytes;
+
+    // Allocate result buffer
+    char[] result = mem::new_array(char, to_read);
+
+    // Copy from current offset
+    for (usz i = 0; i < to_read; i++)
+    {
+        result[i] = first_chunk[self.current_chunk_offset + i];
+    }
+
+    // Update offset and state
+    self.current_chunk_offset += to_read;
+    self.total_buffered -= to_read;
+
+    // If we've consumed the entire chunk, remove it
+    if (self.current_chunk_offset >= first_chunk.len)
+    {
+        free(first_chunk);
+        self.chunks.remove_at(0);
+        self.current_chunk_offset = 0;
+    }
+
+    return result;
+}
+
+/**
+ * Check if buffer has data available.
+ *
+ * @return true if data can be read
+ */
+fn bool ReceiveBuffer.has_data(&self) @public
+{
+    return self.chunks.len() > 0;
+}
+
+/**
+ * Get total bytes available in buffer.
+ *
+ * @return Number of bytes that can be read
+ */
+fn usz ReceiveBuffer.bytes_available(&self) @public
+{
+    return self.total_buffered;
+}
+
+/**
+ * Free receive buffer and all buffered chunks.
+ */
+fn void ReceiveBuffer.free(&self) @private
+{
+    // Free each chunk
+    foreach (chunk : self.chunks)
+    {
+        free(chunk);
+    }
+
+    // Free the list
+    self.chunks.free();
+}
+
+// ============================================================================
+// Connection Lifecycle
+// ============================================================================
+
+/**
+ * Initiate graceful close of connection.
+ *
+ * Marks connection for closure. Caller should send FIN packet.
+ * Connection will transition to DELETING once:
+ * - Send buffer is drained (all packets ACKed)
+ * - Our FIN is ACKed
+ * - Remote FIN is received (if applicable)
+ *
+ * @return true if close was initiated, false if already closing
+ */
+fn bool UtpConnection.initiate_close(&self) @public
+{
+    // Only allow close from CONNECTED state
+    if (self.state != ConnectionState.CONNECTED)
+    {
+        return false;  // Already closing or not connected
+    }
+
+    // Mark that we're sending FIN
+    self.fin_sent = true;
+    self.fin_seq_nr = self.seq_nr;
+
+    // Transition to FIN_SENT state
+    self.transition_to_fin_sent();
+
+    return true;
+}
+
+/**
+ * Check if connection can be deleted.
+ *
+ * Connection is ready for deletion when:
+ * - We're in FIN_SENT or ERROR_WAIT/DELETING state
+ * - Send buffer is empty (all data ACKed)
+ * - FIN is ACKed (if we sent one)
+ * - Remote sent FIN (for graceful close)
+ *
+ * @return true if connection can be safely deleted
+ */
+fn bool UtpConnection.can_delete(&self) @public
+{
+    // Must be in closing/error state
+    if (self.state != ConnectionState.FIN_SENT &&
+        self.state != ConnectionState.ERROR_WAIT &&
+        self.state != ConnectionState.DELETING)
+    {
+        return false;
+    }
+
+    // Send buffer must be empty
+    if (!self.send_buf.is_empty())
+    {
+        return false;
+    }
+
+    // If we sent FIN, it must be ACKed
+    // For now, we assume FIN is ACKed if send buffer is empty
+    // (proper FIN ACK tracking would check specific seq_nr)
+
+    // For graceful close, remote must have sent FIN
+    if (self.state == ConnectionState.FIN_SENT && !self.remote_fin_received)
+    {
+        return false;  // Wait for remote FIN
+    }
+
+    return true;
 }
 
 // ============================================================================
@@ -190,10 +723,22 @@ fn void UtpConnection.transition_to_fin_sent(&self) @public
 
 /**
  * Transition connection to ERROR_WAIT state (error occurred).
+ *
+ * Enhanced with error reason tracking.
+ * Idempotent: Won't overwrite error reason if already in error state.
+ *
+ * @param reason : Why the connection failed
  */
-fn void UtpConnection.transition_to_error(&self) @public
+fn void UtpConnection.transition_to_error(&self, ErrorReason reason = ErrorReason.UNKNOWN) @public
 {
+    // Idempotent: Don't overwrite error if already in error/deleting state
+    if (self.state == ConnectionState.ERROR_WAIT || self.state == ConnectionState.DELETING)
+    {
+        return;
+    }
+
     self.state = ConnectionState.ERROR_WAIT;
+    self.error_reason = reason;
 }
 
 /**
@@ -238,13 +783,24 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
     switch (header.packet_type)
     {
         case common::ST_STATE:
-            // Pure ACK packet
+            // Pure ACK packet (could be SYN-ACK)
+            // Detect SYN-ACK and complete handshake
+            if (self.state == ConnectionState.SYN_SENT)
+            {
+                // This is a SYN-ACK response
+                // Update ack_nr from their seq_nr
+                self.ack_nr = header.seq_nr;
+                // Transition to CONNECTED
+                self.transition_to_connected();
+                return true;
+            }
+            // Regular ACK packet
             // Phase 1: Just update ack tracking (no buffer management yet)
             return true;
 
         case common::ST_DATA:
             // Data packet
-            // Phase 1: Accept in-order only
+            // Accept in-order only
             if (header.seq_nr == (ushort)(self.ack_nr + 1))
             {
                 self.ack_nr = header.seq_nr;
@@ -253,18 +809,45 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
             return false;  // Out of order, drop for now
 
         case common::ST_FIN:
-            // Graceful close
-            if (self.state == ConnectionState.CONNECTED)
+            // Graceful close - remote sent FIN
+            if (self.state == ConnectionState.CONNECTED || self.state == ConnectionState.FIN_SENT)
             {
+                // ACK the FIN
                 self.ack_nr = header.seq_nr;
-                self.transition_to_fin_sent();
+
+                // Mark that remote sent FIN
+                self.remote_fin_received = true;
+
+                // If we haven't sent FIN yet, send our own
+                if (self.state == ConnectionState.CONNECTED)
+                {
+                    // Mark that we'll send FIN in response
+                    self.fin_sent = true;
+                    self.fin_seq_nr = self.seq_nr;
+
+                    self.transition_to_fin_sent();
+                }
+
+                // If both sides sent FIN and buffers are empty, can delete
+                if (self.can_delete())
+                {
+                    self.transition_to_deleting();
+                }
+
                 return true;
             }
             return false;
 
         case common::ST_RESET:
-            // Force close
-            self.transition_to_error();
+            // Force close with error reason
+            self.transition_to_error(ErrorReason.RESET_RECEIVED);
+
+            // Automatic cleanup: If buffers are empty, transition to DELETING
+            if (self.can_delete())
+            {
+                self.transition_to_deleting();
+            }
+
             return true;
 
         case common::ST_SYN:
@@ -314,9 +897,50 @@ fn String UtpConnection.state_string(&self) @public
 // ============================================================================
 
 /**
+ * Close connection gracefully.
+ *
+ * Transitions to appropriate cleanup state based on current state.
+ * Safe to call multiple times (idempotent).
+ */
+fn void UtpConnection.close(&self) @public
+{
+    // Already closing or closed - idempotent
+    if (self.state == ConnectionState.DELETING ||
+        self.state == ConnectionState.NONE ||
+        self.state == ConnectionState.FIN_SENT)
+    {
+        return;
+    }
+
+    // If in error state, transition to deleting
+    if (self.state == ConnectionState.ERROR_WAIT)
+    {
+        self.transition_to_deleting();
+        return;
+    }
+
+    // If connected, initiate graceful close
+    if (self.state == ConnectionState.CONNECTED)
+    {
+        self.initiate_close();
+        return;
+    }
+
+    // For other states (SYN_SENT), just mark for deletion
+    self.transition_to_deleting();
+}
+
+/**
  * Free connection resources.
+ *
+ * Enhanced to handle all states safely.
+ * Call close() first for graceful cleanup, then free() to release memory.
  */
 fn void UtpConnection.free(&self) @public
 {
+    self.send_buf.free();
+
+    self.recv_buf.free();
+
     free(self);
 }
