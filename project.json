@@ -29,12 +29,19 @@
     "torrent-cli": {
       "type": "executable",
       "sources": ["src/cli/**"],
+      "link-args": ["-L.", "-ltorrent", "-Wl,-rpath,$ORIGIN", "-Wl,--as-needed"],
       "sanitize": "address"
     },
     "torrent-gui": {
       "type": "executable",
       "sources": ["src/gui/**", "src/ui/**"],
       "dependencies": ["curl", "c3io", "raylib55", "raygui"],
+      "link-args": ["-L.", "-ltorrent", "-Wl,-rpath,$ORIGIN", "-Wl,--as-needed"],
+      "sanitize": "address"
+    },
+    "mktorrent": {
+      "type": "executable",
+      "sources": ["src/mktorrent/**"],
       "sanitize": "address"
     },
     "libtorrent-prod": {
@@ -54,6 +61,7 @@
     "torrent-cli-prod": {
       "type": "executable",
       "sources": ["src/cli/**"],
+      "link-args": ["-L.", "-ltorrent", "-Wl,-rpath,$ORIGIN", "-Wl,--as-needed"],
       "output": "build/prod",
       "build-dir": "build/prod/obj",
       "opt": "O3",
@@ -68,6 +76,20 @@
       "type": "executable",
       "sources": ["src/gui/**", "src/ui/**"],
       "dependencies": ["curl", "c3io", "raylib55", "raygui"],
+      "link-args": ["-L.", "-ltorrent", "-Wl,-rpath,$ORIGIN", "-Wl,--as-needed"],
+      "output": "build/prod",
+      "build-dir": "build/prod/obj",
+      "opt": "O3",
+      "optlevel": "max",
+      "debug-info": "none",
+      "safe": false,
+      "fp-math": "fast",
+      "strip-unused": true,
+      "sanitize": "none"
+    },
+    "mktorrent-prod": {
+      "type": "executable",
+      "sources": ["src/mktorrent/**"],
       "output": "build/prod",
       "build-dir": "build/prod/obj",
       "opt": "O3",

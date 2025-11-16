@@ -520,12 +520,14 @@ fn fault? parse_info(Allocator arena, TorrentInfo* info, BencodeValue* info_val)
     }
 
     // Check for single-file vs multi-file mode
+    // Note: v2-only torrents use "file tree" instead of "length"/"files"
     BencodeValue* length_val = info_val.dict_get("length");
     BencodeValue* files_val = info_val.dict_get("files");
+    BencodeValue* file_tree_check = info_val.dict_get("file tree");
 
     if (length_val && length_val.type == bencode::BencodeType.INTEGER)
     {
-        // Single-file mode
+        // Single-file mode (v1 or hybrid)
         info.length = length_val.integer;
         info.is_multi_file = false;
 
@@ -537,7 +539,7 @@ fn fault? parse_info(Allocator arena, TorrentInfo* info, BencodeValue* info_val)
     }
     else if (files_val && files_val.type == bencode::BencodeType.LIST)
     {
-        // Multi-file mode
+        // Multi-file mode (v1 or hybrid)
         info.is_multi_file = true;
 
         // Parse files list (pass arena for allocations)
@@ -546,9 +548,14 @@ fn fault? parse_info(Allocator arena, TorrentInfo* info, BencodeValue* info_val)
             return err?;
         }
     }
+    else if (file_tree_check && file_tree_check.type == bencode::BencodeType.DICT)
+    {
+        // v2-only torrent - file info comes from "file tree" later
+        // Skip for now, will be populated in parse_file_tree
+    }
     else
     {
-        // Neither length nor files found
+        // Neither v1 fields (length/files) nor v2 field (file tree) found
         return TORRENT_MISSING_FIELD?;
     }
 
@@ -562,16 +569,30 @@ fn fault? parse_info(Allocator arena, TorrentInfo* info, BencodeValue* info_val)
         return TORRENT_INVALID_INFO?;
     }
 
-    // Extract 'pieces' (required)
-    BencodeValue* pieces_val = bencode::dict_get_required(bencode::BencodeType.STRING, info_val, "pieces", TORRENT_MISSING_FIELD)!;
-
-    // Validate pieces length (must be multiple of SHA1_HASH_SIZE)
-    if (pieces_val.string.len % common::SHA1_HASH_SIZE != 0)
+    // Extract 'pieces' (required for v1, optional for v2-only torrents)
+    BencodeValue* pieces_val = info_val.dict_get("pieces");
+    if (pieces_val)
     {
-        return TORRENT_INVALID_INFO?;
-    }
+        // pieces field exists - must be a string
+        if (pieces_val.type != bencode::BencodeType.STRING)
+        {
+            return TORRENT_INVALID_INFO?;  // pieces field exists but wrong type
+        }
 
-    info.pieces = copy_bytes(arena, pieces_val.string);
+        // Validate pieces length (must be multiple of SHA1_HASH_SIZE)
+        if (pieces_val.string.len % common::SHA1_HASH_SIZE != 0)
+        {
+            return TORRENT_INVALID_INFO?;
+        }
+
+        info.pieces = copy_bytes(arena, pieces_val.string);
+    }
+    else
+    {
+        // v2-only torrent - no v1 pieces field
+        char[] empty = {};
+        info.pieces = empty;
+    }
 
     // Extract 'private' (optional - BEP 27)
     // If private=1, DHT and PEX must be disabled
@@ -615,6 +636,13 @@ fn fault? parse_info(Allocator arena, TorrentInfo* info, BencodeValue* info_val)
         {
             parse_piece_layers(arena, info, piece_layers_val)!;
         }
+    }
+
+    // Validate that we have at least one hash format (v1 pieces or v2 file tree)
+    // Note: Empty pieces field is valid for v1 torrents with only zero-byte files
+    if (!pieces_val && !info.is_v2)
+    {
+        return TORRENT_MISSING_FIELD?;  // Neither v1 pieces field nor v2 file tree present
     }
 
     return {};  // Success
@@ -866,12 +894,18 @@ fn fault? parse_file_tree_recursive(Allocator arena, BencodeValue* tree_node, Li
 
             // Extract file metadata
             BencodeValue* length_val = bencode::dict_get_required(bencode::BencodeType.INTEGER, value, "length", TORRENT_MISSING_FIELD)!;
-            BencodeValue* pieces_root_val = bencode::dict_get_required(bencode::BencodeType.STRING, value, "pieces root", TORRENT_MISSING_FIELD)!;
 
-            // Validate pieces_root is 32 bytes
-            if (pieces_root_val.string.len != common::SHA256_HASH_SIZE)
+            // For v2 torrents, pieces root is optional for zero-length files
+            BencodeValue* pieces_root_val = value.dict_get("pieces root");
+            bool has_pieces_root = false;
+            if (pieces_root_val && pieces_root_val.type == bencode::BencodeType.STRING)
             {
-                return TORRENT_INVALID_FORMAT?;
+                // Validate pieces_root is 32 bytes
+                if (pieces_root_val.string.len != common::SHA256_HASH_SIZE)
+                {
+                    return TORRENT_INVALID_FORMAT?;
+                }
+                has_pieces_root = true;
             }
 
             // Create file entry
@@ -887,12 +921,19 @@ fn fault? parse_file_tree_recursive(Allocator arena, BencodeValue* tree_node, Li
                 file.path[i] = copy_string(arena, component);
             }
 
-            // Copy pieces_root hash
-            foreach (i, byte : pieces_root_val.string[:common::SHA256_HASH_SIZE])
+            // Copy pieces_root hash if present
+            if (has_pieces_root)
             {
-                file.pieces_root[i] = byte;
+                foreach (i, byte : pieces_root_val.string[:common::SHA256_HASH_SIZE])
+                {
+                    file.pieces_root[i] = byte;
+                }
+                file.has_pieces_root = true;
             }
-            file.has_pieces_root = true;
+            else
+            {
+                file.has_pieces_root = false;
+            }
 
             // Add file to list
             files.push(file);
