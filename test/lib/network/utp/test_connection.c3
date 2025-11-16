@@ -187,12 +187,27 @@ fn void test_process_state_packet() @test
     state.timestamp_microseconds = 5000000;
     state.timestamp_difference_microseconds = 100;
 
-    // Process packet
+    // Process first packet
     bool ok = conn.process_packet(&state);
-
     assert(ok, "STATE packet should be processed successfully");
+
+    // Process 2 more packets with HIGHER delay to create queuing delay
+    state.seq_nr++;
+    state.timestamp_difference_microseconds = 150;  // 50μs queuing delay
+    conn.process_packet(&state);
+
+    state.seq_nr++;
+    state.timestamp_difference_microseconds = 120;  // 20μs queuing delay
+    conn.process_packet(&state);
+
     assert(conn.remote_window == state.wnd_size, "Remote window should be updated");
-    assert(conn.their_delay == 100, "Their delay should be updated");
+    // Week 8: their_delay is now tracked in their_hist (LEDBAT Phase 2)
+    // delay_hist tracks queuing delay (sample - delay_base)
+    // delay_base = 100 (minimum of all samples)
+    // Current samples: 100-100=0, 150-100=50, 120-100=20
+    // get_value() returns min(0, 50, 20) = 0
+    uint delay_value = conn.their_hist.get_value();
+    assert(delay_value == 0, "Queuing delay should be 0 (min of recent samples)");
 
     io::printn("✓ test_process_state_packet");
 }

@@ -3,10 +3,12 @@ module libtorrent::utp::connection;
 import libtorrent::utp::common;
 import libtorrent::utp::packet;
 import libtorrent::utp::socket;
+import libtorrent::network::utp::delay_hist;
 import libtorrent::common;
 import std::time;
 import std::collections::list;
 import std::io;
+import std::math;
 
 faultdef SEND_NOT_CONNECTED;
 faultdef SEND_BUFFER_FULL;
@@ -132,9 +134,15 @@ struct UtpConnection
     long last_recv_time;  // Last time we received any packet
     long last_send_time;  // Last time we sent any packet
 
-    // Delay measurement (BEP 29: one-way delay estimation)
-    uint our_delay;      // Our measured one-way delay (microseconds)
-    uint their_delay;    // Their reported delay (from timestamp_difference)
+    // LEDBAT Delay measurement (Phase 2: BEP 29 delay-based congestion control)
+    delay_hist::DelayHist our_hist;      // Our measured one-way delays
+    delay_hist::DelayHist their_hist;    // Their reported delays (from timestamp_difference)
+
+    // LEDBAT Congestion Control (Phase 2)
+    bool slow_start;                 // True if in slow start phase
+    uint ssthresh;                   // Slow start threshold
+    ulong last_maxed_out_window;    // Last time we hit window limit (milliseconds)
+    uint min_rtt;                    // Minimum observed RTT (microseconds)
 
     // Flags
     bool is_outgoing;    // true = we initiated, false = they initiated
@@ -259,8 +267,16 @@ fn UtpConnection* create_outgoing(common::SocketAddress remote_addr, ushort conn
     conn.last_send_time = now;
     conn.last_recv_time = now;
 
-    conn.our_delay = 0;
-    conn.their_delay = 0;
+    // Initialize LEDBAT delay tracking
+    ulong now_ms = (ulong)time::now().to_seconds() * 1000;
+    conn.our_hist.clear(now_ms);
+    conn.their_hist.clear(now_ms);
+
+    // Initialize LEDBAT congestion control
+    conn.slow_start = true;
+    conn.ssthresh = 0xFFFFFFFF;  // No threshold initially (unlimited slow start)
+    conn.last_maxed_out_window = now_ms;  // Initialize to current time
+    conn.min_rtt = 0xFFFFFFFF;   // Initialize to max (will be updated with real measurements)
 
     // Initialize send buffer
     conn.send_buf.init();
@@ -322,8 +338,16 @@ fn UtpConnection* create_incoming(common::SocketAddress remote_addr, packet::Utp
     conn.last_send_time = now;
     conn.last_recv_time = now;
 
-    conn.our_delay = 0;
-    conn.their_delay = 0;
+    // Initialize LEDBAT delay tracking
+    ulong now_ms = (ulong)time::now().to_seconds() * 1000;
+    conn.our_hist.clear(now_ms);
+    conn.their_hist.clear(now_ms);
+
+    // Initialize LEDBAT congestion control
+    conn.slow_start = true;
+    conn.ssthresh = 0xFFFFFFFF;  // No threshold initially (unlimited slow start)
+    conn.last_maxed_out_window = now_ms;  // Initialize to current time
+    conn.min_rtt = 0xFFFFFFFF;   // Initialize to max (will be updated with real measurements)
 
     // Initialize send buffer
     conn.send_buf.init();
@@ -805,8 +829,9 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
     // Update remote window
     self.remote_window = header.wnd_size;
 
-    // Update their delay (one-way delay measurement)
-    self.their_delay = header.timestamp_difference_microseconds;
+    // Update their delay history (LEDBAT Phase 2)
+    ulong now_ms = (ulong)time::now().to_seconds() * 1000;
+    self.their_hist.add_sample(header.timestamp_difference_microseconds, now_ms);
 
     // Week 5 Day 2: Process ACK to track bytes_in_flight
     // Calculate bytes ACKed before removing packets
@@ -1019,7 +1044,7 @@ fn void? UtpConnection.send_data(&self, char[] data, socket::UtpSocket* socket) 
         header.extension = 0;
         header.connection_id = self.send_id;
         header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
-        header.timestamp_difference_microseconds = self.their_delay;
+        header.timestamp_difference_microseconds = self.their_hist.get_value();
         header.wnd_size = self.local_window;
         header.seq_nr = self.seq_nr;
         header.ack_nr = self.ack_nr;
@@ -1129,53 +1154,144 @@ fn bool UtpConnection.can_send_packet(&self, uint packet_size, uint payload_size
 }
 
 // ============================================================================
-// Week 5 Day 3: Simple AIMD Congestion Control
+// Week 8: LEDBAT Delay-Based Congestion Control (Phase 2)
 // ============================================================================
 
 /**
- * Handle successful packet acknowledgment - increase cwnd (additive increase).
+ * Check if congestion window is currently saturated.
  *
- * AIMD Congestion Control:
- * - Additive Increase: cwnd += MSS * bytes_acked / cwnd (per ACK)
- * - This provides linear growth during congestion avoidance
+ * The window is considered saturated if we're using it (bytes in flight
+ * plus pending sends approach or exceed the current window size).
  *
- * Phase 1: Simple implementation without slow-start threshold
+ * @return true if window is saturated, false if idle
+ */
+fn bool UtpConnection.is_cwnd_saturated(&self) @private
+{
+    // Conservative check: consider saturated if we're using most of the window
+    // This prevents cwnd growth when the application isn't sending data
+    uint threshold = self.cwnd - self.mss;  // Leave room for 1 packet
+    return self.bytes_in_flight >= threshold;
+}
+
+/**
+ * Apply LEDBAT congestion control algorithm.
+ *
+ * LEDBAT (Low Extra Delay Background Transport) - BEP 29 Phase 2:
+ * - Delay-based congestion control (proactive, not reactive)
+ * - Target delay: 100ms (configurable 25-100ms range)
+ * - Increases cwnd when delay < target (network has capacity)
+ * - Decreases cwnd when delay > target (network congested)
+ * - Uses floating-point arithmetic (libutp style, simpler than fixed-point)
+ *
+ * Based on libutp implementation:
+ * /home/tristan/sources/libutp/utp_internal.cpp lines 1622-1738
+ *
+ * @param bytes_acked : Number of bytes acknowledged
+ * @param our_delay : Current one-way delay (microseconds)
+ */
+fn void UtpConnection.apply_ledbat(&self, usz bytes_acked, uint our_delay) @public
+{
+    if (bytes_acked == 0) return;
+
+    // Clamp delay to RTT (one-way delay cannot exceed round-trip time)
+    if (our_delay > self.min_rtt) {
+        our_delay = self.min_rtt;
+    }
+
+    // Target delay: 100ms = 100000 microseconds
+    const double TARGET_DELAY = 100000.0;
+    double target = TARGET_DELAY;
+
+    // How far are we from target? (positive = below target, negative = above)
+    double off_target = target - (double)our_delay;
+
+    // LEDBAT formula (libutp style - floating point):
+    //   scaled_gain = GAIN_FACTOR * window_factor * delay_factor
+    //
+    // window_factor: fraction of window this ACK represents
+    // delay_factor: how far from target (normalized)
+    uint max_window = self.cwnd;
+    usz min_bytes = bytes_acked < (usz)max_window ? bytes_acked : (usz)max_window;
+    usz max_bytes = bytes_acked > (usz)max_window ? bytes_acked : (usz)max_window;
+
+    double window_factor = (double)min_bytes / (double)max_bytes;
+    double delay_factor = off_target / target;
+
+    // Gain factor: 3000 (MAX_CWND_INCREASE_BYTES_PER_RTT from libutp)
+    const double GAIN_FACTOR = 3000.0;
+    double scaled_gain = GAIN_FACTOR * window_factor * delay_factor;
+
+    // Don't grow window if not saturated (idle connection)
+    // Check if we haven't maxed out window in last second
+    ulong current_ms = (ulong)time::now().to_seconds() * 1000;
+    if (scaled_gain > 0.0 && current_ms - self.last_maxed_out_window > 1000)
+    {
+        // If more than 1 second since we hit window limit, we're rate-limited
+        // (not window-limited), so don't grow window
+        if (!self.is_cwnd_saturated()) {
+            scaled_gain = 0.0;
+        }
+    }
+
+    // Calculate new cwnd based on LEDBAT
+    uint min_cwnd = self.mss;
+    uint ledbat_cwnd = (uint)math::max((double)max_window + scaled_gain, (double)min_cwnd);
+
+    // Slow start vs congestion avoidance
+    if (self.slow_start)
+    {
+        // Slow start: exponential growth (add window_factor * MSS)
+        uint ss_cwnd = max_window + (uint)(window_factor * (double)self.mss);
+
+        // Exit slow start if:
+        // 1. We exceed ssthresh, OR
+        // 2. Delay exceeds 90% of target (conservative early exit)
+        if (ss_cwnd > self.ssthresh || our_delay > (uint)(target * 0.9))
+        {
+            self.slow_start = false;
+            self.ssthresh = max_window;  // Set threshold to current window
+            self.cwnd = ledbat_cwnd;     // Use LEDBAT cwnd
+        }
+        else
+        {
+            // Stay in slow start - use max of slow start and LEDBAT
+            self.cwnd = math::max(ss_cwnd, ledbat_cwnd);
+        }
+    }
+    else
+    {
+        // Congestion avoidance: use LEDBAT cwnd
+        self.cwnd = ledbat_cwnd;
+    }
+
+    // Clamp to reasonable bounds
+    const uint MAX_CWND = 1024 * 1024;  // 1MB maximum
+    self.cwnd = (uint)math::clamp(self.cwnd, min_cwnd, MAX_CWND);
+}
+
+/**
+ * DEPRECATED: Kept for backward compatibility with Phase 1 tests.
+ * New code should use apply_ledbat() instead.
  *
  * @param bytes_acked : Number of bytes acknowledged
  */
 fn void UtpConnection.on_packet_acked(&self, uint bytes_acked) @public
 {
-    if (bytes_acked == 0) return;
-
-    // Additive increase: cwnd += MSS * bytes_acked / cwnd
-    // This approximates adding MSS per RTT of ACKs
-    uint increase = (self.mss * bytes_acked) / self.cwnd;
-
-    // Ensure we make progress (at least 1 byte increase)
-    if (increase == 0) increase = 1;
-
-    self.cwnd += increase;
-
-    // Cap cwnd at a reasonable maximum (1MB for Phase 1)
-    const uint MAX_CWND = 1024 * 1024;
-    if (self.cwnd > MAX_CWND)
-    {
-        self.cwnd = MAX_CWND;
-    }
+    // For now, call apply_ledbat with a dummy delay of 0
+    // This maintains Phase 1 test compatibility
+    // TODO Week 9: Remove this and update all callers to use apply_ledbat()
+    self.apply_ledbat(bytes_acked, 0);
 }
 
 /**
- * Handle packet timeout - decrease cwnd (multiplicative decrease).
+ * Handle packet timeout - decrease cwnd.
  *
- * AIMD Congestion Control:
- * - Multiplicative Decrease: cwnd /= 2 (on packet loss/timeout)
- * - Provides exponential backoff when congestion detected
- *
- * Phase 1: Simple implementation
+ * Phase 1: AIMD multiplicative decrease (backward compatibility)
+ * Phase 2: TODO Week 9 - Integrate LEDBAT timeout recovery
  */
 fn void UtpConnection.on_timeout(&self) @public
 {
-    // Multiplicative decrease: cut window in half
+    // Multiplicative decrease: cut window in half (AIMD behavior)
     self.cwnd /= 2;
 
     // Never go below 1 MSS
@@ -1183,6 +1299,12 @@ fn void UtpConnection.on_timeout(&self) @public
     {
         self.cwnd = self.mss;
     }
+
+    // TODO Week 9: When fully integrating LEDBAT delay measurement,
+    // replace with LEDBAT timeout recovery:
+    //   self.ssthresh = self.cwnd / 2;
+    //   self.cwnd = self.mss;
+    //   self.slow_start = true;
 }
 
 // ============================================================================

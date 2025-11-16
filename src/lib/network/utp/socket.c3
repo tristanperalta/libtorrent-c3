@@ -255,7 +255,7 @@ fn void UtpSocket.send_syn_ack(&self, connection::UtpConnection* conn) @public
     header.extension = 0;
     header.connection_id = conn.send_id;
     header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
-    header.timestamp_difference_microseconds = conn.their_delay;
+    header.timestamp_difference_microseconds = conn.their_hist.get_value();
     header.wnd_size = conn.local_window;
     header.seq_nr = conn.seq_nr;
     header.ack_nr = conn.ack_nr;  // ACK their SYN
@@ -281,7 +281,7 @@ fn void UtpSocket.send_fin(&self, connection::UtpConnection* conn) @public
     header.extension = 0;
     header.connection_id = conn.send_id;
     header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
-    header.timestamp_difference_microseconds = conn.their_delay;
+    header.timestamp_difference_microseconds = conn.their_hist.get_value();
     header.wnd_size = conn.local_window;
     header.seq_nr = conn.seq_nr;
     header.ack_nr = conn.ack_nr;

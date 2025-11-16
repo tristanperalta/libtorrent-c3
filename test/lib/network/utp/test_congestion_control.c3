@@ -27,33 +27,16 @@ alias lib_common = module libtorrent::common;
 *>
 
 /**
- * Test 1: Additive increase on ACK
+ * Test 1: Additive increase on ACK (DEPRECATED - replaced by LEDBAT in Phase 2)
+ *
+ * This test validated the old AIMD congestion control. Now that we use LEDBAT,
+ * this test is no longer applicable. See test_ledbat.c3 for LEDBAT tests.
  */
 fn void test_aimd_additive_increase() @test
 {
-    lib_common::SocketAddress addr = lib_common::create_ipv4_address(127, 0, 0, 1, 6881);
-    connection::UtpConnection* conn = connection::create_outgoing(addr, 4000);
-    defer conn.free();
-
-    conn.transition_to_connected();
-
-    uint initial_cwnd = conn.cwnd;  // Should be 2 * MSS = 2800
-
-    // Simulate ACKing 1400 bytes
-    conn.on_packet_acked(1400);
-
-    // cwnd should increase by: MSS * bytes_acked / cwnd = 1400 * 1400 / 2800 = 700
-    uint expected = initial_cwnd + 700;
-    assert(conn.cwnd == expected, "cwnd should increase by 700");
-
-    // ACK another 1400 bytes
-    conn.on_packet_acked(1400);
-
-    // Now cwnd = 3500, increase = 1400 * 1400 / 3500 = 560
-    expected += 560;
-    assert(conn.cwnd == expected, "cwnd should increase by 560");
-
-    io::printn("✓ test_aimd_additive_increase");
+    // Phase 2: This test is deprecated. on_packet_acked() now uses LEDBAT,
+    // not the old AIMD formula. See test_ledbat.c3 for LEDBAT algorithm tests.
+    return;
 }
 
 /**
