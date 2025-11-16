@@ -265,43 +265,43 @@ if (block_size < MERKLE_BLOCK_SIZE) {
 }
 ```
 
-### Caching Strategy
+### Memory Management Strategy
 
-**Hybrid approach (memory + disk):**
+**No LRU cache - following libtorrent-rasterbar pattern:**
 
 ```mermaid
 flowchart TB
-    Request["Request Merkle Tree<br/>for file"]
+    Parse[".torrent file<br/>parse()"]
+    Build["Build MerkleTree objects<br/>from piece_layers bencode"]
+    Store["Store in TorrentInfo.piece_layers[]"]
+    Copy["Session copies trees<br/>to active torrent state"]
+    Free["free_piece_layers()<br/>Release from TorrentInfo"]
+    Use["Use trees during<br/>piece verification"]
 
-    subgraph Cache["PieceLayerCache"]
-        LRU["LRU Cache (in-memory)<br/>- Hot files (recently accessed)<br/>- Max size: 50 MB (configurable)<br/>- Eviction: LRU"]
-        LazyLoad["Lazy Load (from piece_layers)<br/>- Parse on-demand from .torrent<br/>- Add to cache if room"]
-    end
+    Parse --> Build
+    Build --> Store
+    Store --> Copy
+    Copy --> Free
+    Copy --> Use
 
-    Hit["Cache Hit<br/>O(1) lookup, no I/O"]
-    Miss["Cache Miss<br/>Parse from bencode"]
-
-    Request --> LRU
-    LRU -->|"found"| Hit
-    LRU -->|"not found"| Miss
-    Miss --> LazyLoad
-    LazyLoad --> LRU
-
-    style Request fill:#e0f0ff
-    style LRU fill:#ccffcc
-    style LazyLoad fill:#fff0cc
-    style Hit fill:#ccffcc
-    style Miss fill:#ffcccc
-    style Cache fill:#f5f5f5,stroke:#666,stroke-width:2px
+    style Parse fill:#e0f0ff
+    style Build fill:#fff0cc
+    style Store fill:#ccffcc
+    style Copy fill:#ffe0cc
+    style Free fill:#ffcccc
+    style Use fill:#ccffcc
 ```
 
-**Performance:**
-- Cache hit: O(1) lookup, no I/O
-- Cache miss: Parse from bencode, add to cache
+**Why no cache:**
+- Piece layers are small (~1-2 MB per file)
+- Parsing is cheap (just reading bytes, no hashing)
+- Simpler code (no eviction logic, no HashMap)
+- Matches production implementations
 
 **Memory estimate:**
-- 10 GB file = ~640K blocks = 640K hashes = 20 MB
-- 50 MB cache holds ~2-3 large files or 25+ small files
+- 10 GB file = 640K blocks = 20 MB tree (piece layer mode)
+- 100 files × 2 MB avg = 200 MB total
+- Reasonable for active torrents
 
 ---
 
@@ -546,21 +546,6 @@ struct MerkleProof {
 fn bool verify_merkle_proof(char[] piece_data, MerkleProof* proof) @public;
 ```
 
-### PieceLayerCache (new: merkle_tree.c3 or storage_manager.c3)
-
-```c3
-struct PieceLayerCache {
-    HashMap{String, MerkleTree*} cache;  // file_path → MerkleTree
-    String[] lru_order;                   // For LRU eviction
-    usz max_cache_bytes;                  // Default: 50 MB
-    usz current_cache_bytes;              // Current usage
-}
-
-fn MerkleTree* get_or_load(&self, String file_path, char[] piece_layer_data) @public;
-fn void evict_lru(&self) @private;
-fn void PieceLayerCache.free(&self) @public;
-```
-
 ### Network Protocol Messages (peer_wire.c3)
 
 ```c3
@@ -726,18 +711,25 @@ fn bool verify_piece_v1(uint piece_index, char[] piece_data) {
 
 ```c3
 fn bool verify_piece_v2(uint piece_index, char[] piece_data) {
-    // 1. Find which file this piece belongs to
-    FileEntry* file = find_file_for_piece(piece_index);
+    // 1. Find which file(s) this piece belongs to
+    FileSpan[] spans = get_file_spans_for_piece(piece_index);
 
-    // 2. Get Merkle tree for this file (from cache or lazy-load)
-    MerkleTree* tree = piece_layer_cache.get_or_load(file.path_string, file.piece_layer_data);
+    // 2. Verify each file span using its pre-built Merkle tree
+    foreach (span : spans) {
+        MerkleTree* tree = torrent_info.piece_layers[span.file_index];
+        char[] span_data = piece_data[span.offset : span.length];
 
-    // 3. Generate Merkle proof for this piece
-    MerkleProof* proof = tree.generate_proof(piece_index);
-    defer proof.free();
+        // 3. Generate Merkle proof for this span
+        MerkleProof* proof = tree.generate_proof_for_span(span);
+        defer proof.free();
 
-    // 4. Verify proof
-    return verify_merkle_proof(piece_data, proof);
+        // 4. Verify proof
+        if (!verify_merkle_proof(span_data, proof)) {
+            return false;
+        }
+    }
+
+    return true;  // All spans verified
 }
 ```
 
@@ -1246,26 +1238,38 @@ Verify bencode module can handle BEP 52 requirements:
 
 ### Phase 4: Storage & Verification (Week 4-5)
 
-#### 4A. Write Tests (`test/lib/test_storage_v2.c3`)
+**Based on libtorrent-rasterbar best practices - NO LRU cache needed.**
+
+#### 4A. Fix Phase 2 Piece Layer Parsing
+**File:** `src/lib/metainfo.c3`
+
+Complete the piece layer parsing that was started in Phase 2:
+- Build MerkleTree objects from bencode data during torrent load
+- Add `build_tree_from_layer_data()` helper function
+- Add `TorrentInfo.free_piece_layers()` method
+
+#### 4B. Write Tests (`test/lib/test_storage_v2.c3`)
 - test_verify_piece_v2_valid()
 - test_verify_piece_v2_invalid()
 - test_verify_piece_hybrid_both_valid()
 - test_verify_piece_hybrid_mismatch()
-- test_piece_layer_cache_hit()
-- test_piece_layer_cache_miss()
-- test_cache_eviction_lru()
+- test_multi_file_v2_piece()
 - test_async_verification_v2()
 
-**Expected:** All tests fail
+**Expected:** All tests fail (implementation doesn't exist yet)
 
-#### 4B. Implement Verification (`src/lib/storage_manager.c3`)
-- Create PieceLayerCache
-- Implement verify_piece_v2()
-- Implement verify_piece_hybrid()
-- Add caching logic
-- Integrate with async::work
+#### 4C. Implement Verification (`src/lib/storage_manager.c3`)
+- Implement verify_piece_v2() - Use pre-built trees from TorrentInfo
+- Implement verify_piece_hybrid() - Verify both v1 and v2 hashes
+- Modify verify_piece() entry point - Dispatch based on meta_version
+- Integrate with async::work thread pool - Same pattern as v1
 
-**Success:** All 8 tests pass
+**Success:** All 6 tests pass, existing tests still pass
+
+**Memory Strategy:**
+- Parse piece layers upfront (1-2 MB per file)
+- Free piece_layers after copying to session state
+- No cache needed - trees stay in memory for active torrents
 
 ---
 

@@ -1,6 +1,7 @@
 module libtorrent::metainfo;
 
 import std::io;
+import std::math;
 import std::hash::sha1;
 import std::hash::sha256;
 import std::encoding::hex;
@@ -969,16 +970,16 @@ fn fault? parse_piece_layers(Allocator arena, TorrentInfo* info, BencodeValue* p
 {
     if (piece_layers_val.type != bencode::BencodeType.DICT) return TORRENT_INVALID_FORMAT?;
 
-    // Allocate Merkle tree array (one per file) - will be populated on-demand
+    // Allocate Merkle tree array (one per file)
     info.piece_layers = allocator::new_array(arena, merkle_tree::MerkleTree*, info.files.len);
 
-    // Initialize all to null - Merkle trees will be built on-demand when needed
+    // Initialize all to null
     foreach (i, file : info.files)
     {
         info.piece_layers[i] = null;
     }
 
-    // Validate piece layers structure
+    // Build Merkle trees from piece layer data
     foreach (entry : piece_layers_val.dict.entries())
     {
         // Validate key is 32 bytes (pieces_root hash)
@@ -995,6 +996,58 @@ fn fault? parse_piece_layers(Allocator arena, TorrentInfo* info, BencodeValue* p
 
         // Validate layer data is multiple of SHA256_HASH_SIZE
         if (entry.value.string.len % common::SHA256_HASH_SIZE != 0)
+        {
+            return TORRENT_INVALID_FORMAT?;
+        }
+
+        // Find which file this pieces_root belongs to
+        char[] pieces_root_key = entry.key;
+        char[] layer_hashes = entry.value.string;
+
+        for (usz file_idx = 0; file_idx < info.files.len; file_idx++)
+        {
+            FileEntry* file = &info.files[file_idx];
+
+            // Check if this file's pieces_root matches the key
+            bool matches = true;
+            if (file.has_pieces_root)
+            {
+                for (uint i = 0; i < common::SHA256_HASH_SIZE; i++)
+                {
+                    if (file.pieces_root[i] != pieces_root_key[i])
+                    {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if (matches)
+                {
+                    // Build Merkle tree for this file (skip empty files)
+                    if (file.length > 0)
+                    {
+                        merkle_tree::MerkleTree* tree = build_tree_from_layer_data(
+                            file.pieces_root,
+                            layer_hashes,
+                            info.piece_length,
+                            file.length
+                        )!;
+
+                        info.piece_layers[file_idx] = tree;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Validate: all non-empty files with pieces_root should have trees
+    // Empty files (length == 0) don't need piece layers
+    for (usz i = 0; i < info.files.len; i++)
+    {
+        if (info.files[i].has_pieces_root &&
+            info.files[i].length > 0 &&
+            info.piece_layers[i] == null)
         {
             return TORRENT_INVALID_FORMAT?;
         }
@@ -1198,4 +1251,194 @@ fn uint TorrentInfo.calculate_last_piece_length(&self) @public
         last_piece_length = (uint)self.piece_length;
     }
     return last_piece_length;
+}
+
+/**
+ * Free all Merkle trees in piece_layers array.
+ *
+ * This should be called when the TorrentInfo is being freed, or after
+ * copying the Merkle trees to session state (following libtorrent-rasterbar pattern).
+ *
+ * After calling this method, piece_layers will still be allocated but all
+ * pointers will be null.
+ */
+fn void TorrentInfo.free_piece_layers(&self) @public
+{
+    if (self.piece_layers.len == 0) return;
+
+    // Free each Merkle tree
+    foreach (i, tree : self.piece_layers)
+    {
+        if (tree != null)
+        {
+            tree.free();
+            self.piece_layers[i] = null;
+        }
+    }
+}
+
+/**
+ * Build Merkle tree from BEP 52 piece layer data.
+ *
+ * BEP 52 piece layers contain ONE layer of the Merkle tree (the "selected layer")
+ * which corresponds to piece boundaries. We need to:
+ * 1. Parse the concatenated hashes into individual 32-byte hashes
+ * 2. Build parent layers up to the root
+ * 3. Verify the computed root matches pieces_root
+ *
+ * @param pieces_root: Expected root hash (32 bytes) from file metadata
+ * @param layer_hashes: Concatenated 32-byte SHA-256 hashes for selected layer
+ * @param piece_length: Piece length in bytes
+ * @param file_length: File length in bytes
+ * @return: MerkleTree built from layer data, or fault if invalid
+ */
+fn merkle_tree::MerkleTree*? build_tree_from_layer_data(
+    char[common::SHA256_HASH_SIZE] pieces_root,
+    char[] layer_hashes,
+    long piece_length,
+    long file_length
+) @private => @pool()
+{
+    // Handle empty files - they don't have Merkle trees
+    if (file_length == 0)
+    {
+        return TORRENT_INVALID_FORMAT?;  // Empty files shouldn't have piece layers
+    }
+
+    // Calculate selected layer based on piece_length
+    // selected_layer is the power of 2 such that:
+    // 2^selected_layer * MERKLE_BLOCK_SIZE = piece_length
+    uint selected_layer = 0;
+    long blocks_per_piece = piece_length / merkle_tree::MERKLE_BLOCK_SIZE;
+
+    // Calculate log2(blocks_per_piece)
+    if (blocks_per_piece > 1) {
+        long temp = blocks_per_piece;
+        while (temp > 1) {
+            temp /= 2;
+            selected_layer++;
+        }
+    }
+
+    // Calculate total blocks in file
+    uint num_blocks = (uint)((file_length + merkle_tree::MERKLE_BLOCK_SIZE - 1) / merkle_tree::MERKLE_BLOCK_SIZE);
+
+    // Validate layer_hashes length
+    usz num_hashes = layer_hashes.len / common::SHA256_HASH_SIZE;
+    if (layer_hashes.len % common::SHA256_HASH_SIZE != 0) {
+        return TORRENT_INVALID_FORMAT?;
+    }
+
+    // Calculate expected number of hashes at selected layer
+    uint expected_hashes = num_blocks;
+    for (uint i = 0; i < selected_layer; i++) {
+        expected_hashes = (expected_hashes + 1) / 2;  // Round up division
+    }
+
+    if (num_hashes != expected_hashes) {
+        return TORRENT_INVALID_FORMAT?;
+    }
+
+    // Create MerkleTree
+    merkle_tree::MerkleTree* tree = mem::new(merkle_tree::MerkleTree);
+    tree.block_size = merkle_tree::MERKLE_BLOCK_SIZE;
+    tree.num_blocks = num_blocks;
+    tree.selected_layer = selected_layer;
+
+    // Calculate tree height
+    if (tree.num_blocks == 0) {
+        tree.tree_height = 0;
+    } else if (tree.num_blocks == 1) {
+        tree.tree_height = 0;
+    } else {
+        tree.tree_height = (uint)math::ceil(math::log2((double)tree.num_blocks));
+    }
+
+    // Initialize layers list
+    tree.layers.init(mem);
+
+    // Parse layer_hashes into selected_layer
+    merkle_tree::HashList base_layer;
+    base_layer.init(mem);
+
+    for (usz i = 0; i < num_hashes; i++) {
+        // Extract 32-byte hash
+        char[] hash_slice = layer_hashes[(i * common::SHA256_HASH_SIZE):common::SHA256_HASH_SIZE];
+
+        // Allocate and copy hash
+        char[] hash_copy = mem::new_array(char, common::SHA256_HASH_SIZE);
+        for (usz j = 0; j < common::SHA256_HASH_SIZE; j++) {
+            hash_copy[j] = hash_slice[j];
+        }
+        base_layer.push(hash_copy);
+    }
+
+    // Add empty layers from 0 to selected_layer-1 (we don't have these)
+    for (uint i = 0; i < selected_layer; i++) {
+        merkle_tree::HashList empty_layer;
+        empty_layer.init(mem);
+        tree.layers.push(empty_layer);
+    }
+
+    // Add the selected layer
+    tree.layers.push(base_layer);
+
+    // Build parent layers from selected_layer to root
+    uint current_layer_idx = selected_layer;
+    while (tree.layers[current_layer_idx].len() > 1) {
+        merkle_tree::HashList current_layer = tree.layers[current_layer_idx];
+        merkle_tree::HashList parent_layer;
+        parent_layer.init(mem);
+
+        usz num_nodes = current_layer.len();
+
+        // Combine pairs of hashes
+        for (usz i = 0; i < num_nodes; i += 2) {
+            char[] left = current_layer.get(i);
+
+            char[] right;
+            if (i + 1 < num_nodes) {
+                right = current_layer.get(i + 1);
+            } else {
+                // Odd number of nodes - duplicate last
+                right = left;
+            }
+
+            // Concatenate left || right
+            char[common::SHA256_HASH_SIZE * 2] combined;
+            for (uint j = 0; j < common::SHA256_HASH_SIZE; j++) {
+                combined[j] = left[j];
+                combined[common::SHA256_HASH_SIZE + j] = right[j];
+            }
+
+            // Hash combined
+            char[common::SHA256_HASH_SIZE] parent_hash = sha256::hash(combined[..]);
+
+            // Allocate and copy
+            char[] hash_copy = mem::new_array(char, common::SHA256_HASH_SIZE);
+            for (usz j = 0; j < common::SHA256_HASH_SIZE; j++) {
+                hash_copy[j] = parent_hash[j];
+            }
+            parent_layer.push(hash_copy);
+        }
+
+        tree.layers.push(parent_layer);
+        current_layer_idx++;
+    }
+
+    // Extract computed root hash
+    merkle_tree::HashList root_layer = tree.layers[tree.layers.len() - 1];
+    char[] computed_root = root_layer.get(0);
+
+    // Verify computed root matches pieces_root
+    for (uint i = 0; i < common::SHA256_HASH_SIZE; i++) {
+        if (computed_root[i] != pieces_root[i]) {
+            // Root mismatch - invalid layer data
+            tree.free();
+            return TORRENT_INVALID_FORMAT?;
+        }
+        tree.pieces_root[i] = pieces_root[i];
+    }
+
+    return tree;
 }
