@@ -201,7 +201,7 @@ fn void test_process_state_packet() @test
     conn.process_packet(&state);
 
     assert(conn.remote_window == state.wnd_size, "Remote window should be updated");
-    // Week 8: their_delay is now tracked in their_hist (LEDBAT Phase 2)
+    // their_delay is now tracked in their_hist (LEDBAT Phase 2)
     // delay_hist tracks queuing delay (sample - delay_base)
     // delay_base = 100 (minimum of all samples)
     // Current samples: 100-100=0, 150-100=50, 120-100=20
@@ -342,7 +342,7 @@ fn void test_process_reset_packet() @test
     bool ok = conn.process_packet(&reset);
 
     assert(ok, "RESET packet should be processed");
-    // Week 3 Day 5: With empty buffer, auto-transitions to DELETING
+    // With empty buffer, auto-transitions to DELETING
     assert(conn.state == ConnectionState.DELETING, "State should transition to DELETING");
     assert(conn.error_reason == connection::ErrorReason.RESET_RECEIVED, "Error reason should be set");
 
@@ -1433,7 +1433,7 @@ fn void test_can_delete() @test
 }
 
 // ============================================================================
-// Week 3 Day 5: Error Handling and Cleanup Tests
+// Error Handling and Cleanup Tests
 // ============================================================================
 
 /**

@@ -79,7 +79,7 @@ struct UtpSocket
     // State
     bool is_closed;
 
-    // Week 4: Timeout management
+    // Timeout management
     timeout::TimeoutManager* timeout_mgr;
 }
 
@@ -111,7 +111,7 @@ fn UtpSocket*? create(event_loop::EventLoop* loop) @public
     socket.user_data = null;
     socket.is_closed = false;
 
-    // Week 4: Create timeout manager
+    // Create timeout manager
     timeout::TimeoutManager*? mgr_result = timeout::create(loop);
     if (catch err = mgr_result)
     {
@@ -139,7 +139,7 @@ fn void UtpSocket.bind(&self, String ip, ushort port) @public
     // Start receiving packets
     self.udp_socket.recv_start(null, &on_packet_received, (void*)self);
 
-    // Week 4: Start timeout checking
+    // Start timeout checking
     if (self.timeout_mgr)
     {
         self.timeout_mgr.start(self);
@@ -216,7 +216,7 @@ fn void UtpSocket.send_packet(&self, lib_common::SocketAddress remote_addr,
 }
 
 /**
- * Send a SYN packet to initiate a connection (Week 2).
+ * Send a SYN packet to initiate a connection.
  *
  * @param conn : Connection to send SYN for
  */
@@ -242,7 +242,7 @@ fn void UtpSocket.send_syn(&self, connection::UtpConnection* conn) @public
 }
 
 /**
- * Send a SYN-ACK packet in response to a SYN (Week 2).
+ * Send a SYN-ACK packet in response to a SYN.
  *
  * @param conn : Connection to send SYN-ACK for
  */
@@ -268,7 +268,7 @@ fn void UtpSocket.send_syn_ack(&self, connection::UtpConnection* conn) @public
 }
 
 /**
- * Send a FIN packet to gracefully close a connection (Week 3).
+ * Send a FIN packet to gracefully close a connection.
  *
  * @param conn : Connection to send FIN for
  */
@@ -294,7 +294,7 @@ fn void UtpSocket.send_fin(&self, connection::UtpConnection* conn) @public
 }
 
 /**
- * Send a RESET packet to forcefully close a connection (Week 3).
+ * Send a RESET packet to forcefully close a connection.
  *
  * Used for unknown connection IDs, protocol errors, or forceful close.
  *
@@ -373,7 +373,7 @@ fn void on_packet_received(udp::UdpSocket* udp_socket, char[] data,
         }
         else
         {
-            // Week 3: Packet for unknown connection - send RESET
+            // Packet for unknown connection - send RESET
             // Don't send RESET for RESET packets (avoid loops)
             if (header.packet_type != common::ST_RESET)
             {
@@ -442,7 +442,7 @@ fn void UtpSocket.close(&self) @public
 
     self.is_closed = true;
 
-    // Week 4: Stop timeout manager (async close)
+    // Stop timeout manager (async close)
     if (self.timeout_mgr)
     {
         self.timeout_mgr.stop();
@@ -468,7 +468,7 @@ fn void UtpSocket.close(&self) @public
  */
 fn void UtpSocket.free(&self) @public
 {
-    // Week 4: Free timeout manager
+    // Free timeout manager
     if (self.timeout_mgr)
     {
         self.timeout_mgr.free();

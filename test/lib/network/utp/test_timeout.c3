@@ -20,7 +20,7 @@ alias utp_common = module libtorrent::utp::common;
 
  Tests timeout detection and retransmission logic.
 
- Week 4: Phase 1 timeout functionality:
+ Timeout functionality:
  - Fixed 1-second timeout
  - Exponential backoff
  - Max 5 retries

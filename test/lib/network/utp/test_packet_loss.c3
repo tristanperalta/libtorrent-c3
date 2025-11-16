@@ -20,7 +20,7 @@ alias utp_common = module libtorrent::utp::common;
 
  Tests reliability mechanisms under simulated packet loss.
 
- Week 6 Days 3-4: Packet loss simulation tests
+ Packet loss simulation tests
  - Retransmission on data loss
  - ACK loss handling
  - High packet loss reliability

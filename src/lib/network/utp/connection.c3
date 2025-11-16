@@ -831,16 +831,50 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
 
     // Update their delay history (LEDBAT Phase 2)
     ulong now_ms = (ulong)time::now().to_seconds() * 1000;
+    long now_us = (long)time::now().to_seconds() * 1_000_000;
+
+    // Clock drift compensation - store prev_delay_base before update
+    uint prev_their_delay_base = self.their_hist.delay_base;
     self.their_hist.add_sample(header.timestamp_difference_microseconds, now_ms);
 
-    // Week 5 Day 2: Process ACK to track bytes_in_flight
-    // Calculate bytes ACKed before removing packets
+    // Detect clock drift and compensate
+    if (self.their_hist.initialized && prev_their_delay_base > self.their_hist.delay_base)
+    {
+        // Their clock drifted slower - their delay_base decreased
+        uint drift = prev_their_delay_base - self.their_hist.delay_base;
+        // Only compensate for small drifts (< 10ms) to prevent abuse
+        if (drift <= 10000 && self.our_hist.initialized)
+        {
+            self.our_hist.shift(drift);
+        }
+    }
+
+    // Calculate one-way delay and update our_hist
+    // Process ACKs before removing packets from send buffer
     usz bytes_acked = 0;
     foreach (pkt : self.send_buf.packets)
     {
         if (compare_seq_nr(pkt.seq_nr, header.ack_nr) <= 0)
         {
             bytes_acked += pkt.data.len;
+
+            // Calculate actual one-way delay for this packet
+            // actual_delay = receive_time - send_time - their_delay
+            long rtt = now_us - pkt.send_time;
+            uint actual_delay = 0;
+            if (rtt > (long)header.timestamp_difference_microseconds)
+            {
+                actual_delay = (uint)(rtt - (long)header.timestamp_difference_microseconds);
+            }
+
+            // Update our delay history
+            self.our_hist.add_sample(actual_delay, now_ms);
+
+            // Update minimum RTT
+            if (rtt > 0 && (uint)rtt < self.min_rtt)
+            {
+                self.min_rtt = (uint)rtt;
+            }
         }
     }
 
@@ -857,10 +891,12 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
         self.bytes_in_flight = 0;  // Safety: prevent underflow
     }
 
-    // Week 5 Day 3: AIMD congestion control - increase cwnd on ACK
+    // LEDBAT congestion control - use real delay measurement
     if (bytes_acked > 0)
     {
-        self.on_packet_acked((uint)bytes_acked);
+        // Use our measured one-way delay (queuing delay)
+        uint our_delay = self.our_hist.get_value();
+        self.apply_ledbat((uint)bytes_acked, our_delay);
     }
 
     // Process based on packet type
@@ -1154,7 +1190,7 @@ fn bool UtpConnection.can_send_packet(&self, uint packet_size, uint payload_size
 }
 
 // ============================================================================
-// Week 8: LEDBAT Delay-Based Congestion Control (Phase 2)
+// LEDBAT Delay-Based Congestion Control
 // ============================================================================
 
 /**
@@ -1269,25 +1305,14 @@ fn void UtpConnection.apply_ledbat(&self, usz bytes_acked, uint our_delay) @publ
     self.cwnd = (uint)math::clamp(self.cwnd, min_cwnd, MAX_CWND);
 }
 
-/**
- * DEPRECATED: Kept for backward compatibility with Phase 1 tests.
- * New code should use apply_ledbat() instead.
- *
- * @param bytes_acked : Number of bytes acknowledged
- */
-fn void UtpConnection.on_packet_acked(&self, uint bytes_acked) @public
-{
-    // For now, call apply_ledbat with a dummy delay of 0
-    // This maintains Phase 1 test compatibility
-    // TODO Week 9: Remove this and update all callers to use apply_ledbat()
-    self.apply_ledbat(bytes_acked, 0);
-}
+// Removed deprecated on_packet_acked() wrapper function
+// All callers now use apply_ledbat() directly with real delay measurements
 
 /**
  * Handle packet timeout - decrease cwnd.
  *
  * Phase 1: AIMD multiplicative decrease (backward compatibility)
- * Phase 2: TODO Week 9 - Integrate LEDBAT timeout recovery
+ * Phase 2: TODO - Integrate LEDBAT timeout recovery
  */
 fn void UtpConnection.on_timeout(&self) @public
 {
@@ -1300,7 +1325,7 @@ fn void UtpConnection.on_timeout(&self) @public
         self.cwnd = self.mss;
     }
 
-    // TODO Week 9: When fully integrating LEDBAT delay measurement,
+    // TODO: When fully integrating LEDBAT delay measurement,
     // replace with LEDBAT timeout recovery:
     //   self.ssthresh = self.cwnd / 2;
     //   self.cwnd = self.mss;

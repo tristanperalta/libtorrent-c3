@@ -18,7 +18,7 @@ alias utp_common = module libtorrent::utp::common;
 
  Tests application-level data reception and bytes_in_flight tracking.
 
- Week 5 Day 2: Receive data wrapper and ACK handling
+ Receive data wrapper and ACK handling
  - recv_data() method
  - has_data() and bytes_available() helpers
  - ACK processing reduces bytes_in_flight

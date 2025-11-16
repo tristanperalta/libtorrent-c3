@@ -19,7 +19,7 @@ alias lib_common = module libtorrent::common;
 
  Tests AIMD (Additive Increase Multiplicative Decrease) congestion control.
 
- Week 5 Day 3: Simple AIMD implementation
+ Simple AIMD implementation
  - Additive increase on ACK: cwnd += MSS * bytes_acked / cwnd
  - Multiplicative decrease on timeout: cwnd /= 2
  - Minimum cwnd = 1 MSS
@@ -99,8 +99,9 @@ fn void test_cwnd_maximum() @test
     conn.transition_to_connected();
     conn.cwnd = 1024 * 1024 - 1000;  // Just below max
 
-    // ACK a lot of bytes
-    conn.on_packet_acked(100000);
+    // ACK a lot of bytes with low delay (should try to grow)
+    // Updated to use apply_ledbat() directly
+    conn.apply_ledbat(100000, 1000);  // 1ms delay (well below 100ms target)
 
     // Should be capped at 1MB
     assert(conn.cwnd <= 1024 * 1024, "cwnd should be capped at 1MB");
