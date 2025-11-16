@@ -3,6 +3,7 @@ module libtorrent::utp::socket;
 import libtorrent::utp::common;
 import libtorrent::utp::packet;
 import libtorrent::utp::connection;
+import libtorrent::utp::timeout;
 import libtorrent::common;
 import async::udp;
 import async::event_loop;
@@ -77,6 +78,9 @@ struct UtpSocket
 
     // State
     bool is_closed;
+
+    // Week 4: Timeout management
+    timeout::TimeoutManager* timeout_mgr;
 }
 
 // ============================================================================
@@ -107,6 +111,18 @@ fn UtpSocket*? create(event_loop::EventLoop* loop) @public
     socket.user_data = null;
     socket.is_closed = false;
 
+    // Week 4: Create timeout manager
+    timeout::TimeoutManager*? mgr_result = timeout::create(loop);
+    if (catch err = mgr_result)
+    {
+        io::eprintn("Warning: Failed to create timeout manager");
+        socket.timeout_mgr = null;
+    }
+    else
+    {
+        socket.timeout_mgr = mgr_result;
+    }
+
     return socket;
 }
 
@@ -122,6 +138,12 @@ fn void UtpSocket.bind(&self, String ip, ushort port) @public
 
     // Start receiving packets
     self.udp_socket.recv_start(null, &on_packet_received, (void*)self);
+
+    // Week 4: Start timeout checking
+    if (self.timeout_mgr)
+    {
+        self.timeout_mgr.start(self);
+    }
 }
 
 /**
@@ -420,6 +442,12 @@ fn void UtpSocket.close(&self) @public
 
     self.is_closed = true;
 
+    // Week 4: Stop timeout manager (async close)
+    if (self.timeout_mgr)
+    {
+        self.timeout_mgr.stop();
+    }
+
     // Close UDP socket (async)
     self.udp_socket.close();
 
@@ -440,5 +468,11 @@ fn void UtpSocket.close(&self) @public
  */
 fn void UtpSocket.free(&self) @public
 {
+    // Week 4: Free timeout manager
+    if (self.timeout_mgr)
+    {
+        self.timeout_mgr.free();
+    }
+
     free(self);
 }

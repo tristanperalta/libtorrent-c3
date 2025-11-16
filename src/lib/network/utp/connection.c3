@@ -147,6 +147,9 @@ struct UtpConnection
 
     // Error handling
     ErrorReason error_reason;  // Why connection failed (if in error state)
+
+    // Timeout tracking
+    uint current_timeout_ms;   // Current timeout value (doubles on retransmit)
 }
 
 /**
@@ -263,6 +266,9 @@ fn UtpConnection* create_outgoing(common::SocketAddress remote_addr, ushort conn
     // Initialize error tracking
     conn.error_reason = ErrorReason.NONE;
 
+    // Initialize timeout
+    conn.current_timeout_ms = 1000;  // 1 second initial timeout
+
     return conn;
 }
 
@@ -317,6 +323,9 @@ fn UtpConnection* create_incoming(common::SocketAddress remote_addr, packet::Utp
 
     // Initialize error tracking
     conn.error_reason = ErrorReason.NONE;
+
+    // Initialize timeout
+    conn.current_timeout_ms = 1000;  // 1 second initial timeout
 
     return conn;
 }
@@ -750,13 +759,13 @@ fn void UtpConnection.transition_to_deleting(&self) @public
 }
 
 // ============================================================================
-// Packet Processing (Phase 1: Basic)
+// Packet Processing
 // ============================================================================
 
 /**
  * Process received packet and update connection state.
  *
- * Phase 1: Basic processing - updates ack_nr, window, and timestamps.
+ * Basic processing - updates ack_nr, window, and timestamps.
  * Does NOT handle retransmission or out-of-order packets yet.
  *
  * @param header : Received packet header
@@ -795,7 +804,7 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
                 return true;
             }
             // Regular ACK packet
-            // Phase 1: Just update ack tracking (no buffer management yet)
+            // Just update ack tracking (no buffer management yet)
             return true;
 
         case common::ST_DATA:
@@ -851,7 +860,7 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
             return true;
 
         case common::ST_SYN:
-            // Duplicate SYN (ignore in Phase 1)
+            // Duplicate SYN
             return false;
     }
 
@@ -861,7 +870,7 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
 /**
  * Check if connection has timed out.
  *
- * Phase 1: Simple 30-second timeout.
+ * Simple 30-second timeout.
  *
  * @return true if connection should be closed due to timeout
  */
