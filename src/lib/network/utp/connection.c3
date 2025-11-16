@@ -2,9 +2,14 @@ module libtorrent::utp::connection;
 
 import libtorrent::utp::common;
 import libtorrent::utp::packet;
+import libtorrent::utp::socket;
 import libtorrent::common;
 import std::time;
 import std::collections::list;
+import std::io;
+
+faultdef SEND_NOT_CONNECTED;
+faultdef SEND_BUFFER_FULL;
 
 <*
  μTP Connection State Machine
@@ -150,6 +155,11 @@ struct UtpConnection
 
     // Timeout tracking
     uint current_timeout_ms;   // Current timeout value (doubles on retransmit)
+
+    uint mss;                  // Maximum segment size (1400 bytes default)
+    uint cwnd;                 // Congestion window (bytes)
+    uint bytes_in_flight;      // Bytes sent but not yet ACKed
+    ushort last_cwnd_ack;      // Last ACK processed for cwnd update
 }
 
 /**
@@ -269,6 +279,11 @@ fn UtpConnection* create_outgoing(common::SocketAddress remote_addr, ushort conn
     // Initialize timeout
     conn.current_timeout_ms = 1000;  // 1 second initial timeout
 
+    conn.mss = 1400;  // Conservative MSS (1500 MTU - 20 IP - 8 UDP - 20 μTP - ~52 bytes margin)
+    conn.cwnd = 2 * conn.mss;  // Initial window: 2 segments (conservative start)
+    conn.bytes_in_flight = 0;
+    conn.last_cwnd_ack = 0;
+
     return conn;
 }
 
@@ -326,6 +341,11 @@ fn UtpConnection* create_incoming(common::SocketAddress remote_addr, packet::Utp
 
     // Initialize timeout
     conn.current_timeout_ms = 1000;  // 1 second initial timeout
+
+    conn.mss = 1400;  // Conservative MSS (1500 MTU - 20 IP - 8 UDP - 20 μTP - ~52 bytes margin)
+    conn.cwnd = 2 * conn.mss;  // Initial window: 2 segments (conservative start)
+    conn.bytes_in_flight = 0;
+    conn.last_cwnd_ack = 0;
 
     return conn;
 }
@@ -788,6 +808,36 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
     // Update their delay (one-way delay measurement)
     self.their_delay = header.timestamp_difference_microseconds;
 
+    // Week 5 Day 2: Process ACK to track bytes_in_flight
+    // Calculate bytes ACKed before removing packets
+    usz bytes_acked = 0;
+    foreach (pkt : self.send_buf.packets)
+    {
+        if (compare_seq_nr(pkt.seq_nr, header.ack_nr) <= 0)
+        {
+            bytes_acked += pkt.data.len;
+        }
+    }
+
+    // Remove acknowledged packets from send buffer
+    self.send_buf.ack_packet(header.ack_nr);
+
+    // Update bytes_in_flight (subtract ACKed bytes)
+    if (bytes_acked <= self.bytes_in_flight)
+    {
+        self.bytes_in_flight -= (uint)bytes_acked;
+    }
+    else
+    {
+        self.bytes_in_flight = 0;  // Safety: prevent underflow
+    }
+
+    // Week 5 Day 3: AIMD congestion control - increase cwnd on ACK
+    if (bytes_acked > 0)
+    {
+        self.on_packet_acked((uint)bytes_acked);
+    }
+
     // Process based on packet type
     switch (header.packet_type)
     {
@@ -899,6 +949,240 @@ fn String UtpConnection.state_string(&self) @public
         case ConnectionState.DELETING: return "DELETING";
     }
     return "UNKNOWN";
+}
+
+// ============================================================================
+// Application Data Transfer
+// ============================================================================
+
+/**
+ * Send application data over μTP connection.
+ *
+ * Splits data into MSS-sized packets automatically.
+ *
+ * @param data : Application data to send
+ * @param socket : Socket to send packets through
+ * @return Fault if connection not ready or buffers full
+ */
+fn void? UtpConnection.send_data(&self, char[] data, socket::UtpSocket* socket) @public
+{
+    // Check connection state
+    if (self.state != ConnectionState.CONNECTED)
+    {
+        return SEND_NOT_CONNECTED?;
+    }
+
+    // Check how much we can send
+    uint max_send = self.max_bytes_to_send();
+    if (max_send == 0)
+    {
+        return SEND_BUFFER_FULL?;  // Backpressure
+    }
+
+    // Split into MSS-sized packets, respecting window limits
+    usz offset = 0;
+    usz total_payload_sent = 0;  // Track cumulative payload against remote_window
+    const uint HEADER_SIZE = 20;  // μTP header is 20 bytes
+
+    while (offset < data.len)
+    {
+        // Calculate chunk size (limited by MSS, remaining data, and remaining remote window)
+        usz remaining_data = data.len - offset;
+        usz remaining_rwnd = (self.remote_window > total_payload_sent)
+            ? (self.remote_window - total_payload_sent)
+            : 0;
+
+        usz chunk_size = min((usz)self.mss, remaining_data);
+        chunk_size = min(chunk_size, remaining_rwnd);  // Don't exceed receiver's remaining buffer
+
+        if (chunk_size == 0)
+        {
+            // No more window space
+            break;
+        }
+
+        // Check if we can send this packet (header + payload)
+        uint packet_size = HEADER_SIZE + (uint)chunk_size;
+        if (!self.can_send_packet(packet_size, (uint)chunk_size))
+        {
+            // Can't send more - hit window limit
+            break;
+        }
+
+        // Create chunk slice
+        char[] chunk = data[offset:chunk_size];
+
+        // Create ST_DATA packet header
+        packet::UtpHeader header;
+        header.packet_type = common::ST_DATA;
+        header.version = 1;
+        header.extension = 0;
+        header.connection_id = self.send_id;
+        header.timestamp_microseconds = (uint)((long)time::now().to_seconds() * 1_000_000);
+        header.timestamp_difference_microseconds = self.their_delay;
+        header.wnd_size = self.local_window;
+        header.seq_nr = self.seq_nr;
+        header.ack_nr = self.ack_nr;
+
+        // Encode packet with payload
+        char[] packet_data = packet::encode_packet(&header, chunk);
+        uint encoded_size = (uint)packet_data.len;
+
+        // Add to send buffer BEFORE sending (makes a copy for retransmission)
+        self.send_buf.add_packet(self.seq_nr, packet_data);
+
+        // Free the original (send buffer has its own copy)
+        free(packet_data);
+
+        // Send via socket
+        socket.send_packet(self.remote_addr, &header, chunk);
+
+        // Update state
+        self.seq_nr++;
+        self.bytes_in_flight += encoded_size;
+        self.last_send_time = (long)time::now().to_seconds() * 1_000_000;
+
+        offset += chunk_size;
+        total_payload_sent += chunk_size;
+    }
+}
+
+/**
+ * Receive application data from the connection.
+ *
+ * Simple wrapper around receive buffer.
+ *
+ * @param max_bytes : Maximum bytes to read
+ * @return Data received (empty if no data available)
+ */
+fn char[] UtpConnection.recv_data(&self, usz max_bytes) @public
+{
+    return self.recv_buf.read(max_bytes);
+}
+
+/**
+ * Check if received data is available to read.
+ *
+ * @return true if data is available
+ */
+fn bool UtpConnection.has_data(&self) @public
+{
+    return self.recv_buf.has_data();
+}
+
+/**
+ * Get number of bytes available to read.
+ *
+ * @return Bytes available in receive buffer
+ */
+fn usz UtpConnection.bytes_available(&self) @public
+{
+    return self.recv_buf.bytes_available();
+}
+
+/**
+ * Calculate maximum bytes we can send right now.
+ *
+ * Enforces: min(cwnd - bytes_in_flight, remote_window)
+ *
+ * Note: This returns bytes available for ENTIRE packets (header + payload),
+ * not just payload. Callers should account for 20-byte header per packet.
+ *
+ * @return Maximum bytes that can be sent without violating flow/congestion control
+ */
+fn uint UtpConnection.max_bytes_to_send(&self) @public
+{
+    // Can't send more than congestion window allows
+    uint cwnd_available = (self.cwnd > self.bytes_in_flight)
+        ? (self.cwnd - self.bytes_in_flight)
+        : 0;
+
+    // Can't send more than receiver's window allows
+    uint rwnd_available = self.remote_window;
+
+    // Take minimum
+    return min(cwnd_available, rwnd_available);
+}
+
+/**
+ * Check if we can send a packet of given size without exceeding windows.
+ *
+ * @param packet_size : Total packet size (header + payload)
+ * @param payload_size : Payload size only
+ * @return true if packet can be sent
+ */
+fn bool UtpConnection.can_send_packet(&self, uint packet_size, uint payload_size) @public
+{
+    // Check cwnd (compares total packet size)
+    if (self.bytes_in_flight + packet_size > self.cwnd)
+    {
+        return false;
+    }
+
+    // Check remote window (compares payload size only - receiver's buffer space)
+    if (payload_size > self.remote_window)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+// ============================================================================
+// Week 5 Day 3: Simple AIMD Congestion Control
+// ============================================================================
+
+/**
+ * Handle successful packet acknowledgment - increase cwnd (additive increase).
+ *
+ * AIMD Congestion Control:
+ * - Additive Increase: cwnd += MSS * bytes_acked / cwnd (per ACK)
+ * - This provides linear growth during congestion avoidance
+ *
+ * Phase 1: Simple implementation without slow-start threshold
+ *
+ * @param bytes_acked : Number of bytes acknowledged
+ */
+fn void UtpConnection.on_packet_acked(&self, uint bytes_acked) @public
+{
+    if (bytes_acked == 0) return;
+
+    // Additive increase: cwnd += MSS * bytes_acked / cwnd
+    // This approximates adding MSS per RTT of ACKs
+    uint increase = (self.mss * bytes_acked) / self.cwnd;
+
+    // Ensure we make progress (at least 1 byte increase)
+    if (increase == 0) increase = 1;
+
+    self.cwnd += increase;
+
+    // Cap cwnd at a reasonable maximum (1MB for Phase 1)
+    const uint MAX_CWND = 1024 * 1024;
+    if (self.cwnd > MAX_CWND)
+    {
+        self.cwnd = MAX_CWND;
+    }
+}
+
+/**
+ * Handle packet timeout - decrease cwnd (multiplicative decrease).
+ *
+ * AIMD Congestion Control:
+ * - Multiplicative Decrease: cwnd /= 2 (on packet loss/timeout)
+ * - Provides exponential backoff when congestion detected
+ *
+ * Phase 1: Simple implementation
+ */
+fn void UtpConnection.on_timeout(&self) @public
+{
+    // Multiplicative decrease: cut window in half
+    self.cwnd /= 2;
+
+    // Never go below 1 MSS
+    if (self.cwnd < self.mss)
+    {
+        self.cwnd = self.mss;
+    }
 }
 
 // ============================================================================

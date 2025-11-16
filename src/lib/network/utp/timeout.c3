@@ -26,7 +26,7 @@ import std::collections::list;
  - Iterates through connections and their send buffers
  - Retransmits timed-out packets or fails connection
 
- Future (Phase 2):
+ Future:
  - Dynamic RTT-based timeout calculation
  - Minimum/maximum timeout bounds
  - Fast retransmit (duplicate ACK detection)
@@ -274,6 +274,9 @@ fn void handle_packet_timeout(TimeoutManager* mgr, connection::UtpConnection* co
 
     // Increment retry counter
     pkt.num_transmissions++;
+
+    // AIMD congestion control - decrease cwnd on timeout
+    conn.on_timeout();
 
     // Update send time for next timeout check
     pkt.send_time = (long)time::now().to_seconds() * 1_000_000;
