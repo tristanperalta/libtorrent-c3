@@ -5,6 +5,7 @@ A BitTorrent client and library written in C3. Downloads torrents, exchanges pee
 ## Features
 
 - **Parse .torrent files** including symlinks and file attributes (BEP 47)
+- **BitTorrent v2 protocol** with SHA-256 hashing and Merkle trees (BEP 52 - 85% complete)
 - **Magnet links** with metadata exchange (BEP 9)
 - **Exchange peers automatically** without trackers using PEX (BEP 11)
 - **Fast Extension** for improved peer bootstrapping (BEP 6)
