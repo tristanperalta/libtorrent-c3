@@ -1001,6 +1001,9 @@ fn void PeerPool.connect_to_peers(&self) @public
             &on_peer_state_internal,    // Bridge: adds IP/port
             &on_pex_message_internal,   // Bridge: adds PEX peers to pool
             self.on_metadata,            // Metadata callback for magnet links (BEP 9)
+            null,                        // BEP 52: Hash request callback (not implemented yet)
+            null,                        // BEP 52: Hashes callback (not implemented yet)
+            null,                        // BEP 52: Hash reject callback (not implemented yet)
             (PeerPool*)self,             // Pass pool as user_data for bridge
             self.is_private,             // BEP 27: Pass private flag
             self.upload_only             // BEP 21: Pass upload-only flag

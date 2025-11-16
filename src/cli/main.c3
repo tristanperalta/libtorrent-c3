@@ -901,6 +901,9 @@ fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int stat
             &on_connect_peer_state,
             null,  // No PEX callback for simple client
             null,  // No metadata callback for simple client
+            null,  // BEP 52: No hash request callback for simple client
+            null,  // BEP 52: No hashes callback for simple client
+            null,  // BEP 52: No hash reject callback for simple client
             ctx,
             ctx.torrent.info.private  // BEP 27: Pass private flag
         );
@@ -1188,6 +1191,8 @@ fn int cmd_download(event_loop::EventLoop* loop, String torrent_path,
     ctx.flush_timer = null;
     ctx.block_timeout_timer = null;
     ctx.peer_pool = null;
+    ctx.upload_mgr = null;
+    ctx.upload_timer = null;
     ctx.download_complete = false;
     ctx.is_partial_seed = false;  // BEP 21: TODO - set true if selective download
     ctx.exit_code = 0;
