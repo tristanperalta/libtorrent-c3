@@ -4,9 +4,11 @@ import async::file;
 import async::work;
 import async::event_loop;
 import libtorrent::metainfo;
+import libtorrent::merkle_tree;
 import libtorrent::ports::state_provider;
 import std::io;
 import std::hash::sha1;
+import std::hash::sha256;
 import libc;
 
 <*
@@ -66,10 +68,15 @@ struct StorageManager
     uint piece_length;         // Standard piece length
     uint last_piece_length;    // Last piece may be shorter
     uint num_pieces;           // Total number of pieces
-    char[] piece_hashes;       // SHA-1 hashes (20 bytes each)
+    char[] piece_hashes;       // SHA-1 hashes (20 bytes each) - v1 only
     ulong total_length;        // Total torrent size
     bool pre_allocate;         // Pre-allocate files
     bool[] piece_complete;     // BEP 21: Track which pieces are complete
+
+    // BEP 52: v2 fields
+    metainfo::TorrentInfo* torrent_info;  // Reference for v2 Merkle trees
+    int meta_version;                      // 1=v1, 2=v2/hybrid, 0=unknown
+    bool is_v2;                            // True if v2 or hybrid torrent
 }
 
 // Callback types
@@ -164,6 +171,11 @@ fn StorageManager? create(event_loop::EventLoop* loop, metainfo::TorrentInfo* in
             manager.files[i].is_selected = true;  // Default: all files selected
         }
     }
+
+    // BEP 52: Initialize v2 fields
+    manager.torrent_info = info;
+    manager.meta_version = info.meta_version;
+    manager.is_v2 = info.is_v2;
 
     return manager;
 }
@@ -936,6 +948,158 @@ fn void on_sha1_complete(void* output, int status, void* user_data)
     std::core::mem::free(ctx);
 }
 
+// Context for SHA-256/Merkle verification in thread pool (BEP 52)
+struct Sha256WorkContext
+{
+    StorageManager* manager;    // For accessing event loop
+    uint piece_index;
+    char[] piece_data;          // Data to verify
+    merkle_tree::MerkleProof* proof;  // Merkle proof for this piece
+    VerifyCompleteCallback cb;
+    void* user_data;
+    async::event_loop::WorkContext* work_ctx;
+}
+
+<*
+ Work function - runs in thread pool.
+ For v2, we just pass through - actual verification happens in event loop
+ to avoid temp allocator issues with @pool in threads.
+*>
+fn void do_sha256_verify_work(void* input, void** output)
+{
+    // Just pass through - verification happens in event loop callback
+    *output = input;
+}
+
+<*
+ Completion callback - runs in event loop.
+ Verifies Merkle proof and calls user callback.
+*>
+fn void on_sha256_complete(void* output, int status, void* user_data)
+{
+    Sha256WorkContext* ctx = (Sha256WorkContext*)output;
+
+    if (status < 0)
+    {
+        // Thread pool error
+        if (ctx.cb)
+        {
+            ctx.cb(ctx.piece_index, false, status, ctx.user_data);
+        }
+        std::core::mem::free(ctx.piece_data);
+        ctx.proof.free();
+        if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
+        std::core::mem::free(ctx);
+        return;
+    }
+
+    // Verify Merkle proof (uses @pool, so we do it in event loop thread)
+    bool verified = merkle_tree::verify_proof(ctx.piece_data, ctx.proof);
+
+    // Call user callback with verification result
+    if (ctx.cb)
+    {
+        ctx.cb(ctx.piece_index, verified, 0, ctx.user_data);
+    }
+
+    // Clean up
+    std::core::mem::free(ctx.piece_data);
+    ctx.proof.free();
+    if (ctx.work_ctx) std::core::mem::free(ctx.work_ctx);
+    std::core::mem::free(ctx);
+}
+
+// Callback for v2 piece read before verification
+fn void on_verify_v2_read_complete(uint piece_index, char[] piece_data, int status, void* user_data)
+{
+    Sha256WorkContext* ctx = (Sha256WorkContext*)user_data;
+
+    if (status < 0)
+    {
+        // Read error
+        if (ctx.cb)
+        {
+            ctx.cb(piece_index, false, status, ctx.user_data);
+        }
+        ctx.proof.free();
+        std::core::mem::free(ctx);
+        return;
+    }
+
+    // Store piece data
+    ctx.piece_data = piece_data;
+
+    // Create async work context
+    async::event_loop::WorkContext* work_ctx = mem::new(async::event_loop::WorkContext);
+    work_ctx.input = ctx;
+    work_ctx.work_fn = &do_sha256_verify_work;
+    work_ctx.callback = &on_sha256_complete;
+    work_ctx.user_data = ctx.user_data;
+    ctx.work_ctx = work_ctx;
+
+    // Queue verification to thread pool
+    int result = ctx.manager.loop.queue_work(work_ctx);
+    if (result != 0)
+    {
+        // Failed to queue - call callback with error
+        if (ctx.cb)
+        {
+            ctx.cb(piece_index, false, -1, ctx.user_data);
+        }
+
+        // Clean up
+        std::core::mem::free(piece_data);
+        ctx.proof.free();
+        std::core::mem::free(work_ctx);
+        std::core::mem::free(ctx);
+    }
+}
+
+<*
+ Internal function to verify a v2 piece using Merkle proof.
+ Called by verify_piece() when meta_version == 2.
+*>
+fn void StorageManager.verify_piece_v2_internal(&self, uint piece_index,
+                                                 VerifyCompleteCallback callback, void* user_data) @private
+{
+    // Validate piece index
+    if (piece_index >= self.num_pieces)
+    {
+        if (callback) callback(piece_index, false, -1, user_data);
+        return;
+    }
+
+    // Find which file this piece belongs to (v2 single-file for now)
+    // TODO: Handle multi-file v2 torrents properly
+    if (self.torrent_info.piece_layers.len == 0)
+    {
+        if (callback) callback(piece_index, false, -1, user_data);
+        return;
+    }
+
+    merkle_tree::MerkleTree* tree = self.torrent_info.piece_layers[0];
+    if (tree == null)
+    {
+        if (callback) callback(piece_index, false, -1, user_data);
+        return;
+    }
+
+    // Generate Merkle proof for this piece
+    merkle_tree::MerkleProof* proof = tree.generate_proof(piece_index);
+
+    // Create verification context
+    Sha256WorkContext* ctx = mem::new(Sha256WorkContext);
+    ctx.manager = (StorageManager*)self;
+    ctx.piece_index = piece_index;
+    ctx.proof = proof;
+    ctx.cb = callback;
+    ctx.user_data = user_data;
+    ctx.work_ctx = null;
+
+    // Read piece and verify in callback
+    self.read_piece(piece_index, &on_verify_v2_read_complete, ctx);
+}
+
 fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status, void* user_data)
 {
     VerifyContext* ctx = (VerifyContext*)user_data;
@@ -990,14 +1154,27 @@ fn void on_verify_read_complete(uint piece_index, char[] piece_data, int status,
 <*
  Verify a piece by reading and checking its hash.
 
+ For v1 torrents: Uses SHA-1 hash verification
+ For v2 torrents: Uses Merkle proof verification (expected_hash is ignored)
+ For hybrid torrents: Currently uses v2 Merkle verification
+
  @param piece_index : "Piece index"
- @param expected_hash : "Expected SHA-1 hash"
+ @param expected_hash : "Expected SHA-1 hash (v1 only, ignored for v2)"
  @param callback : "Completion callback"
  @param user_data : "User data for callback"
 *>
 fn void StorageManager.verify_piece(&self, uint piece_index, char[20] expected_hash,
                                      VerifyCompleteCallback callback, void* user_data) @public
 {
+    // Dispatch based on torrent version
+    if (self.is_v2)
+    {
+        // v2 or hybrid: Use Merkle tree verification
+        self.verify_piece_v2_internal(piece_index, callback, user_data);
+        return;
+    }
+
+    // v1: Use SHA-1 verification
     VerifyContext* ctx = mem::new(VerifyContext);
     ctx.manager = (StorageManager*)self;
     ctx.piece_index = piece_index;
