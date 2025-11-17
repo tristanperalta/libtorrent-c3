@@ -19,6 +19,7 @@ import libtorrent::piece_assembler;
 import libtorrent::storage_manager;
 import libtorrent::file_selection;
 import libtorrent::storage;
+import libtorrent::storage::fastresume;
 import libtorrent::upload_manager;
 import libtorrent::upload_handler;
 import libtorrent::bitfield;
@@ -278,9 +279,9 @@ struct SessionOptions
     // Resume Data Settings (BEP 21)
     // ========================================================================
 
-    // Enable fastresume (save/load download state)
-    // Default: true
-    bool enable_fastresume;
+    // State provider for persisting download state (FastResume/SQLite/NoOp)
+    // Set to null to disable state persistence
+    storage::StateProvider state_provider;
 
     // Path to .torrent file (REQUIRED for fastresume and metadata)
     String torrent_path;
@@ -359,9 +360,7 @@ struct Session
     bool is_partial_seed;       // BEP 21: We are a partial seed (multi-file, selective download)
     int exit_code;
     String torrent_path;        // Path to .torrent file (for resume data)
-    // Note: Using concrete type instead of interface due to C3 limitation
-    // (interfaces don't work with heap-allocated structs)
-    fastresume::FastResumeStateProvider* state_provider;  // BEP 21: FastResume state persistence
+    storage::StateProvider state_provider;  // BEP 21: State persistence (FastResume/SQLite/NoOp)
 
     // Download statistics
     ulong total_bytes_downloaded;       // Total bytes downloaded (all sources)
@@ -451,7 +450,7 @@ fn SessionOptions create_default_session_options(String save_path, String torren
     options.dht_port = 6881;
 
     // Resume settings
-    options.enable_fastresume = true;
+    options.state_provider = (storage::StateProvider)fastresume::create();
     options.torrent_path = torrent_path;
 
     // Advanced settings
@@ -502,7 +501,7 @@ fn SessionOptions create_min_memory_session_options(String save_path, String tor
     options.dht_port = 6881;
 
     // Resume settings
-    options.enable_fastresume = true;
+    options.state_provider = (storage::StateProvider)fastresume::create();
     options.torrent_path = torrent_path;
 
     // Advanced settings
@@ -554,7 +553,7 @@ fn SessionOptions create_high_performance_session_options(String save_path, Stri
     options.dht_port = 6881;
 
     // Resume settings
-    options.enable_fastresume = true;
+    options.state_provider = (storage::StateProvider)fastresume::create();
     options.torrent_path = torrent_path;
 
     // Advanced settings
@@ -654,15 +653,8 @@ fn Session* create_session(torrent_manager::TorrentManager* manager, SessionOpti
     ctx.exit_code = 0;
     ctx.torrent_path = options.torrent_path;
 
-    // Create download state provider (FastResume)
-    if (options.enable_fastresume)
-    {
-        ctx.state_provider = fastresume::create();
-    }
-    else
-    {
-        ctx.state_provider = null;
-    }
+    // Set state provider (dependency injection)
+    ctx.state_provider = options.state_provider;
 
     // Initialize download statistics
     ctx.total_bytes_downloaded = 0;
@@ -896,8 +888,7 @@ fn void on_partial_seed_complete(Session* ctx) @public
         storage::DownloadState state = build_download_state(ctx);
         defer state.free();
 
-        // Use wrapper function instead of interface method
-        if (catch err = fastresume::save(ctx.torrent_path, &state))
+        if (catch err = ctx.state_provider.save_state(ctx.torrent_path, &state))
         {
             io::eprintfn("Warning: Failed to save fastresume data: %s", err);
         }
@@ -1698,8 +1689,7 @@ fn bool try_load_fastresume_data(Session* ctx) @public
 
     io::printfn("  Torrent path: %s", ctx.torrent_path);
 
-    // Load state using wrapper function (not interface - C3 interfaces don't work with heap allocation)
-    storage::DownloadState? state_opt = fastresume::load(ctx.torrent_path);
+    storage::DownloadState? state_opt = ctx.state_provider.load_state(ctx.torrent_path);
     if (catch err = state_opt)
     {
         io::printfn("  Warning: Failed to load resume data: %s", err);
@@ -1960,8 +1950,7 @@ fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
 
         // Silently save - don't spam logs every flush
         // Ignore errors to avoid log spam
-        // Use wrapper function instead of interface method
-        (void)fastresume::save(ctx.torrent_path, &state);
+        (void)ctx.state_provider.save_state(ctx.torrent_path, &state);
     }
 }
 
@@ -2297,8 +2286,7 @@ fn void on_all_pieces_verified(Session* ctx) @public
             storage::DownloadState state = build_download_state(ctx);
             defer state.free();
 
-            // Use wrapper function instead of interface method
-            if (catch err = fastresume::save(ctx.torrent_path, &state))
+            if (catch err = ctx.state_provider.save_state(ctx.torrent_path, &state))
             {
                 io::printfn("  Warning: Failed to save initial fastresume: %s", err);
             }
