@@ -7,8 +7,8 @@ import libtorrent::common;
 import libtorrent::metainfo;
 import libtorrent::dht_client;
 import libtorrent::lsd;
-import libtorrent::ports::peer_discovery;
-import libtorrent::adapters::composite_peer_discovery;
+import libtorrent::discovery;
+import libtorrent::discovery::composite;
 import libtorrent::session;
 import libtorrent::resolve_links;
 import async::event_loop;
@@ -66,7 +66,7 @@ struct TorrentManager
     // Shared resources (owned by TorrentManager)
     dht_client::DhtClient* dht;
     // WORKAROUND: Store concrete type instead of interface due to C3 vtable bug
-    composite_peer_discovery::CompositePeerDiscovery* peer_discovery;
+    composite::CompositePeerDiscovery* peer_discovery;
     lsd::LsdManager* lsd_mgr;
 
     // Shared timers

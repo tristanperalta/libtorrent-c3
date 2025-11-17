@@ -1,7 +1,7 @@
 module libtorrent_test::test_composite_peer_discovery;
 
-import libtorrent::ports::peer_discovery;
-import libtorrent::adapters::composite_peer_discovery;
+import libtorrent::discovery;
+import libtorrent::discovery::composite;
 import libtorrent_test::mocks::mock_peer_discovery;
 import libtorrent::common;
 import std::core::log;
@@ -39,8 +39,8 @@ fn void on_test_complete(bool success, String error, void* user_data)
 
 fn void test_create_empty_composite() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     assert(composite != null, "Should create composite");
@@ -54,8 +54,8 @@ fn void test_create_empty_composite() @test
 
 fn void test_add_single_source() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     // Create mock source
@@ -64,7 +64,7 @@ fn void test_add_single_source() @test
     mock.set_name("test-mock");
 
     // Add as interface
-    peer_discovery::PeerDiscovery source = (peer_discovery::PeerDiscovery)mock;
+    discovery::PeerDiscovery source = (discovery::PeerDiscovery)mock;
     composite.add_source(source);
 
     assert(composite.get_source_count() == 1, "Should have 1 source");
@@ -72,8 +72,8 @@ fn void test_add_single_source() @test
 
 fn void test_add_multiple_sources() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     // Create multiple mock sources
@@ -85,9 +85,9 @@ fn void test_add_multiple_sources() @test
     mock3.set_name("mock3");
 
     // Add all sources
-    composite.add_source((peer_discovery::PeerDiscovery)mock1);
-    composite.add_source((peer_discovery::PeerDiscovery)mock2);
-    composite.add_source((peer_discovery::PeerDiscovery)mock3);
+    composite.add_source((discovery::PeerDiscovery)mock1);
+    composite.add_source((discovery::PeerDiscovery)mock2);
+    composite.add_source((discovery::PeerDiscovery)mock3);
 
     assert(composite.get_source_count() == 3, "Should have 3 sources");
 }
@@ -98,8 +98,8 @@ fn void test_add_multiple_sources() @test
 
 fn void test_start_discovery_no_sources() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     TestContext ctx;
@@ -109,7 +109,7 @@ fn void test_start_discovery_no_sources() @test
     common::InfoHash info_hash;
     for (int i = 0; i < 20; i++) info_hash[i] = (char)i;
 
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     composite.start_discovery(
         &info_hash,
@@ -126,8 +126,8 @@ fn void test_start_discovery_no_sources() @test
 
 fn void test_start_discovery_with_sources() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     // Create and configure mock source
@@ -141,7 +141,7 @@ fn void test_start_discovery_with_sources() @test
     mock.set_peers_to_return(test_peers[..]);
 
     // Add source to composite
-    composite.add_source((peer_discovery::PeerDiscovery)mock);
+    composite.add_source((discovery::PeerDiscovery)mock);
 
     TestContext ctx;
     ctx.peer_callback_called = false;
@@ -151,7 +151,7 @@ fn void test_start_discovery_with_sources() @test
     common::InfoHash info_hash;
     for (int i = 0; i < 20; i++) info_hash[i] = (char)i;
 
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     composite.start_discovery(
         &info_hash,
@@ -170,14 +170,14 @@ fn void test_start_discovery_with_sources() @test
 
 fn void test_prevent_double_start() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     // Add a mock source
     mock_peer_discovery::MockPeerDiscovery* mock = mock_peer_discovery::create();
     mock.set_should_succeed(true);
-    composite.add_source((peer_discovery::PeerDiscovery)mock);
+    composite.add_source((discovery::PeerDiscovery)mock);
 
     TestContext ctx;
     ctx.peer_callback_called = false;
@@ -186,7 +186,7 @@ fn void test_prevent_double_start() @test
     common::InfoHash info_hash;
     for (int i = 0; i < 20; i++) info_hash[i] = (char)i;
 
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     // Start discovery first time
     composite.start_discovery(&info_hash, &options, &on_test_peers, &on_test_complete, &ctx);
@@ -204,19 +204,19 @@ fn void test_prevent_double_start() @test
 
 fn void test_stop_discovery() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     // Add mock source
     mock_peer_discovery::MockPeerDiscovery* mock = mock_peer_discovery::create();
     mock.set_should_succeed(true);
-    composite.add_source((peer_discovery::PeerDiscovery)mock);
+    composite.add_source((discovery::PeerDiscovery)mock);
 
     // Start discovery
     TestContext ctx;
     common::InfoHash info_hash;
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
     composite.start_discovery(&info_hash, &options, &on_test_peers, &on_test_complete, &ctx);
 
     assert(composite.is_active(), "Should be active");
@@ -235,11 +235,11 @@ fn void test_stop_discovery() @test
 
 fn void test_aggregated_stats_empty() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
-    peer_discovery::DiscoveryStats stats = composite.get_stats();
+    discovery::DiscoveryStats stats = composite.get_stats();
 
     assert(stats.total_peers_discovered == 0);
     assert(stats.total_discovery_attempts == 0);
@@ -249,8 +249,8 @@ fn void test_aggregated_stats_empty() @test
 
 fn void test_aggregated_stats_single_source() @test
 {
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
     defer composite.free();
 
     // Create mock with stats
@@ -264,16 +264,16 @@ fn void test_aggregated_stats_single_source() @test
     }
     mock.set_peers_to_return(test_peers[..]);
 
-    composite.add_source((peer_discovery::PeerDiscovery)mock);
+    composite.add_source((discovery::PeerDiscovery)mock);
 
     // Start discovery to generate stats
     TestContext ctx;
     common::InfoHash info_hash;
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
     composite.start_discovery(&info_hash, &options, &on_test_peers, &on_test_complete, &ctx);
 
     // Get aggregated stats
-    peer_discovery::DiscoveryStats stats = composite.get_stats();
+    discovery::DiscoveryStats stats = composite.get_stats();
 
     // Should reflect mock's stats
     assert(stats.total_peers_discovered == 5, "Should have 5 peers from mock");

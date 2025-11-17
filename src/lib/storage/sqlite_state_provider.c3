@@ -1,6 +1,6 @@
-module libtorrent::adapters::sqlite_state_provider;
+module libtorrent::storage::sqlite;
 
-import libtorrent::ports::state_provider;
+import libtorrent::storage;
 
 /**
  * SQLiteStateProvider - Database backend for scalable state persistence.
@@ -111,7 +111,7 @@ import libtorrent::ports::state_provider;
 /**
  * SQLiteStateProvider struct.
  */
-struct SQLiteStateProvider (state_provider::StateProvider)
+struct SQLiteStateProvider (storage::StateProvider)
 {
     void*[2] _dummy;  // C3 interfaces may need extra space for vtable metadata
     // TODO: Add database connection handle when SQLite bindings available
@@ -127,11 +127,11 @@ struct SQLiteStateProvider (state_provider::StateProvider)
  *
  * TODO: Implement SQL query to load state from database.
  */
-fn state_provider::DownloadState? SQLiteStateProvider.load_state(&self, String torrent_path) @dynamic
+fn storage::DownloadState? SQLiteStateProvider.load_state(&self, String torrent_path) @dynamic
 {
     // Stub implementation - always fails for now
     // Future: Execute SELECT query and deserialize BLOB fields
-    return state_provider::STATE_LOAD_ERROR?;
+    return storage::STATE_LOAD_ERROR?;
 }
 
 /**
@@ -139,7 +139,7 @@ fn state_provider::DownloadState? SQLiteStateProvider.load_state(&self, String t
  *
  * TODO: Implement SQL upsert to save state to database.
  */
-fn void? SQLiteStateProvider.save_state(&self, String torrent_path, state_provider::DownloadState* state) @dynamic
+fn void? SQLiteStateProvider.save_state(&self, String torrent_path, storage::DownloadState* state) @dynamic
 {
     // Stub implementation - no-op for now
     // Future: Execute INSERT OR REPLACE query with all fields
@@ -185,7 +185,7 @@ fn void SQLiteStateProvider.free(&self) @dynamic
  *
  * @return "Provider instance (STUB - not fully implemented yet)"
  */
-fn state_provider::StateProvider* create() @public
+fn storage::StateProvider* create() @public
 {
     SQLiteStateProvider* provider = mem::new(SQLiteStateProvider);
 
@@ -193,5 +193,5 @@ fn state_provider::StateProvider* create() @public
     // TODO: Create tables if they don't exist
     // TODO: Run migrations if schema version changed
 
-    return (state_provider::StateProvider*)provider;
+    return (storage::StateProvider*)provider;
 }

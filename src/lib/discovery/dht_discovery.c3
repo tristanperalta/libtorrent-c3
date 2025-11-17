@@ -1,6 +1,6 @@
-module libtorrent::adapters::dht_peer_discovery;
+module libtorrent::discovery::dht;
 
-import libtorrent::ports::peer_discovery;
+import libtorrent::discovery;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::dht_routing_table;
@@ -35,14 +35,14 @@ import std::collections::list;
  *>
 
 // DhtPeerDiscovery adapter struct
-struct DhtPeerDiscovery (peer_discovery::PeerDiscovery)
+struct DhtPeerDiscovery (discovery::PeerDiscovery)
 {
     // Dependencies
     dht_client::DhtClient* dht_client;
     event_loop::EventLoop* loop;
 
     // Configuration
-    peer_discovery::DiscoveryOptions options;
+    discovery::DiscoveryOptions options;
 
     // State
     bool active;
@@ -50,12 +50,12 @@ struct DhtPeerDiscovery (peer_discovery::PeerDiscovery)
     dht_get_peers::GetPeersSearch* search;
 
     // Callbacks
-    peer_discovery::PeerDiscoveredCallback peer_callback;
-    peer_discovery::DiscoveryCompleteCallback complete_callback;
+    discovery::PeerDiscoveredCallback peer_callback;
+    discovery::DiscoveryCompleteCallback complete_callback;
     void* user_data;
 
     // Statistics
-    peer_discovery::DiscoveryStats stats;
+    discovery::DiscoveryStats stats;
     long last_discovery_start_time;
 
     // Timers
@@ -84,7 +84,7 @@ fn DhtPeerDiscovery* create(
     adapter.dht_client = dht_client;
     adapter.loop = loop;
 
-    adapter.options = peer_discovery::default_options();
+    adapter.options = discovery::default_options();
 
     adapter.active = false;
     adapter.search = null;
@@ -358,9 +358,9 @@ fn void DhtPeerDiscovery.do_search(&self) @private
 fn void DhtPeerDiscovery.start_discovery(
     &self,
     common::InfoHash* info_hash,
-    peer_discovery::DiscoveryOptions* options,
-    peer_discovery::PeerDiscoveredCallback peer_callback,
-    peer_discovery::DiscoveryCompleteCallback complete_callback,
+    discovery::DiscoveryOptions* options,
+    discovery::PeerDiscoveredCallback peer_callback,
+    discovery::DiscoveryCompleteCallback complete_callback,
     void* user_data
 ) @dynamic
 {
@@ -445,7 +445,7 @@ fn void DhtPeerDiscovery.stop_discovery(&self) @dynamic
     }
 }
 
-fn peer_discovery::DiscoveryStats DhtPeerDiscovery.get_stats(&self) @dynamic
+fn discovery::DiscoveryStats DhtPeerDiscovery.get_stats(&self) @dynamic
 {
     return self.stats;
 }

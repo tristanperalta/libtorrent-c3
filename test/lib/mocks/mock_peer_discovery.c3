@@ -1,6 +1,6 @@
 module libtorrent_test::mocks::mock_peer_discovery;
 
-import libtorrent::ports::peer_discovery;
+import libtorrent::discovery;
 import libtorrent::common;
 
 <*
@@ -20,7 +20,7 @@ import libtorrent::common;
  *   mock.set_should_succeed(true);
  *
  *   // Use as PeerDiscovery interface
- *   peer_discovery::PeerDiscovery* discovery = (peer_discovery::PeerDiscovery*)mock;
+ *   discovery::PeerDiscovery* discovery = (discovery::PeerDiscovery*)mock;
  *   discovery.start_discovery(...);
  *
  *   // Verify behavior
@@ -29,7 +29,7 @@ import libtorrent::common;
  *>
 
 // MockPeerDiscovery struct
-struct MockPeerDiscovery (peer_discovery::PeerDiscovery)
+struct MockPeerDiscovery (discovery::PeerDiscovery)
 {
     // Configuration
     common::SocketAddress[] peers_to_return;
@@ -51,16 +51,16 @@ struct MockPeerDiscovery (peer_discovery::PeerDiscovery)
 
     // Last call parameters
     common::InfoHash last_info_hash;
-    peer_discovery::DiscoveryOptions last_options;
+    discovery::DiscoveryOptions last_options;
 
     // Callbacks stored
-    peer_discovery::PeerDiscoveredCallback peer_callback;
-    peer_discovery::DiscoveryCompleteCallback complete_callback;
+    discovery::PeerDiscoveredCallback peer_callback;
+    discovery::DiscoveryCompleteCallback complete_callback;
     void* user_data;
 
     // State
     bool active;
-    peer_discovery::DiscoveryStats stats;
+    discovery::DiscoveryStats stats;
 }
 
 // ============================================================================
@@ -118,10 +118,10 @@ fn MockPeerDiscovery* create() @public
  *
  * @return "PeerDiscovery interface pointer to mock"
  *>
-fn peer_discovery::PeerDiscovery* create_as_interface() @public
+fn discovery::PeerDiscovery* create_as_interface() @public
 {
     MockPeerDiscovery* mock = create();
-    return (peer_discovery::PeerDiscovery*)mock;
+    return (discovery::PeerDiscovery*)mock;
 }
 
 // ============================================================================
@@ -230,9 +230,9 @@ fn void MockPeerDiscovery.trigger_complete_callback(&self,
 fn void MockPeerDiscovery.start_discovery(
     &self,
     common::InfoHash* info_hash,
-    peer_discovery::DiscoveryOptions* options,
-    peer_discovery::PeerDiscoveredCallback peer_callback,
-    peer_discovery::DiscoveryCompleteCallback complete_callback,
+    discovery::DiscoveryOptions* options,
+    discovery::PeerDiscoveredCallback peer_callback,
+    discovery::DiscoveryCompleteCallback complete_callback,
     void* user_data
 ) @dynamic
 {
@@ -290,7 +290,7 @@ fn void MockPeerDiscovery.stop_discovery(&self) @dynamic
     self.active = false;
 }
 
-fn peer_discovery::DiscoveryStats MockPeerDiscovery.get_stats(&self) @dynamic
+fn discovery::DiscoveryStats MockPeerDiscovery.get_stats(&self) @dynamic
 {
     self.get_stats_called = true;
     self.get_stats_call_count++;

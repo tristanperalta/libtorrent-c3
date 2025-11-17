@@ -1,6 +1,6 @@
-module libtorrent::adapters::tracker_peer_discovery;
+module libtorrent::discovery::tracker;
 
-import libtorrent::ports::peer_discovery;
+import libtorrent::discovery;
 import libtorrent::tracker;
 import libtorrent::tracker_manager;
 import libtorrent::metainfo;
@@ -86,7 +86,7 @@ struct AnnounceContext
 }
 
 // TrackerPeerDiscovery adapter struct
-struct TrackerPeerDiscovery (peer_discovery::PeerDiscovery)
+struct TrackerPeerDiscovery (discovery::PeerDiscovery)
 {
     // Dependencies
     event_loop::EventLoop* loop;
@@ -95,7 +95,7 @@ struct TrackerPeerDiscovery (peer_discovery::PeerDiscovery)
     event_bus::EventBus* event_bus;
 
     // Configuration
-    peer_discovery::DiscoveryOptions options;
+    discovery::DiscoveryOptions options;
     ushort local_port;
     TrackerConfig* tracker_config;  // Parallel announce configuration
 
@@ -109,12 +109,12 @@ struct TrackerPeerDiscovery (peer_discovery::PeerDiscovery)
     uint total_peers_received;   // Total peers from all successful announces
 
     // Callbacks
-    peer_discovery::PeerDiscoveredCallback peer_callback;
-    peer_discovery::DiscoveryCompleteCallback complete_callback;
+    discovery::PeerDiscoveredCallback peer_callback;
+    discovery::DiscoveryCompleteCallback complete_callback;
     void* user_data;
 
     // Statistics
-    peer_discovery::DiscoveryStats stats;
+    discovery::DiscoveryStats stats;
     long last_announce_start_time;
 
     // Retry state
@@ -157,7 +157,7 @@ fn TrackerPeerDiscovery* create(
     adapter.event_bus = event_bus;
     adapter.tracker_config = tracker_config;
 
-    adapter.options = peer_discovery::default_options();
+    adapter.options = discovery::default_options();
     adapter.local_port = 6881;
 
     // Initialize parallel announce state
@@ -662,9 +662,9 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
 fn void TrackerPeerDiscovery.start_discovery(
     &self,
     common::InfoHash* info_hash,
-    peer_discovery::DiscoveryOptions* options,
-    peer_discovery::PeerDiscoveredCallback peer_callback,
-    peer_discovery::DiscoveryCompleteCallback complete_callback,
+    discovery::DiscoveryOptions* options,
+    discovery::PeerDiscoveredCallback peer_callback,
+    discovery::DiscoveryCompleteCallback complete_callback,
     void* user_data
 ) @dynamic
 {
@@ -748,7 +748,7 @@ fn void TrackerPeerDiscovery.stop_discovery(&self) @dynamic
     }
 }
 
-fn peer_discovery::DiscoveryStats TrackerPeerDiscovery.get_stats(&self) @dynamic
+fn discovery::DiscoveryStats TrackerPeerDiscovery.get_stats(&self) @dynamic
 {
     return self.stats;
 }

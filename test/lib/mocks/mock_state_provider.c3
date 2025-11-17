@@ -1,6 +1,6 @@
 module libtorrent_test::mocks::mock_state_provider;
 
-import libtorrent::ports::state_provider;
+import libtorrent::storage;
 import std::collections::map;
 
 /**
@@ -19,12 +19,12 @@ import std::collections::map;
  *   mock.set_should_fail_load(false);
  *
  *   // Inject state for testing
- *   state_provider::DownloadState test_state;
+ *   storage::DownloadState test_state;
  *   // ... populate test_state
  *   mock.set_state("ubuntu.torrent", test_state);
  *
  *   // Use as StateProvider interface
- *   state_provider::StateProvider* provider = (state_provider::StateProvider*)mock;
+ *   storage::StateProvider* provider = (storage::StateProvider*)mock;
  *   state = provider.load_state("ubuntu.torrent")!!;
  *
  *   // Verify behavior
@@ -33,13 +33,13 @@ import std::collections::map;
  */
 
 // MockStateProvider struct
-struct MockStateProvider (state_provider::StateProvider)
+struct MockStateProvider (storage::StateProvider)
 {
     void* _vtable;
     void* _typeinfo;
 
     // In-memory storage
-    HashMap{String, state_provider::DownloadState} states;
+    HashMap{String, storage::DownloadState} states;
 
     // Configuration (simulate failures)
     bool should_fail_load;
@@ -59,7 +59,7 @@ struct MockStateProvider (state_provider::StateProvider)
 
     // Last call parameters
     String last_torrent_path;
-    state_provider::DownloadState last_state_saved;
+    storage::DownloadState last_state_saved;
 }
 
 // ============================================================================
@@ -122,10 +122,10 @@ fn MockStateProvider* create() @public
  *
  * @return "StateProvider interface pointer to mock"
  */
-fn state_provider::StateProvider* create_as_interface() @public
+fn storage::StateProvider* create_as_interface() @public
 {
     MockStateProvider* mock = create();
-    return (state_provider::StateProvider*)mock;
+    return (storage::StateProvider*)mock;
 }
 
 // ============================================================================
@@ -182,7 +182,7 @@ fn void MockStateProvider.set_error_message(&self, String message) @public
  * @param torrent_path : "Path to torrent file"
  * @param state : "State to inject"
  */
-fn void MockStateProvider.set_state(&self, String torrent_path, state_provider::DownloadState state) @public
+fn void MockStateProvider.set_state(&self, String torrent_path, storage::DownloadState state) @public
 {
     // Store with copied key
     self.states.set(torrent_path.copy(mem), state);
@@ -194,7 +194,7 @@ fn void MockStateProvider.set_state(&self, String torrent_path, state_provider::
 fn void MockStateProvider.clear_all(&self) @public
 {
     // Free all stored states
-    self.states.@each(; String key, state_provider::DownloadState state)
+    self.states.@each(; String key, storage::DownloadState state)
     {
         state.free();
         free(key);
@@ -221,7 +221,7 @@ fn void MockStateProvider.reset_call_tracking(&self) @public
 // StateProvider Interface Implementation
 // ============================================================================
 
-fn state_provider::DownloadState? MockStateProvider.load_state(&self, String torrent_path) @dynamic
+fn storage::DownloadState? MockStateProvider.load_state(&self, String torrent_path) @dynamic
 {
     // Track call
     self.load_state_called = true;
@@ -231,19 +231,19 @@ fn state_provider::DownloadState? MockStateProvider.load_state(&self, String tor
     // Simulate failure if configured
     if (self.should_fail_load)
     {
-        return state_provider::STATE_LOAD_ERROR?;
+        return storage::STATE_LOAD_ERROR?;
     }
 
     // Try to get state from HashMap
-    state_provider::DownloadState? stored_opt = self.states.get(torrent_path);
+    storage::DownloadState? stored_opt = self.states.get(torrent_path);
     if (catch excuse = stored_opt)
     {
-        return state_provider::STATE_LOAD_ERROR?;  // Not found
+        return storage::STATE_LOAD_ERROR?;  // Not found
     }
-    state_provider::DownloadState stored = stored_opt;
+    storage::DownloadState stored = stored_opt;
 
     // Deep copy the state
-    state_provider::DownloadState copy;
+    storage::DownloadState copy;
     copy.version = stored.version;
     copy.file_selection = stored.file_selection.copy(mem);
     copy.have_pieces = copy_char_array(stored.have_pieces);
@@ -258,7 +258,7 @@ fn state_provider::DownloadState? MockStateProvider.load_state(&self, String tor
     // Deep copy unfinished pieces
     if (stored.unfinished.len > 0)
     {
-        copy.unfinished = mem::new_array(state_provider::UnfinishedPiece, stored.unfinished.len);
+        copy.unfinished = mem::new_array(storage::UnfinishedPiece, stored.unfinished.len);
         foreach (i, piece : stored.unfinished)
         {
             copy.unfinished[i].piece_index = piece.piece_index;
@@ -294,7 +294,7 @@ fn state_provider::DownloadState? MockStateProvider.load_state(&self, String tor
     return copy;
 }
 
-fn void? MockStateProvider.save_state(&self, String torrent_path, state_provider::DownloadState* state) @dynamic
+fn void? MockStateProvider.save_state(&self, String torrent_path, storage::DownloadState* state) @dynamic
 {
     // Track call
     self.save_state_called = true;
@@ -308,11 +308,11 @@ fn void? MockStateProvider.save_state(&self, String torrent_path, state_provider
     // Simulate failure if configured
     if (self.should_fail_save)
     {
-        return state_provider::STATE_SAVE_ERROR?;
+        return storage::STATE_SAVE_ERROR?;
     }
 
     // Deep copy and store the state
-    state_provider::DownloadState copy;
+    storage::DownloadState copy;
     copy.version = state.version;
     copy.file_selection = state.file_selection.copy(mem);
     copy.have_pieces = copy_char_array(state.have_pieces);
@@ -327,7 +327,7 @@ fn void? MockStateProvider.save_state(&self, String torrent_path, state_provider
     // Deep copy unfinished pieces
     if (state.unfinished.len > 0)
     {
-        copy.unfinished = mem::new_array(state_provider::UnfinishedPiece, state.unfinished.len);
+        copy.unfinished = mem::new_array(storage::UnfinishedPiece, state.unfinished.len);
         foreach (i, piece : state.unfinished)
         {
             copy.unfinished[i].piece_index = piece.piece_index;
@@ -390,11 +390,11 @@ fn void? MockStateProvider.delete_state(&self, String torrent_path) @dynamic
     // Simulate failure if configured
     if (self.should_fail_delete)
     {
-        return state_provider::STATE_SAVE_ERROR?;
+        return storage::STATE_SAVE_ERROR?;
     }
 
     // Try to remove from HashMap
-    state_provider::DownloadState? state_opt = self.states.get(torrent_path);
+    storage::DownloadState? state_opt = self.states.get(torrent_path);
     if (catch excuse = state_opt)
     {
         // Not found - still succeed (idempotent delete)
@@ -402,7 +402,7 @@ fn void? MockStateProvider.delete_state(&self, String torrent_path) @dynamic
     }
 
     // Free the stored state
-    state_provider::DownloadState state = state_opt;
+    storage::DownloadState state = state_opt;
     state.free();
 
     // Remove from HashMap

@@ -1,6 +1,6 @@
-module libtorrent::adapters::pex_peer_discovery;
+module libtorrent::discovery::pex;
 
-import libtorrent::ports::peer_discovery;
+import libtorrent::discovery;
 import libtorrent::peer_pool;
 import libtorrent::common;
 import std::core::log;
@@ -28,25 +28,25 @@ import std::core::log;
  *>
 
 // PexPeerDiscovery adapter struct
-struct PexPeerDiscovery (peer_discovery::PeerDiscovery)
+struct PexPeerDiscovery (discovery::PeerDiscovery)
 {
     // Dependencies
     peer_pool::PeerPool* peer_pool;
 
     // Configuration
-    peer_discovery::DiscoveryOptions options;
+    discovery::DiscoveryOptions options;
 
     // State
     bool active;
     common::InfoHash current_info_hash;
 
     // Callbacks
-    peer_discovery::PeerDiscoveredCallback peer_callback;
-    peer_discovery::DiscoveryCompleteCallback complete_callback;
+    discovery::PeerDiscoveredCallback peer_callback;
+    discovery::DiscoveryCompleteCallback complete_callback;
     void* user_data;
 
     // Statistics
-    peer_discovery::DiscoveryStats stats;
+    discovery::DiscoveryStats stats;
     usz last_peer_count;  // Track peer count to detect new discoveries
 }
 
@@ -68,7 +68,7 @@ fn PexPeerDiscovery* create(
 
     adapter.peer_pool = peer_pool;
 
-    adapter.options = peer_discovery::default_options();
+    adapter.options = discovery::default_options();
 
     adapter.active = false;
     adapter.peer_callback = null;
@@ -98,9 +98,9 @@ fn PexPeerDiscovery* create(
 fn void PexPeerDiscovery.start_discovery(
     &self,
     common::InfoHash* info_hash,
-    peer_discovery::DiscoveryOptions* options,
-    peer_discovery::PeerDiscoveredCallback peer_callback,
-    peer_discovery::DiscoveryCompleteCallback complete_callback,
+    discovery::DiscoveryOptions* options,
+    discovery::PeerDiscoveredCallback peer_callback,
+    discovery::DiscoveryCompleteCallback complete_callback,
     void* user_data
 ) @dynamic
 {
@@ -159,7 +159,7 @@ fn void PexPeerDiscovery.stop_discovery(&self) @dynamic
     // Nothing to explicitly stop
 }
 
-fn peer_discovery::DiscoveryStats PexPeerDiscovery.get_stats(&self) @dynamic
+fn discovery::DiscoveryStats PexPeerDiscovery.get_stats(&self) @dynamic
 {
     if (self.active && self.peer_pool)
     {

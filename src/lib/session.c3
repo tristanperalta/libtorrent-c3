@@ -18,7 +18,7 @@ import libtorrent::block_manager;
 import libtorrent::piece_assembler;
 import libtorrent::storage_manager;
 import libtorrent::file_selection;
-import libtorrent::ports::state_provider;
+import libtorrent::storage;
 import libtorrent::upload_manager;
 import libtorrent::upload_handler;
 import libtorrent::bitfield;
@@ -27,12 +27,12 @@ import libtorrent::peer_pool;
 import libtorrent::dht_client;
 import libtorrent::dht_get_peers;
 import libtorrent::lsd;
-import libtorrent::ports::peer_discovery;
-import libtorrent::adapters::tracker_peer_discovery;
-import libtorrent::adapters::dht_peer_discovery;
-import libtorrent::adapters::lsd_peer_discovery;
-import libtorrent::adapters::pex_peer_discovery;
-import libtorrent::adapters::composite_peer_discovery;
+import libtorrent::discovery;
+import libtorrent::discovery::tracker;
+import libtorrent::discovery::dht;
+import libtorrent::discovery::lsd;
+import libtorrent::discovery::pex;
+import libtorrent::discovery::composite;
 import libtorrent::webseed;
 import libtorrent::httpseed;
 import libtorrent::event_bus;
@@ -260,7 +260,7 @@ struct SessionOptions
 
     // Tracker parallel announce configuration
     // Controls multi-tracker announce behavior (BEP 12)
-    tracker_peer_discovery::TrackerConfig tracker_config;
+    tracker::TrackerConfig tracker_config;
 
     // ========================================================================
     // DHT Settings (BEP 5)
@@ -319,13 +319,13 @@ struct Session
     // Multi-tracker support (BEP 12)
     tracker_manager::TrackerManager* tracker_mgr;  // Manages tier-based tracker selection
     String current_tracker_url;                    // Currently active tracker URL (for logging)
-    tracker_peer_discovery::TrackerConfig tracker_config;  // Parallel announce configuration
+    tracker::TrackerConfig tracker_config;  // Parallel announce configuration
 
     // Peer discovery composite (hexagonal architecture)
-    composite_peer_discovery::CompositePeerDiscovery* peer_discovery_composite;
+    composite::CompositePeerDiscovery* peer_discovery_composite;
 
     // Tracker peer discovery (stored separately for tracker-specific methods like trigger_event_announce)
-    tracker_peer_discovery::TrackerPeerDiscovery* tracker_discovery;
+    tracker::TrackerPeerDiscovery* tracker_discovery;
 
     // Peer management
     peer_pool::PeerPool* peer_pool;
@@ -361,7 +361,7 @@ struct Session
     String torrent_path;        // Path to .torrent file (for resume data)
     // Note: Using concrete type instead of interface due to C3 limitation
     // (interfaces don't work with heap-allocated structs)
-    fastresume_state_provider::FastResumeStateProvider* state_provider;  // BEP 21: FastResume state persistence
+    fastresume::FastResumeStateProvider* state_provider;  // BEP 21: FastResume state persistence
 
     // Download statistics
     ulong total_bytes_downloaded;       // Total bytes downloaded (all sources)
@@ -444,7 +444,7 @@ fn SessionOptions create_default_session_options(String save_path, String torren
     // Tracker settings
     options.tracker_timeout = 60;
     options.prefer_udp_trackers = true;
-    options.tracker_config = tracker_peer_discovery::default_tracker_config();
+    options.tracker_config = tracker::default_tracker_config();
 
     // DHT settings
     options.enable_dht = true;
@@ -495,7 +495,7 @@ fn SessionOptions create_min_memory_session_options(String save_path, String tor
     // Tracker settings
     options.tracker_timeout = 60;
     options.prefer_udp_trackers = true;
-    options.tracker_config = tracker_peer_discovery::default_tracker_config();
+    options.tracker_config = tracker::default_tracker_config();
 
     // DHT settings
     options.enable_dht = true;
@@ -547,7 +547,7 @@ fn SessionOptions create_high_performance_session_options(String save_path, Stri
     // Tracker settings
     options.tracker_timeout = 60;
     options.prefer_udp_trackers = true;
-    options.tracker_config = tracker_peer_discovery::default_tracker_config();
+    options.tracker_config = tracker::default_tracker_config();
 
     // DHT settings
     options.enable_dht = true;
@@ -657,7 +657,7 @@ fn Session* create_session(torrent_manager::TorrentManager* manager, SessionOpti
     // Create download state provider (FastResume)
     if (options.enable_fastresume)
     {
-        ctx.state_provider = fastresume_state_provider::create();
+        ctx.state_provider = fastresume::create();
     }
     else
     {
@@ -893,11 +893,11 @@ fn void on_partial_seed_complete(Session* ctx) @public
     // No point saving resume data for complete downloads - nothing to resume!
     if (ctx.is_partial_seed && ctx.state_provider && ctx.torrent_path.len > 0)
     {
-        state_provider::DownloadState state = build_download_state(ctx);
+        storage::DownloadState state = build_download_state(ctx);
         defer state.free();
 
         // Use wrapper function instead of interface method
-        if (catch err = fastresume_state_provider::save(ctx.torrent_path, &state))
+        if (catch err = fastresume::save(ctx.torrent_path, &state))
         {
             io::eprintfn("Warning: Failed to save fastresume data: %s", err);
         }
@@ -1606,10 +1606,10 @@ fn void start_piece_verification(Session* ctx, uint piece_index) @public
  Build DownloadState from current download context for saving.
  Caller must call state.free() when done.
 *>
-fn state_provider::DownloadState build_download_state(Session* ctx) @public
+fn storage::DownloadState build_download_state(Session* ctx) @public
 {
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
 
     // Build have_pieces bitfield
     uint num_bytes = (ctx.num_pieces + 7) / 8;
@@ -1699,21 +1699,21 @@ fn bool try_load_fastresume_data(Session* ctx) @public
     io::printfn("  Torrent path: %s", ctx.torrent_path);
 
     // Load state using wrapper function (not interface - C3 interfaces don't work with heap allocation)
-    state_provider::DownloadState? state_opt = fastresume_state_provider::load(ctx.torrent_path);
+    storage::DownloadState? state_opt = fastresume::load(ctx.torrent_path);
     if (catch err = state_opt)
     {
         io::printfn("  Warning: Failed to load resume data: %s", err);
         return false;
     }
 
-    state_provider::DownloadState state = state_opt;
+    storage::DownloadState state = state_opt;
     defer state.free();
 
     // Validate version
-    if (state.version != state_provider::STATE_VERSION)
+    if (state.version != storage::STATE_VERSION)
     {
         io::printfn("  Warning: Resume data version mismatch (expected %d, got %d)",
-                   state_provider::STATE_VERSION, state.version);
+                   storage::STATE_VERSION, state.version);
         return false;
     }
 
@@ -1955,13 +1955,13 @@ fn void on_flush_timer_tick(async::timer::Timer* timer, void* user_data) @public
     // Save fastresume data periodically (allows resume even if client crashes)
     if (ctx.state_provider && ctx.torrent_path.len > 0)
     {
-        state_provider::DownloadState state = build_download_state(ctx);
+        storage::DownloadState state = build_download_state(ctx);
         defer state.free();
 
         // Silently save - don't spam logs every flush
         // Ignore errors to avoid log spam
         // Use wrapper function instead of interface method
-        (void)fastresume_state_provider::save(ctx.torrent_path, &state);
+        (void)fastresume::save(ctx.torrent_path, &state);
     }
 }
 
@@ -2294,11 +2294,11 @@ fn void on_all_pieces_verified(Session* ctx) @public
         // This captures verified pieces so we can skip verification on next run
         if (ctx.state_provider && ctx.torrent_path.len > 0)
         {
-            state_provider::DownloadState state = build_download_state(ctx);
+            storage::DownloadState state = build_download_state(ctx);
             defer state.free();
 
             // Use wrapper function instead of interface method
-            if (catch err = fastresume_state_provider::save(ctx.torrent_path, &state))
+            if (catch err = fastresume::save(ctx.torrent_path, &state))
             {
                 io::printfn("  Warning: Failed to save initial fastresume: %s", err);
             }
@@ -2393,21 +2393,21 @@ fn void on_dht_tick(async::timer::Timer* timer, void* user_data) @public
  @param ctx : "Download context"
  @return "CompositePeerDiscovery instance with all applicable sources"
 *>
-fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_composite(Session* ctx) @public
+fn composite::CompositePeerDiscovery* build_peer_discovery_composite(Session* ctx) @public
 {
     // Create composite aggregator
-    composite_peer_discovery::CompositePeerDiscovery* composite =
-        composite_peer_discovery::create();
+    composite::CompositePeerDiscovery* composite =
+        composite::create();
 
     // Always add tracker discovery (works for both private and public torrents)
     if (ctx.tracker_mgr)
     {
         // Store concrete type for direct access to tracker-specific methods
-        ctx.tracker_discovery = tracker_peer_discovery::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr, ctx.event_bus, &ctx.tracker_config);
+        ctx.tracker_discovery = tracker::create(ctx.get_loop(), ctx.torrent, ctx.tracker_mgr, ctx.event_bus, &ctx.tracker_config);
 
         // Add to composite (cast to interface fat pointer)
-        peer_discovery::PeerDiscovery tracker_disc =
-            (peer_discovery::PeerDiscovery)ctx.tracker_discovery;
+        discovery::PeerDiscovery tracker_disc =
+            (discovery::PeerDiscovery)ctx.tracker_discovery;
         composite.add_source(tracker_disc);
         io::printfn("[PeerDiscovery] Added tracker discovery");
     }
@@ -2418,8 +2418,8 @@ fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_compos
         // Add DHT discovery if DHT client is available
         if (ctx.get_dht())
         {
-            peer_discovery::PeerDiscovery dht_disc =
-                (peer_discovery::PeerDiscovery)dht_peer_discovery::create(ctx.get_dht(), ctx.get_loop());
+            discovery::PeerDiscovery dht_disc =
+                (discovery::PeerDiscovery)dht::create(ctx.get_dht(), ctx.get_loop());
             composite.add_source(dht_disc);
             io::printfn("[PeerDiscovery] Added DHT discovery");
         }
@@ -2427,8 +2427,8 @@ fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_compos
         // Add LSD discovery if LSD manager is available
         if (ctx.get_lsd_mgr())
         {
-            peer_discovery::PeerDiscovery lsd_disc =
-                (peer_discovery::PeerDiscovery)lsd_peer_discovery::create(ctx.get_lsd_mgr(), ctx.get_loop());
+            discovery::PeerDiscovery lsd_disc =
+                (discovery::PeerDiscovery)libtorrent::discovery::lsd::create(ctx.get_lsd_mgr(), ctx.get_loop());
             composite.add_source(lsd_disc);
             io::printfn("[PeerDiscovery] Added LSD discovery");
         }
@@ -2436,8 +2436,8 @@ fn composite_peer_discovery::CompositePeerDiscovery* build_peer_discovery_compos
         // Add PEX discovery if peer pool is available
         if (ctx.peer_pool)
         {
-            peer_discovery::PeerDiscovery pex_disc =
-                (peer_discovery::PeerDiscovery)pex_peer_discovery::create(ctx.peer_pool);
+            discovery::PeerDiscovery pex_disc =
+                (discovery::PeerDiscovery)pex::create(ctx.peer_pool);
             composite.add_source(pex_disc);
             io::printfn("[PeerDiscovery] Added PEX discovery");
         }
@@ -2561,7 +2561,7 @@ fn void init_lsd(Session* ctx) @public
     }
 
     // Create LSD manager
-    lsd::LsdManager*? mgr_opt = lsd::create(&on_lsd_peers_discovered, ctx);
+    lsd::LsdManager*? mgr_opt = libtorrent::lsd::create(&on_lsd_peers_discovered, ctx);
     if (catch err = mgr_opt)
     {
         io::eprintfn("[LSD] Failed to create LSD manager");
@@ -2676,14 +2676,14 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     // Try loading from resume data if no CLI selection
     if (file_sel_to_apply.len == 0 && ctx.state_provider && ctx.torrent_path.len > 0 && torrent.info.is_multi_file)
     {
-        state_provider::DownloadState? state_opt = ctx.state_provider.load_state(ctx.torrent_path);
+        storage::DownloadState? state_opt = ctx.state_provider.load_state(ctx.torrent_path);
         if (catch err = state_opt)
         {
             // No resume data - that's fine
         }
         else
         {
-            state_provider::DownloadState state = state_opt;
+            storage::DownloadState state = state_opt;
             defer state.free();
 
             if (state.file_selection.len > 0)
@@ -2840,7 +2840,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     }
 
     // Initialize tracker configuration (parallel announce settings)
-    ctx.tracker_config = tracker_peer_discovery::default_tracker_config();
+    ctx.tracker_config = tracker::default_tracker_config();
 
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
@@ -2917,7 +2917,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     ctx.peer_discovery_composite = build_peer_discovery_composite(ctx);
 
     // Start unified discovery through composite
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
     ctx.peer_discovery_composite.start_discovery(
         &ctx.torrent.info_hash,
         &options,

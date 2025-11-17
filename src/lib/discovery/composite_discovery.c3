@@ -1,6 +1,6 @@
-module libtorrent::adapters::composite_peer_discovery;
+module libtorrent::discovery::composite;
 
-import libtorrent::ports::peer_discovery;
+import libtorrent::discovery;
 import libtorrent::common;
 import std::core::log;
 import std::collections::list;
@@ -31,25 +31,25 @@ import std::io;
  *>
 
 // CompositePeerDiscovery aggregator struct
-struct CompositePeerDiscovery (peer_discovery::PeerDiscovery)
+struct CompositePeerDiscovery (discovery::PeerDiscovery)
 {
     // Child discovery sources
-    List{peer_discovery::PeerDiscovery} sources;
+    List{discovery::PeerDiscovery} sources;
 
     // Configuration
-    peer_discovery::DiscoveryOptions options;
+    discovery::DiscoveryOptions options;
 
     // State
     bool active;
     common::InfoHash current_info_hash;
 
     // Callbacks
-    peer_discovery::PeerDiscoveredCallback peer_callback;
-    peer_discovery::DiscoveryCompleteCallback complete_callback;
+    discovery::PeerDiscoveredCallback peer_callback;
+    discovery::DiscoveryCompleteCallback complete_callback;
     void* user_data;
 
     // Aggregated statistics
-    peer_discovery::DiscoveryStats aggregated_stats;
+    discovery::DiscoveryStats aggregated_stats;
 
     // Callback contexts (one per source, allocated during start_discovery)
     List{CallbackContext*} callback_contexts;
@@ -71,7 +71,7 @@ fn CompositePeerDiscovery* create() @public
     composite.sources.init(mem);
     composite.callback_contexts.init(mem);
 
-    composite.options = peer_discovery::default_options();
+    composite.options = discovery::default_options();
 
     composite.active = false;
     composite.peer_callback = null;
@@ -101,7 +101,7 @@ fn CompositePeerDiscovery* create() @public
  *
  * @param source : "PeerDiscovery adapter to add"
  *>
-fn void CompositePeerDiscovery.add_source(&self, peer_discovery::PeerDiscovery source) @public
+fn void CompositePeerDiscovery.add_source(&self, discovery::PeerDiscovery source) @public
 {
     self.sources.push(source);
 
@@ -193,9 +193,9 @@ fn void on_source_discovery_complete(bool success,
 fn void CompositePeerDiscovery.start_discovery(
     &self,
     common::InfoHash* info_hash,
-    peer_discovery::DiscoveryOptions* options,
-    peer_discovery::PeerDiscoveredCallback peer_callback,
-    peer_discovery::DiscoveryCompleteCallback complete_callback,
+    discovery::DiscoveryOptions* options,
+    discovery::PeerDiscoveredCallback peer_callback,
+    discovery::DiscoveryCompleteCallback complete_callback,
     void* user_data
 ) @dynamic
 {
@@ -234,7 +234,7 @@ fn void CompositePeerDiscovery.start_discovery(
     int started = 0;
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery source = self.sources.get(i);
+        discovery::PeerDiscovery source = self.sources.get(i);
 
         // Create callback context for this source
         CallbackContext* ctx = mem::new(CallbackContext);
@@ -279,7 +279,7 @@ fn void CompositePeerDiscovery.stop_discovery(&self) @dynamic
     // Stop all child sources
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery source = self.sources.get(i);
+        discovery::PeerDiscovery source = self.sources.get(i);
         source.stop_discovery();
     }
 
@@ -287,7 +287,7 @@ fn void CompositePeerDiscovery.stop_discovery(&self) @dynamic
     self.free_callback_contexts();
 }
 
-fn peer_discovery::DiscoveryStats CompositePeerDiscovery.get_stats(&self) @dynamic
+fn discovery::DiscoveryStats CompositePeerDiscovery.get_stats(&self) @dynamic
 {
     // Aggregate stats from all sources
     self.aggregated_stats.total_peers_discovered = 0;
@@ -303,8 +303,8 @@ fn peer_discovery::DiscoveryStats CompositePeerDiscovery.get_stats(&self) @dynam
 
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery source = self.sources.get(i);
-        peer_discovery::DiscoveryStats stats = source.get_stats();
+        discovery::PeerDiscovery source = self.sources.get(i);
+        discovery::DiscoveryStats stats = source.get_stats();
 
         self.aggregated_stats.total_peers_discovered += stats.total_peers_discovered;
         self.aggregated_stats.total_discovery_attempts += stats.total_discovery_attempts;
@@ -354,7 +354,7 @@ fn void CompositePeerDiscovery.free(&self) @dynamic
     // Free all child sources
     for (usz i = 0; i < self.sources.len(); i++)
     {
-        peer_discovery::PeerDiscovery source = self.sources.get(i);
+        discovery::PeerDiscovery source = self.sources.get(i);
         source.free();
     }
 
