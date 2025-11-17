@@ -59,7 +59,7 @@ fn void test_close_sets_state() @test
     // Create a minimal peer structure for testing
     peer_connection::PeerConnection peer;
     peer.state = peer_connection::PeerState.READY;
-    peer.tcp = null;
+    peer.transport = null;
     peer.recv_buffer = {};
 
     TestContext ctx;
@@ -89,7 +89,7 @@ fn void test_send_choke_state() @test
     peer_connection::PeerConnection peer;
     peer.am_choking = false;
     peer.state = peer_connection::PeerState.READY;
-    peer.tcp = null;
+    peer.transport = null;
 
     // We can't actually send without TCP connection, but we can verify state updates
     // by testing the logic manually
@@ -108,7 +108,7 @@ fn void test_send_unchoke_state() @test
     peer_connection::PeerConnection peer;
     peer.am_choking = true;
     peer.state = peer_connection::PeerState.READY;
-    peer.tcp = null;
+    peer.transport = null;
 
     // Simulate what send_unchoke does
     if (peer.state == peer_connection::PeerState.READY)
@@ -124,7 +124,7 @@ fn void test_send_interested_state() @test
     peer_connection::PeerConnection peer;
     peer.am_interested = false;
     peer.state = peer_connection::PeerState.READY;
-    peer.tcp = null;
+    peer.transport = null;
 
     // Simulate what send_interested does
     if (peer.state == peer_connection::PeerState.READY)
@@ -140,7 +140,7 @@ fn void test_send_not_interested_state() @test
     peer_connection::PeerConnection peer;
     peer.am_interested = true;
     peer.state = peer_connection::PeerState.READY;
-    peer.tcp = null;
+    peer.transport = null;
 
     // Simulate what send_not_interested does
     if (peer.state == peer_connection::PeerState.READY)

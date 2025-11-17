@@ -5,6 +5,8 @@ import async::event_loop;
 import libtorrent::tracker;
 import libtorrent::dht_get_peers;
 import libtorrent::peer_connection;
+import libtorrent::network;
+import libtorrent::network::tcp;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import libtorrent::pex;
@@ -46,6 +48,13 @@ import std::core::mem::allocator;
 // Faults
 faultdef PEER_NOT_FOUND;
 
+// Transport type selection
+enum TransportType : char
+{
+    TCP,  // Traditional TCP connections
+    UTP   // μTP (BEP 29) connections
+}
+
 // Configuration
 struct PeerPoolConfig
 {
@@ -53,6 +62,7 @@ struct PeerPoolConfig
     usz max_active_connections; // Default: 25
     usz max_failcount;          // Default: 3 (ban after 3 failures)
     uint min_reconnect_time;    // Default: 60 seconds
+    TransportType transport;    // Default: TCP (μTP when fully implemented)
 }
 
 // Default configuration
@@ -60,7 +70,8 @@ const PeerPoolConfig DEFAULT_CONFIG = {
     .max_peerlist_size = 1000,
     .max_active_connections = 25,
     .max_failcount = 3,
-    .min_reconnect_time = 60
+    .min_reconnect_time = 60,
+    .transport = TransportType.TCP
 };
 
 <*
@@ -989,10 +1000,22 @@ fn void PeerPool.connect_to_peers(&self) @public
         String ip_str = ip_builder.copy_str(mem);
         defer std::core::mem::free(ip_str);
 
+        // Create transport based on configuration
+        network::Transport* transport;
+        switch (self.config.transport)
+        {
+            case TransportType.TCP:
+                transport = (network::Transport*)tcp::create(self.loop);
+            case TransportType.UTP:
+                // TODO: Implement μTP transport (BEP 29)
+                log::error("μTP transport not yet implemented, falling back to TCP");
+                transport = (network::Transport*)tcp::create(self.loop);
+        }
+
         // Connect to peer with internal bridge callbacks
         // The bridge callbacks add IP/port and route to user callbacks
         peer_connection::PeerConnection*? conn_opt = peer_connection::connect(
-            self.loop,
+            transport,
             ip_str,
             peer.addr.port,
             self.info_hash,
