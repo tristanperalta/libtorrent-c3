@@ -163,6 +163,9 @@ fn void? UtpTransport.connect(&self, String host, ushort port, network::ConnectC
     // Register connection with socket (for packet routing)
     self.utp_socket.register_connection(self.conn);
 
+    // Send SYN packet to initiate handshake (BEP 29)
+    self.utp_socket.send_syn(self.conn);
+
     // Register transport with manager (for tick processing)
     if (self.manager)
     {

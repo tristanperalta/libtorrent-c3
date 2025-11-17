@@ -229,17 +229,24 @@ fn void process_transport(UtpTransport* transport)
         }
     }
 
-    // TODO: Poll for received data (future phase)
-    // if (transport.read_cb && transport.conn.has_data()) {
-    //     // Allocate buffer
-    //     char[] buffer = transport.alloc_cb(suggested_size, transport.read_user_data);
-    //
-    //     // Read data
-    //     int nread = transport.conn.recv_data(buffer);
-    //
-    //     // Invoke callback
-    //     transport.read_cb((Transport*)transport, nread, buffer, transport.read_user_data);
-    // }
+    // Poll for received data (pull-based, μTP doesn't push)
+    if (transport.read_cb && transport.conn.has_data())
+    {
+        // Use fixed suggested size (match TCP behavior)
+        const usz SUGGESTED_SIZE = 65536;  // 64KB
+
+        // Allocate buffer via callback
+        char[] buffer = transport.alloc_cb((Transport)transport, SUGGESTED_SIZE, transport.read_user_data);
+
+        // Read available data (up to buffer size)
+        char[] data = transport.conn.recv_data(buffer.len);
+
+        // Invoke read callback with actual data
+        if (data.len > 0)
+        {
+            transport.read_cb((Transport)transport, data, transport.read_user_data);
+        }
+    }
 
     // Phase 4: Track write completion via ACK monitoring
     if (transport.has_pending_write && transport.conn.bytes_in_flight == 0)

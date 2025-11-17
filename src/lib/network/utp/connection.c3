@@ -249,8 +249,8 @@ fn UtpConnection* create_outgoing(common::SocketAddress remote_addr, ushort conn
     conn.is_outgoing = true;
 
     // Outgoing connections use odd send_id (BEP 29)
-    conn.recv_id = conn_id_seed | 1;  // Ensure odd
-    conn.send_id = conn.recv_id + 1;  // Even (peer's recv_id)
+    conn.send_id = conn_id_seed | 1;  // Ensure odd (what we send in packets)
+    conn.recv_id = conn.send_id + 1;  // Even (what we expect to receive)
 
     // Initial sequence number (random starting point for security)
     conn.seq_nr = (ushort)(conn_id_seed ^ 0x5A5A);
@@ -813,9 +813,10 @@ fn void UtpConnection.transition_to_deleting(&self) @public
  * Does NOT handle retransmission or out-of-order packets yet.
  *
  * @param header : Received packet header
+ * @param payload : Packet payload data (for ST_DATA packets)
  * @return true if packet was valid and processed
  */
-fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
+fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header, char[] payload) @public
 {
     // Update last receive time (convert seconds to microseconds)
     self.last_recv_time = (long)time::now().to_seconds() * 1_000_000;
@@ -924,6 +925,13 @@ fn bool UtpConnection.process_packet(&self, packet::UtpHeader* header) @public
             if (header.seq_nr == (ushort)(self.ack_nr + 1))
             {
                 self.ack_nr = header.seq_nr;
+
+                // Store payload in receive buffer
+                if (payload.len > 0)
+                {
+                    self.recv_buf.add_packet(header.seq_nr, payload);
+                }
+
                 return true;
             }
             return false;  // Out of order, drop for now

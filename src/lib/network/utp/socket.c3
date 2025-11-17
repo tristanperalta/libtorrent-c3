@@ -388,7 +388,7 @@ fn void on_packet_received(udp::UdpSocket* udp_socket, char[] data,
         connection::UtpConnection* conn = *conn_ptr;
 
         // Let connection process the packet
-        conn.process_packet(&header);
+        conn.process_packet(&header, payload);
 
         // Notify application
         if (socket.packet_recv_cb)
