@@ -61,10 +61,10 @@ fn void on_tcp_connect(tcp::TcpConnection* conn, int status, void* user_data)
     TcpTransport* transport = (TcpTransport*)user_data;
     transport.tcp = conn;
 
-    // Invoke user callback with Transport interface
+    // Invoke user callback with Transport interface fat pointer
     if (transport.connect_cb)
     {
-        transport.connect_cb((Transport*)transport, status, transport.connect_user_data);
+        transport.connect_cb((Transport)transport, status, transport.connect_user_data);
     }
 }
 
@@ -75,10 +75,10 @@ fn char[] on_tcp_alloc(tcp::TcpConnection* conn, usz suggested_size, void* user_
 {
     TcpTransport* transport = (TcpTransport*)user_data;
 
-    // Invoke user callback with Transport interface
+    // Invoke user callback with Transport interface fat pointer
     if (transport.alloc_cb)
     {
-        return transport.alloc_cb((Transport*)transport, suggested_size, transport.read_user_data);
+        return transport.alloc_cb((Transport)transport, suggested_size, transport.read_user_data);
     }
 
     // Fallback: allocate default buffer
@@ -92,10 +92,10 @@ fn void on_tcp_read(tcp::TcpConnection* conn, char[] data, void* user_data)
 {
     TcpTransport* transport = (TcpTransport*)user_data;
 
-    // Invoke user callback with Transport interface
+    // Invoke user callback with Transport interface fat pointer
     if (transport.read_cb)
     {
-        transport.read_cb((Transport*)transport, data, transport.read_user_data);
+        transport.read_cb((Transport)transport, data, transport.read_user_data);
     }
 }
 
@@ -191,10 +191,10 @@ fn void on_tcp_write(tcp::TcpConnection* conn, int status, void* user_data)
 {
     WriteContext* ctx = (WriteContext*)user_data;
 
-    // Invoke user callback with Transport interface
+    // Invoke user callback with Transport interface fat pointer
     if (ctx.callback)
     {
-        ctx.callback((Transport*)ctx.transport, status, ctx.user_data);
+        ctx.callback((Transport)ctx.transport, status, ctx.user_data);
     }
 
     // Free context

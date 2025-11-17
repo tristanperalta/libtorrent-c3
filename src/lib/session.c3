@@ -210,6 +210,11 @@ struct SessionOptions
     // Default: 10
     int max_retry_port_bind;
 
+    // Transport protocol to use for peer connections (BEP 29)
+    // Default: TCP
+    // Options: TCP (traditional), UTP (μTP - low latency, congestion-friendly)
+    peer_pool::TransportType transport;
+
     // ========================================================================
     // Performance Settings
     // ========================================================================
@@ -385,6 +390,7 @@ struct Session
     String listen_interfaces;            // Listen interfaces (e.g., "0.0.0.0:6881,[::]:6881")
     int connections_limit;               // Maximum peer connections
     int max_retry_port_bind;             // Max port bind retries
+    peer_pool::TransportType transport;  // Transport protocol (TCP or μTP) (BEP 29)
 
     // Performance options
     int unchoke_slots_limit;             // Maximum upload slots
@@ -532,6 +538,7 @@ fn SessionOptions create_high_performance_session_options(String save_path, Stri
     options.listen_interfaces = "0.0.0.0:6881,[::]:6881";
     options.connections_limit = 500;
     options.max_retry_port_bind = 10;
+    options.transport = peer_pool::TransportType.UTP;  // Use μTP for testing (BEP 29)
 
     // Performance settings - aggressive limits
     options.unchoke_slots_limit = 20;    // More upload slots
@@ -679,6 +686,7 @@ fn Session* create_session(torrent_manager::TorrentManager* manager, SessionOpti
     ctx.listen_interfaces = options.listen_interfaces;
     ctx.connections_limit = options.connections_limit;
     ctx.max_retry_port_bind = options.max_retry_port_bind;
+    ctx.transport = options.transport;  // BEP 29: Transport protocol
 
     // Performance options
     ctx.unchoke_slots_limit = options.unchoke_slots_limit;
@@ -2772,7 +2780,8 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
         .max_peerlist_size = 1000,                          // Track up to 1000 peers (vs old limit of 10)
         .max_active_connections = (usz)ctx.connections_limit,  // From SessionOptions
         .max_failcount = 3,                                 // Future: Phase 3 will track failures
-        .min_reconnect_time = 60                            // Future: Phase 3 will handle retries
+        .min_reconnect_time = 60,                           // Future: Phase 3 will handle retries
+        .transport = ctx.transport                          // Use transport from SessionOptions (BEP 29)
     };
     ctx.peer_pool = peer_pool::create(ctx.get_loop(), pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
     io::printfn("Created peer pool (capacity: %d peers)", pool_config.max_peerlist_size);

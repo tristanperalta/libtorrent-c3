@@ -7,6 +7,8 @@ import libtorrent::dht_get_peers;
 import libtorrent::peer_connection;
 import libtorrent::network;
 import libtorrent::network::tcp;
+import libtorrent::network::utp;
+import libtorrent::utp::socket;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import libtorrent::pex;
@@ -241,6 +243,10 @@ struct PeerPool
     usz num_active_connections;     // Current number of active connections
     bool shutting_down;             // Flag to prevent reconnection during cleanup
 
+    // μTP transport support (BEP 29)
+    socket::UtpSocket* utp_socket;           // μTP socket for sending/receiving packets
+    utp::UtpTransportManager* utp_manager;   // Manager for μTP transport processing
+
     // Torrent info (needed for peer connections)
     common::InfoHash info_hash;   // Torrent info hash
     common::PeerId our_peer_id;   // Our peer ID
@@ -356,6 +362,25 @@ fn PeerPool* create(event_loop::EventLoop* loop,
     pool.num_active_connections = 0;
     pool.shutting_down = false;
 
+    // Initialize μTP transport if configured (BEP 29)
+    if (config.transport == TransportType.UTP)
+    {
+        // Create μTP socket
+        pool.utp_socket = socket::create(loop)!!;
+        pool.utp_socket.bind("0.0.0.0", 0);  // Bind to any port
+
+        // Create transport manager
+        pool.utp_manager = utp::create_manager(loop);
+        utp::start(pool.utp_manager);
+
+        io::printfn("[PeerPool] μTP transport enabled");
+    }
+    else
+    {
+        pool.utp_socket = null;
+        pool.utp_manager = null;
+    }
+
     // No callbacks yet
     pool.on_connected = null;
     pool.on_message = null;
@@ -407,6 +432,21 @@ fn void PeerPool.free(&self) @public
 
     // Free arena (all TorrentPeer structs, bitfields, candidate cache)
     self.arena.free();
+
+    // Cleanup μTP resources if used (BEP 29)
+    if (self.utp_manager)
+    {
+        utp::free_manager(self.utp_manager);
+        self.utp_manager = null;
+    }
+
+    if (self.utp_socket)
+    {
+        self.utp_socket.close();
+        self.loop.run_once();  // Drain close callback
+        self.utp_socket.free();
+        self.utp_socket = null;
+    }
 
     // Free pool structure itself (allocated from global heap in create())
     std::core::mem::free(self);
@@ -1000,16 +1040,16 @@ fn void PeerPool.connect_to_peers(&self) @public
         String ip_str = ip_builder.copy_str(mem);
         defer std::core::mem::free(ip_str);
 
-        // Create transport based on configuration
-        network::Transport* transport;
+        // Create transport based on configuration (BEP 29)
+        // Note: Transport is an interface fat pointer {data*, vtable*}, NOT Transport*
+        network::Transport transport;
         switch (self.config.transport)
         {
             case TransportType.TCP:
-                transport = (network::Transport*)tcp::create(self.loop);
+                transport = (network::Transport)tcp::create(self.loop);
             case TransportType.UTP:
-                // TODO: Implement μTP transport (BEP 29)
-                log::error("μTP transport not yet implemented, falling back to TCP");
-                transport = (network::Transport*)tcp::create(self.loop);
+                // μTP transport (BEP 29)
+                transport = (network::Transport)utp::create(self.loop, self.utp_socket, self.utp_manager);
         }
 
         // Connect to peer with internal bridge callbacks
@@ -1054,9 +1094,6 @@ fn void PeerPool.connect_to_peers(&self) @public
         peer.connection = conn_opt;
         peer.state = PeerState.CONNECTING;
         self.num_active_connections++;
-
-        io::printfn("[PEER_POOL] Peer %s: state → CONNECTING (conn=%p)",
-            peer.addr, conn_opt);
 
         // Note: on_connected callback will be called from bridge when peer reaches READY state
     }

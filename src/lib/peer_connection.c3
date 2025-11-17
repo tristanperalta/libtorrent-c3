@@ -135,7 +135,7 @@ alias HashRejectCallback = fn void(PeerConnection* peer, peer_wire::HashRejectMs
 // Manages the connection to a single peer.
 struct PeerConnection
 {
-    network::Transport* transport;
+    network::Transport transport;  // Interface fat pointer (not Transport*!)
     PeerState state;
     DisconnectReason last_disconnect_reason;  // Reason for disconnect (valid when state==CLOSED)
     bool is_closed;  // Safety flag: true when connection is being closed/freed (prevents use-after-free in callbacks)
@@ -225,7 +225,7 @@ struct PeerConnection
  @param is_private : "BEP 27: Private torrent flag (disables PEX)"
  @return "Peer connection or fault"
 *>
-fn PeerConnection*? connect(network::Transport* transport, String host, ushort port,
+fn PeerConnection*? connect(network::Transport transport, String host, ushort port,
                               common::InfoHash info_hash, common::PeerId our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
                               PexCallback pex_cb, MetadataCallback metadata_cb,
@@ -423,7 +423,7 @@ fn void PeerConnection.graceful_close(&self) @public
 <*
  Called when transport connection completes.
 *>
-fn void on_transport_connect(network::Transport* transport, int status, void* user_data)
+fn void on_transport_connect(network::Transport transport, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
     defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path
@@ -493,7 +493,7 @@ fn void on_transport_connect(network::Transport* transport, int status, void* us
 <*
  Called when handshake has been sent.
 *>
-fn void on_handshake_sent(network::Transport* transport, int status, void* user_data)
+fn void on_handshake_sent(network::Transport transport, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
     defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path
@@ -522,7 +522,7 @@ fn void on_handshake_sent(network::Transport* transport, int status, void* user_
 <*
  Allocate buffer for incoming transport data.
 *>
-fn char[] alloc_buffer(network::Transport* transport, usz suggested_size, void* user_data)
+fn char[] alloc_buffer(network::Transport transport, usz suggested_size, void* user_data)
 {
     return mem::new_array(char, suggested_size);
 }
@@ -530,7 +530,7 @@ fn char[] alloc_buffer(network::Transport* transport, usz suggested_size, void* 
 <*
  Called when transport data is received.
 *>
-fn void on_transport_read(network::Transport* transport, char[] data, void* user_data)
+fn void on_transport_read(network::Transport transport, char[] data, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
 
@@ -871,7 +871,7 @@ fn fault? send_message(PeerConnection* peer, char[] data) @inline
 <*
  Called when a message has been sent.
 *>
-fn void on_message_sent(network::Transport* transport, int status, void* user_data)
+fn void on_message_sent(network::Transport transport, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
     defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path

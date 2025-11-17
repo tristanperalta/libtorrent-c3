@@ -24,9 +24,16 @@ import libtorrent::utp::connection;
 import libtorrent::utp::socket;
 import libtorrent::common;
 import async::event_loop;
+import async::dns;
 import std::io;
+import std::time;
 
 alias lib_common = module libtorrent::common;
+
+// Global counter for generating unique connection IDs
+// Incremented for each new connection to ensure uniqueness
+// Note: In production multi-threaded code, this should use atomic operations
+ushort next_conn_id_seed = 1000;
 
 /**
  * μTP transport implementation (STUB).
@@ -40,6 +47,7 @@ struct UtpTransport (Transport)
     connection::UtpConnection* conn;  // Underlying μTP connection
     socket::UtpSocket* utp_socket;    // μTP socket for sending packets
     event_loop::EventLoop* loop;      // Event loop for async operations
+    UtpTransportManager* manager;     // Manager for timer-based processing
 
     // User callbacks
     network::ConnectCallback connect_cb;
@@ -49,8 +57,12 @@ struct UtpTransport (Transport)
     network::ReadCallback read_cb;
     void* read_user_data;
 
+    network::WriteCallback write_cb;
+    void* write_user_data;
+
     // State
     bool connected;
+    bool has_pending_write;  // Track if write is in progress
 }
 
 // ============================================================================
@@ -62,15 +74,18 @@ struct UtpTransport (Transport)
  *
  * @param loop Event loop for async operations
  * @param utp_socket μTP socket for packet transmission
+ * @param manager Transport manager for timer-based processing
  * @return New UtpTransport instance (caller must free)
  */
-fn UtpTransport* create(event_loop::EventLoop* loop, socket::UtpSocket* utp_socket) @public
+fn UtpTransport* create(event_loop::EventLoop* loop, socket::UtpSocket* utp_socket, UtpTransportManager* manager) @public
 {
     UtpTransport* transport = mem::new(UtpTransport);
     transport.loop = loop;
     transport.utp_socket = utp_socket;
+    transport.manager = manager;
     transport.conn = null;
     transport.connected = false;
+    transport.has_pending_write = false;
     return transport;
 }
 
@@ -80,20 +95,84 @@ fn UtpTransport* create(event_loop::EventLoop* loop, socket::UtpSocket* utp_sock
 
 fn void? UtpTransport.connect(&self, String host, ushort port, network::ConnectCallback callback, void* user_data) @dynamic
 {
-    io::eprintn("TODO: UtpTransport.connect() not yet implemented");
-    io::eprintn("μTP connection requires:");
-    io::eprintn("  1. DNS resolution (async)");
-    io::eprintn("  2. Create UtpConnection with remote address");
-    io::eprintn("  3. Send SYN packet via UtpSocket");
-    io::eprintn("  4. Poll for SYN-ACK response");
-    io::eprintn("  5. Invoke callback when connected");
-
-    // Store callback for later
+    // Store callback for later (will be invoked by tick processing when CONNECTED)
     self.connect_cb = callback;
     self.connect_user_data = user_data;
 
-    // TODO: Implement actual connection logic
-    // For now, fail immediately
+    // SIMPLIFIED APPROACH FOR NOW: Direct IP connection only
+    // TODO: Full async DNS resolution in future iteration
+    //
+    // For Phase 3, we support direct IP addresses.
+    // Async DNS with callbacks would require additional context tracking,
+    // which adds complexity beyond the scope of this phase.
+
+    // Parse host as IPv4 address
+    // Expected format: "127.0.0.1" or similar
+    char[][4] octets;
+    int octet_count = 0;
+    ulong pos = 0;
+
+    for (int i = 0; i < 4 && pos < host.len; i++)
+    {
+        ulong start = pos;
+        while (pos < host.len && host[pos] != '.') pos++;
+        // Use length syntax [start:length] instead of inclusive range [start..end]
+        octets[i] = host[start:pos-start];
+        pos++;  // Skip dot
+        octet_count++;
+    }
+
+    if (octet_count != 4)
+    {
+        // Not a valid IPv4 address
+        io::eprintfn("[UtpTransport] Invalid IPv4 address format: %s", host);
+        if (callback)
+        {
+            callback((Transport)self, -1, user_data);
+        }
+        return;
+    }
+
+    // Convert octets to bytes
+    char[] bytes = mem::new_array(char, 4);
+    defer free(bytes);
+    for (int i = 0; i < 4; i++)
+    {
+        // Parse octet as integer
+        long val = 0;
+        foreach (c : octets[i])
+        {
+            if (c >= '0' && c <= '9')
+            {
+                val = val * 10 + (long)(c - '0');
+            }
+        }
+        bytes[i] = (char)val;
+    }
+
+    // Create socket address
+    lib_common::SocketAddress remote_addr = lib_common::create_ipv4_address(
+        bytes[0], bytes[1], bytes[2], bytes[3], port);
+
+    // Create outgoing μTP connection with unique seed (BEP 29)
+    // Use incrementing counter to ensure each connection has a unique ID
+    ushort unique_seed = next_conn_id_seed;
+    next_conn_id_seed += 2;  // Increment by 2 to keep seeds distinct (avoids collision with recv_id | 1)
+    self.conn = connection::create_outgoing(remote_addr, unique_seed);
+
+    // Register connection with socket (for packet routing)
+    self.utp_socket.register_connection(self.conn);
+
+    // Register transport with manager (for tick processing)
+    if (self.manager)
+    {
+        register_transport(self.manager, self);
+    }
+
+    // Connection state is now SYN_SENT
+    // Tick processing will detect when state transitions to CONNECTED
+    // and invoke the callback
+
     return;
 }
 
@@ -126,37 +205,59 @@ fn void? UtpTransport.write(&self, char[] data, network::WriteCallback callback,
     if (self.conn == null || !self.connected)
     {
         io::eprintn("UtpTransport.write: Not connected");
+        if (callback)
+        {
+            callback((Transport)self, -1, user_data);
+        }
         return;
     }
 
-    io::eprintn("TODO: UtpTransport.write() not yet implemented");
-    io::eprintn("μTP write requires:");
-    io::eprintn("  1. Call conn.send_data(data, utp_socket)");
-    io::eprintn("  2. Monitor for ACK via process_packet()");
-    io::eprintn("  3. Invoke callback when data ACKed");
-
-    // TODO: Implement async write with callback
-    // For now, try synchronous send
-    if (catch excuse = self.conn.send_data(data, self.utp_socket))
+    // Check if there's already a pending write
+    // TODO: Support write queueing in future iteration
+    if (self.has_pending_write)
     {
+        io::eprintn("UtpTransport.write: Write already in progress");
         if (callback)
         {
-            callback((Transport*)self, -1, user_data);  // Error
+            callback((Transport)self, -1, user_data);
+        }
+        return;
+    }
+
+    // Store callback for ACK monitoring
+    self.write_cb = callback;
+    self.write_user_data = user_data;
+    self.has_pending_write = true;
+
+    // Queue data for transmission
+    if (catch excuse = self.conn.send_data(data, self.utp_socket))
+    {
+        // Send failed - clear pending write and invoke callback
+        self.has_pending_write = false;
+        self.write_cb = null;
+
+        if (callback)
+        {
+            callback((Transport)self, -1, user_data);
         }
         return excuse?;
     }
 
-    // Successfully queued (but not necessarily sent/ACKed yet)
-    if (callback)
-    {
-        callback((Transport*)self, 0, user_data);  // Success
-    }
+    // Data queued successfully
+    // Callback will be invoked by tick processing when ACKed
+    // (bytes_in_flight == 0)
 }
 
 fn void UtpTransport.close(&self) @dynamic
 {
     if (self.conn)
     {
+        // Unregister from manager before closing
+        if (self.manager)
+        {
+            unregister_transport(self.manager, self);
+        }
+
         self.conn.close();
         self.connected = false;
     }

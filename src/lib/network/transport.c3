@@ -22,39 +22,39 @@ import async::event_loop;
 /**
  * Callback invoked when connection attempt completes.
  *
- * @param transport The transport connection (NULL if failed)
+ * @param transport The transport connection (interface fat pointer)
  * @param status 0 on success, negative error code on failure
  * @param user_data User-provided context pointer
  */
-alias ConnectCallback = fn void(Transport* transport, int status, void* user_data);
+alias ConnectCallback = fn void(Transport transport, int status, void* user_data);
 
 /**
  * Callback to allocate buffer for incoming data.
  *
- * @param transport The transport connection
+ * @param transport The transport connection (interface fat pointer)
  * @param suggested_size Suggested buffer size (may allocate different size)
  * @param user_data User-provided context pointer
  * @return Buffer to receive data into
  */
-alias AllocCallback = fn char[](Transport* transport, usz suggested_size, void* user_data);
+alias AllocCallback = fn char[](Transport transport, usz suggested_size, void* user_data);
 
 /**
  * Callback invoked when data is received.
  *
- * @param transport The transport connection
+ * @param transport The transport connection (interface fat pointer)
  * @param data Received data (view into buffer from AllocCallback)
  * @param user_data User-provided context pointer
  */
-alias ReadCallback = fn void(Transport* transport, char[] data, void* user_data);
+alias ReadCallback = fn void(Transport transport, char[] data, void* user_data);
 
 /**
  * Callback invoked when write operation completes.
  *
- * @param transport The transport connection
+ * @param transport The transport connection (interface fat pointer)
  * @param status 0 on success, negative error code on failure
  * @param user_data User-provided context pointer
  */
-alias WriteCallback = fn void(Transport* transport, int status, void* user_data);
+alias WriteCallback = fn void(Transport transport, int status, void* user_data);
 
 // ============================================================================
 // Transport Interface
