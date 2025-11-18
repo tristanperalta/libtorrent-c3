@@ -7,7 +7,7 @@ import std::core::log;
 import uv;
 import libtorrent;
 import libtorrent::common;
-import libtorrent::tracker;
+import libtorrent::trackers;
 import libtorrent::tracker_manager;
 import async::event_loop;
 import libtorrent::metainfo;
@@ -316,7 +316,7 @@ struct Session
 
     // Tracker state
     bool tracker_completed;
-    tracker::TrackerResponse* tracker_response;
+    trackers::TrackerResponse* tracker_response;
     async::timer::Timer* pex_timer;          // PEX update timer (every 60s)
     async::timer::Timer* keepalive_timer;    // Keepalive timer (every 120s)
     async::timer::Timer* flush_timer;        // File flush timer (configurable interval)
@@ -325,6 +325,7 @@ struct Session
     // Multi-tracker support (BEP 12)
     tracker_manager::TrackerManager* tracker_mgr;  // Manages tier-based tracker selection
     String current_tracker_url;                    // Currently active tracker URL (for logging)
+    trackers::Tracker* current_tracker;            // Currently active tracker instance (for magnet links)
     tracker::TrackerConfig tracker_config;  // Parallel announce configuration
 
     // Peer discovery composite (hexagonal architecture)
@@ -623,6 +624,7 @@ fn Session* create_session(torrent_manager::TorrentManager* manager, SessionOpti
     // Initialize multi-tracker support
     ctx.tracker_mgr = null;
     ctx.current_tracker_url = "";
+    ctx.current_tracker = null;
     ctx.tracker_config = options.tracker_config;
 
     // Initialize peer discovery
@@ -2459,7 +2461,7 @@ fn composite::CompositePeerDiscovery* build_peer_discovery_composite(Session* ct
 fn void init_dht(Session* ctx, ushort dht_port) @public
 {
     // Generate DHT node ID (similar to peer ID)
-    common::NodeId our_node_id = tracker::generate_peer_id();
+    common::NodeId our_node_id = trackers::generate_peer_id();
 
     // Create DHT client
     ctx.manager.dht = dht_client::create_dht_client(our_node_id, ctx.get_loop(), dht_port, ctx.event_bus);
@@ -2775,7 +2777,7 @@ fn void on_download_load_complete(String data, int status, void* user_data) @pub
     ctx.speed_tracker = speed_tracker::create();
 
     // Create peer pool
-    common::PeerId our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = trackers::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
         .max_peerlist_size = 1000,                          // Track up to 1000 peers (vs old limit of 10)
         .max_active_connections = (usz)ctx.connections_limit,  // From SessionOptions

@@ -2,7 +2,6 @@ module libtorrent::peer_pool;
 
 import libtorrent::common;
 import async::event_loop;
-import libtorrent::tracker;
 import libtorrent::dht_get_peers;
 import libtorrent::peer_connection;
 import libtorrent::network;

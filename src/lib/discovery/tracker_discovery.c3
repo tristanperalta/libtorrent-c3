@@ -1,7 +1,7 @@
 module libtorrent::discovery::tracker;
 
 import libtorrent::discovery;
-import libtorrent::tracker;
+import libtorrent::trackers;
 import libtorrent::tracker_manager;
 import libtorrent::metainfo;
 import libtorrent::common;
@@ -83,6 +83,7 @@ struct AnnounceContext
     TrackerPeerDiscovery* discovery;
     String event;  // "started", "stopped", "completed", ""
     String tracker_url;  // Which tracker this announce is for
+    trackers::Tracker* tracker;  // Tracker instance (needs cleanup)
 }
 
 // TrackerPeerDiscovery adapter struct
@@ -290,7 +291,7 @@ fn void on_retry_timer(timer::Timer* timer, void* user_data)
 }
 
 // Tracker announce completion callback (handles parallel announces)
-fn void on_announce_complete_internal(tracker::TrackerResponse* response,
+fn void on_announce_complete_internal(trackers::TrackerResponse* response,
                                         int error, void* user_data)
 {
     AnnounceContext* ctx = (AnnounceContext*)user_data;
@@ -299,6 +300,10 @@ fn void on_announce_complete_internal(tracker::TrackerResponse* response,
     // Note: We defer freeing ctx.event and ctx, but NOT ctx.tracker_url yet
     // because we need tracker_url to persist until after event is published
     defer {
+        if (ctx.tracker) {
+            ctx.tracker.close();
+            free(ctx.tracker);
+        }
         if (ctx.event.len > 0) free(ctx.event);
         free(ctx);
     }
@@ -636,11 +641,11 @@ fn void TrackerPeerDiscovery.do_announce(&self, String event) @private
         ctx.event = event.len > 0 ? event.copy(mem) : "";
         ctx.tracker_url = tracker_url.copy(mem);  // Store which tracker this is for
 
-        // Fire the announce (async)
-        tracker::announce_to_url(self.loop, self.torrent, tracker_url,
-                                  self.options.local_port, event,
-                                  &on_announce_complete_internal, ctx,
-                                  self.tracker_config.tracker_timeout);
+        // Create tracker and fire the announce (async)
+        ctx.tracker = trackers::create_from_url(self.loop, tracker_url)!!;
+        ctx.tracker.announce(self.torrent, self.options.local_port, event,
+                            &on_announce_complete_internal, ctx,
+                            self.tracker_config.tracker_timeout);
     }
 
     // Free tracker list if it was allocated (modes 3 and 4)

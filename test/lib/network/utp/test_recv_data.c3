@@ -195,7 +195,7 @@ fn void test_ack_reduces_bytes_in_flight() @test
     ack_header.seq_nr = 0;
     ack_header.ack_nr = initial_seq;  // ACK the packet we sent
 
-    conn.process_packet(&ack_header);
+    conn.process_packet(&ack_header, {});
 
     // bytes_in_flight should be reduced
     assert(conn.bytes_in_flight < bytes_after_send, "bytes_in_flight should decrease after ACK");
@@ -252,7 +252,7 @@ fn void test_ack_multiple_packets() @test
     ack1.wnd_size = 65535;
     ack1.ack_nr = pkt1_seq;
 
-    conn.process_packet(&ack1);
+    conn.process_packet(&ack1, {});
     uint after_first_ack = conn.bytes_in_flight;
     assert(after_first_ack < total_bytes, "bytes_in_flight should decrease");
 
@@ -263,7 +263,7 @@ fn void test_ack_multiple_packets() @test
     ack2.wnd_size = 65535;
     ack2.ack_nr = pkt2_seq;
 
-    conn.process_packet(&ack2);
+    conn.process_packet(&ack2, {});
     uint after_second_ack = conn.bytes_in_flight;
     assert(after_second_ack < after_first_ack, "bytes_in_flight should decrease more");
 
@@ -274,7 +274,7 @@ fn void test_ack_multiple_packets() @test
     ack3.wnd_size = 65535;
     ack3.ack_nr = pkt3_seq;
 
-    conn.process_packet(&ack3);
+    conn.process_packet(&ack3, {});
     assert(conn.bytes_in_flight == 0, "All packets should be ACKed");
 
     io::printn("✓ test_ack_multiple_packets");

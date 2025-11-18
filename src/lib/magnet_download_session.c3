@@ -5,7 +5,7 @@ import std::encoding::hex;
 import async::event_loop;
 import async::timer;
 import libtorrent::common;
-import libtorrent::tracker;
+import libtorrent::trackers;
 import libtorrent::tracker_manager;
 import libtorrent::metainfo;
 import libtorrent::metadata_download;
@@ -77,7 +77,7 @@ fn void start_magnet_download(session::Session* ctx, String magnet_uri) @public
     ctx.metadata_dl = metadata_download::create(magnet.info_hash);
 
     // Create peer pool for connecting to peers
-    common::PeerId our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = trackers::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
         .max_peerlist_size = 1000,
         .max_active_connections = 25,
@@ -179,17 +179,26 @@ fn void start_tracker_announce(session::Session* ctx) @private
 
     ctx.torrent = fake_torrent;
 
-    // Announce with "started" event
-    tracker::announce_to_url(ctx.get_loop(), ctx.torrent, tracker_url, 6881, "started",
-                             &on_announce_complete, ctx, ctx.tracker_timeout);
+    // Announce with "started" event using new tracker interface
+    ctx.current_tracker = trackers::create_from_url(ctx.get_loop(), tracker_url)!!;
+    ctx.current_tracker.announce(ctx.torrent, 6881, "started",
+                                 &on_announce_complete, ctx, ctx.tracker_timeout);
 }
 
 /**
  * Callback for magnet link tracker announce completion.
  */
-fn void on_announce_complete(tracker::TrackerResponse* response, int status, void* user_data) @public
+fn void on_announce_complete(trackers::TrackerResponse* response, int status, void* user_data) @public
 {
     session::Session* ctx = (session::Session*)user_data;
+
+    // Clean up previous tracker
+    if (ctx.current_tracker)
+    {
+        ctx.current_tracker.close();
+        free(ctx.current_tracker);
+        ctx.current_tracker = null;
+    }
 
     if (status != 0)
     {
@@ -201,8 +210,9 @@ fn void on_announce_complete(tracker::TrackerResponse* response, int status, voi
             String next_tracker = ctx.tracker_mgr.get_next_tracker();
             ctx.current_tracker_url = next_tracker;
             io::printfn("Trying next tracker: %s", next_tracker);
-            tracker::announce_to_url(ctx.get_loop(), ctx.torrent, next_tracker, 6881, "started",
-                                     &on_announce_complete, ctx, ctx.tracker_timeout);
+            ctx.current_tracker = trackers::create_from_url(ctx.get_loop(), next_tracker)!!;
+            ctx.current_tracker.announce(ctx.torrent, 6881, "started",
+                                         &on_announce_complete, ctx, ctx.tracker_timeout);
         }
         else
         {

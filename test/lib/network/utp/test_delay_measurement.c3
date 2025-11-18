@@ -56,7 +56,7 @@ fn void test_calculate_actual_delay() @test
     // Expected: actual_delay = 50ms - 20ms = 30ms
 
     // Process the ACK - this should calculate delay and update our_hist
-    bool ok = conn.process_packet(&ack);
+    bool ok = conn.process_packet(&ack, {});
     assert(ok, "Should process ACK successfully");
 
     // Verify our_hist was initialized and contains a sample
@@ -99,7 +99,7 @@ fn void test_update_our_hist_on_ack() @test
     ack.timestamp_microseconds = 0;
     ack.timestamp_difference_microseconds = 30000;  // 30ms
 
-    bool ok = conn.process_packet(&ack);
+    bool ok = conn.process_packet(&ack, {});
     assert(ok, "Should process ACK successfully");
 
     // Verify our_hist was updated
@@ -143,7 +143,7 @@ fn void test_update_min_rtt() @test
     ack1.timestamp_microseconds = 0;
     ack1.timestamp_difference_microseconds = 30000;
 
-    conn.process_packet(&ack1);
+    conn.process_packet(&ack1, {});
 
     // min_rtt should be ~100ms
     assert(conn.min_rtt < 0xFFFFFFFF, "min_rtt should be updated");
@@ -167,7 +167,7 @@ fn void test_update_min_rtt() @test
     ack2.timestamp_microseconds = 0;
     ack2.timestamp_difference_microseconds = 20000;
 
-    conn.process_packet(&ack2);
+    conn.process_packet(&ack2, {});
 
     // min_rtt should have decreased
     assert(conn.min_rtt < first_rtt, "min_rtt should track minimum");
@@ -206,7 +206,7 @@ fn void test_clock_drift_compensation_their_decrease() @test
     ack.timestamp_microseconds = 0;
     ack.timestamp_difference_microseconds = 90000;  // Was 100ms, now 90ms (5ms drift)
 
-    conn.process_packet(&ack);
+    conn.process_packet(&ack, {});
 
     // Check that their_hist.delay_base decreased
     assert(conn.their_hist.delay_base < 100000, "their delay_base should decrease");
@@ -247,7 +247,7 @@ fn void test_clock_drift_limit_10ms() @test
     ack.timestamp_microseconds = 0;
     ack.timestamp_difference_microseconds = 40000;  // Was 100ms, now 40ms (60ms drift!)
 
-    conn.process_packet(&ack);
+    conn.process_packet(&ack, {});
 
     // their_hist.delay_base should decrease to 40ms
     assert(conn.their_hist.delay_base == 40000, "their delay_base should be 40ms");
@@ -287,7 +287,7 @@ fn void test_no_compensation_for_increase() @test
     ack.timestamp_microseconds = 0;
     ack.timestamp_difference_microseconds = 60000;  // Was 50ms, now 60ms (increase)
 
-    conn.process_packet(&ack);
+    conn.process_packet(&ack, {});
 
     // No drift compensation should occur
     assert(conn.our_hist.delay_base == initial_our_delay_base,
@@ -330,7 +330,7 @@ fn void test_delay_measurement_multiple_acks() @test
     ack.timestamp_microseconds = 0;
     ack.timestamp_difference_microseconds = 25000;  // 25ms
 
-    conn.process_packet(&ack);
+    conn.process_packet(&ack, {});
 
     // Verify our_hist has multiple samples
     assert(conn.our_hist.initialized, "our_hist should be initialized");

@@ -192,7 +192,7 @@ fn void test_ack_increases_send_capacity() @test
     ack.wnd_size = 65535;
     ack.ack_nr = pkt_seq;
 
-    conn.process_packet(&ack);
+    conn.process_packet(&ack, {});
 
     // cwnd should have increased
     assert(conn.cwnd > initial_cwnd, "cwnd should increase after ACK");

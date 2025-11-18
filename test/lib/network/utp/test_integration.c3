@@ -411,7 +411,7 @@ fn void test_delay_measurement_integration() @test
     ack.timestamp_microseconds = 0;
     ack.timestamp_difference_microseconds = 25000;  // Simulated 25ms delay
 
-    conn1.process_packet(&ack);
+    conn1.process_packet(&ack, {});
 
     // Verify our_hist was updated (should now have samples)
     assert(conn1.our_hist.initialized, "our_hist should be initialized after ACK");
@@ -489,7 +489,7 @@ fn void test_clock_drift_integration() @test
     ack_with_drift.timestamp_difference_microseconds = 95000;  // Was 100ms, now 95ms (drift!)
     // RTT = 150ms, their_delay = 95ms, actual_delay = 55ms
 
-    conn.process_packet(&ack_with_drift);
+    conn.process_packet(&ack_with_drift, {});
 
     // Verify their_hist.delay_base decreased (clock drift detected)
     assert(conn.their_hist.delay_base < initial_their_delay_base,

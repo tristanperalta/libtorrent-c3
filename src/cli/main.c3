@@ -498,7 +498,7 @@ fn String format_ip_address(common::Ipv4Addr ip)
 
  @param response : "Tracker response to display"
 *>
-fn void display_tracker_response(tracker::TrackerResponse* response)
+fn void display_tracker_response(trackers::TrackerResponse* response)
 {
     io::printfn("=== Tracker Response ===");
     io::printfn("");
@@ -552,13 +552,13 @@ struct CmdAnnounceContext
 {
     event_loop::EventLoop* loop;
     bool completed;
-    tracker::TrackerResponse* response;
+    trackers::TrackerResponse* response;
     int tracker_status;
     int exit_code;
     libtorrent::metainfo::TorrentFile* torrent;
 }
 
-fn void on_tracker_announce_complete(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_tracker_announce_complete(trackers::TrackerResponse* response, int status, void* user_data)
 {
     CmdAnnounceContext* ctx = (CmdAnnounceContext*)user_data;
     ctx.completed = true;
@@ -742,7 +742,7 @@ struct ConnectContext
 {
     event_loop::EventLoop* loop;
     libtorrent::metainfo::TorrentFile* torrent;
-    tracker::TrackerResponse* tracker_response;
+    trackers::TrackerResponse* tracker_response;
 
     // Connection tracking
     int total_peers;
@@ -811,7 +811,7 @@ fn void on_connect_peer_message(peer_connection::PeerConnection* peer,
     // Don't need to handle messages yet
 }
 
-fn void on_connect_tracker_complete(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_connect_tracker_complete(trackers::TrackerResponse* response, int status, void* user_data)
 {
     ConnectContext* ctx = (ConnectContext*)user_data;
     ctx.tracker_completed = true;

@@ -347,7 +347,7 @@ fn void test_cwnd_behavior_under_loss() @test
     ack.wnd_size = 65535;
     ack.ack_nr = pkt_seq;
 
-    conn.process_packet(&ack);
+    conn.process_packet(&ack, {});
 
     // Verify cwnd increased (additive increase)
     assert(conn.cwnd > after_timeout_cwnd,

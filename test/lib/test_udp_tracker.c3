@@ -1,7 +1,9 @@
 module libtorrent::udp_tracker::test;
 
-import libtorrent::udp_tracker;
-import libtorrent::tracker;
+import libtorrent::trackers::udp;
+import libtorrent::trackers;
+
+alias udp_tracker = module libtorrent::trackers::udp;
 import libtorrent::metainfo;
 import libtorrent::bencode;
 import async::udp;
@@ -16,7 +18,7 @@ struct TestContext
     bool completed;
     bool success;
     int status;
-    tracker::TrackerResponse* response;
+    trackers::TrackerResponse* response;
     event_loop::EventLoop* loop;
 }
 
@@ -220,7 +222,7 @@ fn void free_test_torrent(metainfo::TorrentFile* torrent)
 // Successful Announce Test
 // ============================================================================
 
-fn void on_announce_success(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_announce_success(trackers::TrackerResponse* response, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.completed = true;
@@ -320,7 +322,7 @@ fn void test_async_announce_success() @test
 // DNS Failure Test
 // ============================================================================
 
-fn void on_announce_dns_fail(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_announce_dns_fail(trackers::TrackerResponse* response, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.completed = true;
@@ -383,7 +385,7 @@ fn void test_async_announce_dns_failure() @test
 // Invalid URL Test
 // ============================================================================
 
-fn void on_announce_invalid_url(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_announce_invalid_url(trackers::TrackerResponse* response, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.completed = true;
@@ -430,7 +432,7 @@ fn void test_async_announce_invalid_url() @test
 // Timeout Test
 // ============================================================================
 
-fn void on_announce_timeout(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_announce_timeout(trackers::TrackerResponse* response, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.completed = true;
@@ -508,7 +510,7 @@ fn void test_async_announce_timeout() @test
 // Invalid Response Test
 // ============================================================================
 
-fn void on_announce_invalid_response(tracker::TrackerResponse* response, int status, void* user_data)
+fn void on_announce_invalid_response(trackers::TrackerResponse* response, int status, void* user_data)
 {
     TestContext* ctx = (TestContext*)user_data;
     ctx.completed = true;

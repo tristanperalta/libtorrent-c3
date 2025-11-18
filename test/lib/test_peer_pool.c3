@@ -4,7 +4,6 @@ import libtorrent::peer_pool;
 import libtorrent::dht_get_peers;
 import libtorrent::common;
 import async::event_loop;
-import libtorrent::tracker;
 import std::io;
 
 // Test peer pool module - Phase 1: Core Storage & Discovery

@@ -35,9 +35,10 @@ fn void test_create_outgoing() @test
     assert(conn.state == ConnectionState.SYN_SENT, "Outgoing connection should start in SYN_SENT");
     assert(conn.is_outgoing, "Should be marked as outgoing");
 
-    // Verify connection IDs (outgoing uses odd recv_id)
-    assert((conn.recv_id & 1) == 1, "Outgoing recv_id should be odd");
-    assert(conn.send_id == (ushort)(conn.recv_id + 1), "Send ID should be recv_id + 1");
+    // Verify connection IDs (BEP 29: outgoing uses odd send_id, even recv_id)
+    assert((conn.send_id & 1) == 1, "Outgoing send_id should be odd");
+    assert((conn.recv_id & 1) == 0, "Outgoing recv_id should be even");
+    assert(conn.recv_id == (ushort)(conn.send_id + 1), "recv_id should be send_id + 1");
 
     // Verify remote address
     assert(conn.remote_addr == addr, "Remote address should match");
@@ -188,17 +189,17 @@ fn void test_process_state_packet() @test
     state.timestamp_difference_microseconds = 100;
 
     // Process first packet
-    bool ok = conn.process_packet(&state);
+    bool ok = conn.process_packet(&state, {});
     assert(ok, "STATE packet should be processed successfully");
 
     // Process 2 more packets with HIGHER delay to create queuing delay
     state.seq_nr++;
     state.timestamp_difference_microseconds = 150;  // 50μs queuing delay
-    conn.process_packet(&state);
+    conn.process_packet(&state, {});
 
     state.seq_nr++;
     state.timestamp_difference_microseconds = 120;  // 20μs queuing delay
-    conn.process_packet(&state);
+    conn.process_packet(&state, {});
 
     assert(conn.remote_window == state.wnd_size, "Remote window should be updated");
     // their_delay is now tracked in their_hist (LEDBAT Phase 2)
@@ -237,7 +238,7 @@ fn void test_process_data_packet_in_order() @test
     data.timestamp_difference_microseconds = 200;
 
     // Process packet
-    bool ok = conn.process_packet(&data);
+    bool ok = conn.process_packet(&data, {});
 
     assert(ok, "In-order DATA packet should be accepted");
     assert(conn.ack_nr == 100, "ack_nr should be updated to 100");
@@ -270,7 +271,7 @@ fn void test_process_data_packet_out_of_order() @test
     data.timestamp_difference_microseconds = 300;
 
     // Process packet
-    bool ok = conn.process_packet(&data);
+    bool ok = conn.process_packet(&data, {});
 
     assert(!ok, "Out-of-order DATA packet should be rejected in Phase 1");
     assert(conn.ack_nr == 50, "ack_nr should NOT be updated");
@@ -303,7 +304,7 @@ fn void test_process_fin_packet() @test
     fin.timestamp_difference_microseconds = 400;
 
     // Process packet
-    bool ok = conn.process_packet(&fin);
+    bool ok = conn.process_packet(&fin, {});
 
     assert(ok, "FIN packet should be processed");
     // With empty buffer and both FINs ready, transitions to DELETING
@@ -339,7 +340,7 @@ fn void test_process_reset_packet() @test
     reset.timestamp_difference_microseconds = 0;
 
     // Process packet
-    bool ok = conn.process_packet(&reset);
+    bool ok = conn.process_packet(&reset, {});
 
     assert(ok, "RESET packet should be processed");
     // With empty buffer, auto-transitions to DELETING
@@ -373,7 +374,7 @@ fn void test_reject_wrong_connection_id() @test
     wrong.timestamp_difference_microseconds = 0;
 
     // Process packet
-    bool ok = conn.process_packet(&wrong);
+    bool ok = conn.process_packet(&wrong, {});
 
     assert(!ok, "Packet with wrong connection ID should be rejected");
 
@@ -892,7 +893,7 @@ fn void test_handshake_syn_ack_received() @test
     syn_ack.ack_nr = conn.seq_nr;  // They ACK our SYN
 
     // Process SYN-ACK
-    bool processed = conn.process_packet(&syn_ack);
+    bool processed = conn.process_packet(&syn_ack, {});
     assert(processed, "Should process SYN-ACK");
 
     // Verify state transition
@@ -926,7 +927,7 @@ fn void test_handshake_reject_wrong_connection_id() @test
     syn_ack.ack_nr = conn.seq_nr;
 
     // Process SYN-ACK
-    bool processed = conn.process_packet(&syn_ack);
+    bool processed = conn.process_packet(&syn_ack, {});
     assert(!processed, "Should reject packet with wrong connection ID");
 
     // Verify state unchanged
@@ -984,7 +985,7 @@ fn void test_handshake_full_outgoing() @test
     syn_ack.seq_nr = 200;
     syn_ack.ack_nr = initial_seq;
 
-    bool processed = conn.process_packet(&syn_ack);
+    bool processed = conn.process_packet(&syn_ack, {});
     assert(processed, "Should process SYN-ACK");
 
     // Verify handshake complete
@@ -1075,7 +1076,7 @@ fn void test_handshake_wraparound() @test
     syn_ack.ack_nr = 65535;  // ACKs our high seq_nr
 
     // Process SYN-ACK
-    bool processed = conn.process_packet(&syn_ack);
+    bool processed = conn.process_packet(&syn_ack, {});
     assert(processed, "Should process SYN-ACK with wraparound");
 
     // Verify state transition
@@ -1302,7 +1303,7 @@ fn void test_close_remote_initiated() @test
     fin.seq_nr = 200;
     fin.ack_nr = conn.seq_nr;
 
-    bool processed = conn.process_packet(&fin);
+    bool processed = conn.process_packet(&fin, {});
     assert(processed, "Should process FIN packet");
     assert(conn.remote_fin_received, "Should mark remote FIN received");
     assert(conn.fin_sent, "Should mark that we'll send FIN in response");
@@ -1379,7 +1380,7 @@ fn void test_close_simultaneous() @test
     fin.seq_nr = 300;
     fin.ack_nr = conn.seq_nr;
 
-    bool processed = conn.process_packet(&fin);
+    bool processed = conn.process_packet(&fin, {});
     assert(processed, "Should process remote FIN");
     assert(conn.remote_fin_received, "Remote FIN received");
 
@@ -1460,7 +1461,7 @@ fn void test_reset_packet_error_reason() @test
     reset.timestamp_difference_microseconds = 0;
 
     // Process RESET
-    bool ok = conn.process_packet(&reset);
+    bool ok = conn.process_packet(&reset, {});
 
     assert(ok, "RESET should be processed");
     // With empty buffer, automatically transitions to DELETING
@@ -1643,7 +1644,7 @@ fn void test_error_during_handshake() @test
     reset.timestamp_microseconds = 1000000;
     reset.timestamp_difference_microseconds = 0;
 
-    bool ok = conn.process_packet(&reset);
+    bool ok = conn.process_packet(&reset, {});
 
     assert(ok, "RESET should be processed");
     assert(conn.state == connection::ConnectionState.DELETING, "Should transition to DELETING");

@@ -1,17 +1,110 @@
-module libtorrent::http_tracker;
+module libtorrent::trackers::http;
 
 import libtorrent::http;
 import async::event_loop;
-import libtorrent::tracker;
 import libtorrent::metainfo;
 import std::net::url;
 import libc;
 import std::io;
+import libtorrent::trackers;
+
+// ============================================================================
+// HttpTracker struct (implements Tracker interface)
+// ============================================================================
+
+<*
+ HTTP tracker adapter implementing the Tracker interface.
+
+ Wraps the existing http::async_get functionality with thread pool
+ to provide non-blocking HTTP tracker announces.
+*>
+struct HttpTracker (trackers::Tracker)
+{
+    event_loop::EventLoop* loop;
+    String url;
+    bool closed;
+}
+
+// ============================================================================
+// Factory Function
+// ============================================================================
+
+<*
+ Create HTTP tracker instance.
+
+ @param loop : "Event loop for async operations"
+ @param url : "HTTP tracker URL"
+ @return "HttpTracker instance (caller must free)"
+*>
+fn HttpTracker* create(event_loop::EventLoop* loop, String url) @public
+{
+    HttpTracker* tracker = mem::new(HttpTracker);
+    tracker.loop = loop;
+    tracker.url = url.copy(mem);  // Own a copy
+    tracker.closed = false;
+    return tracker;
+}
+
+// ============================================================================
+// Tracker Interface Implementation (@dynamic methods)
+// ============================================================================
+
+fn void HttpTracker.announce(
+    &self,
+    metainfo::TorrentFile* torrent,
+    ushort port,
+    String event,
+    trackers::AnnounceCallback callback,
+    void* user_data,
+    int timeout_seconds
+) @dynamic
+{
+    if (self.closed)
+    {
+        if (callback) callback(null, -1, user_data);
+        return;
+    }
+
+    // Delegate to existing async_announce implementation
+    async_announce(self.loop, torrent, port, event, callback, user_data, self.url);
+}
+
+fn void HttpTracker.close(&self) @dynamic
+{
+    self.closed = true;
+}
+
+fn String HttpTracker.get_url(&self) @dynamic
+{
+    return self.url;
+}
+
+fn String HttpTracker.get_protocol(&self) @dynamic
+{
+    return "http";
+}
+
+fn void HttpTracker.free(&self) @public
+{
+    if (!self.closed)
+    {
+        io::eprintn("WARNING: HttpTracker.free() called without close()");
+    }
+    if (self.url.len > 0) free(self.url);
+    free(self);
+}
+
+// ============================================================================
+// Internal Implementation
+// ============================================================================
 
 <*
  Async HTTP Tracker Implementation
  ==================================
  Non-blocking HTTP tracker client using thread pool + libcurl.
+
+ This function is used internally by both:
+ - HttpTracker.announce() (new Tracker interface implementation)
 
  Usage:
    async_announce(loop, torrent, port, event, &on_complete, user_data);
@@ -22,20 +115,17 @@ const int ASYNC_ERROR_HTTP_FAILED = -1;
 const int ASYNC_ERROR_INVALID_RESPONSE = -2;
 const int ASYNC_ERROR_INVALID_URL = -3;
 
-// Callback type for async announce completion
-alias AnnounceCallback = fn void(tracker::TrackerResponse* response, int status, void* user_data);
-
 // Context for async announce operation
 struct AnnounceContext
 {
     metainfo::TorrentFile* torrent;
     ushort port;
     String event;
-    AnnounceCallback callback;
+    trackers::AnnounceCallback callback;
     void* user_data;
 
     // Results
-    tracker::TrackerResponse result;
+    trackers::TrackerResponse result;
     int error;
 }
 
@@ -94,7 +184,7 @@ fn void on_http_response(http::HttpResponse* response, int status, void* user_da
     }
 
     // Parse tracker response
-    tracker::TrackerResponse? parsed = tracker::parse_tracker_response(response.body);
+    trackers::TrackerResponse? parsed = trackers::parse_tracker_response(response.body);
 
     // Free response body (allocated with libc malloc in worker thread)
     if (response.body.len > 0) {
@@ -126,7 +216,7 @@ fn void on_http_response(http::HttpResponse* response, int status, void* user_da
  @param tracker_url_override : "Optional tracker URL override (uses torrent.announce if empty)"
 *>
 fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torrent,
-                       ushort port, String event, AnnounceCallback callback,
+                       ushort port, String event, trackers::AnnounceCallback callback,
                        void* user_data, String tracker_url_override = "") @public
 {
     // Use override URL if provided, otherwise use torrent.announce
@@ -142,7 +232,7 @@ fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torre
     }
 
     // Generate peer ID
-    char[20] peer_id = tracker::generate_peer_id();
+    char[20] peer_id = trackers::generate_peer_id();
 
     // Parse tracker URL
     url::Url? tracker_url_parsed = url::parse(mem, tracker_url);
@@ -166,7 +256,7 @@ fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torre
     String host = tracker_url_parsed.host.copy(mem);
 
     // Build announce URL with query parameters
-    String announce_url = tracker::build_announce_url(
+    String announce_url = trackers::build_announce_url(
         tracker_url,
         &torrent.info_hash,
         &peer_id,
@@ -175,7 +265,7 @@ fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torre
         0,  // downloaded
         torrent.info.length,  // left
         event,
-        tracker::DEFAULT_NUMWANT  // Request 50 peers
+        trackers::DEFAULT_NUMWANT  // Request 50 peers
     );
 
     // Parse the full announce URL to extract path + query

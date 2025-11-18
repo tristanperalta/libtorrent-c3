@@ -1,5 +1,5 @@
 module libtorrent::tracker_test;
-import libtorrent::tracker;
+import libtorrent::trackers;
 import libtorrent::common;
 import libtorrent::bencode;
 import std::io;
@@ -10,7 +10,7 @@ import std::net::url;
  Verifies that peer IDs have the correct -C30001- prefix.
 *>
 fn void test_generate_peer_id() @test {
-    char[20] peer_id = tracker::generate_peer_id();
+    char[20] peer_id = trackers::generate_peer_id();
 
     // Check prefix
     assert(peer_id[0] == '-', "First char should be '-'");
@@ -44,7 +44,7 @@ fn void test_build_announce_url() @test {
         'x', 'x', 'x', 'x'
     };
 
-    String url = tracker::build_announce_url(
+    String url = trackers::build_announce_url(
         "http://tracker.example.com/announce",
         &info_hash,
         &peer_id,
@@ -89,7 +89,7 @@ fn void test_build_announce_url_with_existing_query() @test {
         'i', 'j', 'k', 'l'
     };
 
-    String url = tracker::build_announce_url(
+    String url = trackers::build_announce_url(
         "http://tracker.example.com/announce?key=value",
         &info_hash,
         &peer_id,
@@ -118,7 +118,7 @@ fn void test_parse_compact_peers() @test {
         10,  0,   0, 1,   0xC8, 0xD5   // 10.0.0.1:51413 (0xC8D5 = 51413)
     };
 
-    common::SocketAddress[]? peers_opt = tracker::parse_compact_peers(peer_data);
+    common::SocketAddress[]? peers_opt = trackers::parse_compact_peers(peer_data);
     if (catch excuse = peers_opt) {
         assert(false, "Should parse valid peer data");
         return;
@@ -152,7 +152,7 @@ fn void test_parse_compact_peers_invalid_length() @test {
     // Invalid: 7 bytes (not divisible by 6)
     char[] peer_data = { 192, 168, 1, 1, 0x1A, 0xE1, 0xFF };
 
-    common::SocketAddress[]? peers = tracker::parse_compact_peers(peer_data);
+    common::SocketAddress[]? peers = trackers::parse_compact_peers(peer_data);
     if (catch excuse = peers) {
         // Expected failure - test passes
     } else {
@@ -167,7 +167,7 @@ fn void test_parse_compact_peers_invalid_length() @test {
 fn void test_parse_compact_peers_empty() @test {
     char[] empty;
 
-    common::SocketAddress[]? peers_opt = tracker::parse_compact_peers(empty);
+    common::SocketAddress[]? peers_opt = trackers::parse_compact_peers(empty);
     if (catch excuse = peers_opt) {
         assert(false, "Should handle empty data");
         return;
@@ -198,13 +198,13 @@ fn void test_parse_tracker_response_success() @test {
     response.append((String)compact_peers);
     response.append("e");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse valid response");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.interval == 1800, "Interval should be 1800");
     assert(result.complete == 5, "Complete should be 5");
     assert(result.incomplete == 10, "Incomplete should be 10");
@@ -226,13 +226,13 @@ fn void test_parse_tracker_response_failure() @test {
     DString response;
     response.append("d14:failure reason27:Tracker is down temporarilye");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse failure response");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.failure_reason.len > 0, "Should have failure reason");
     assert(result.failure_reason == "Tracker is down temporarily",
            "Failure reason should match");
@@ -253,13 +253,13 @@ fn void test_parse_tracker_response_warning() @test {
     response.append("5:peers0:");  // Empty peers
     response.append("e");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse response with warning");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.warning_message.len > 0, "Should have warning message");
     assert(result.warning_message == "Tracker will shut down soon",
            "Warning message should match");
@@ -282,7 +282,7 @@ fn void test_build_announce_url_preserves_path() @test {
     }
 
     // Test with HTTPS tracker that has /announce path
-    String url = tracker::build_announce_url(
+    String url = trackers::build_announce_url(
         "https://torrent.ubuntu.com/announce",
         &info_hash,
         &peer_id,
@@ -317,7 +317,7 @@ fn void test_build_announce_url_deep_path() @test {
         peer_id[i] = (char)('X');
     }
 
-    String url = tracker::build_announce_url(
+    String url = trackers::build_announce_url(
         "http://tracker.example.com/path/to/announce",
         &info_hash,
         &peer_id,
@@ -347,7 +347,7 @@ fn void test_build_announce_url_custom_port() @test {
         peer_id[i] = 0;
     }
 
-    String url = tracker::build_announce_url(
+    String url = trackers::build_announce_url(
         "http://tracker.example.com:8080/announce",
         &info_hash,
         &peer_id,
@@ -383,7 +383,7 @@ fn void test_correct_path_extraction_from_announce_url() @test {
         peer_id[i] = (char)('A' + i);
     }
 
-    String announce_url = tracker::build_announce_url(
+    String announce_url = trackers::build_announce_url(
         tracker_url,
         &info_hash,
         &peer_id,
@@ -439,13 +439,13 @@ fn void test_parse_retry_in_integer() @test {
     response.append("5:peers0:");  // Empty peers
     response.append("e");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse response with retry_in integer");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.retry_in_minutes == 5, "retry_in should be 5 minutes");
     assert(result.interval == 1800, "Interval should be 1800");
 
@@ -468,13 +468,13 @@ fn void test_parse_retry_in_never() @test {
     response.append("5:peers0:");  // Empty peers
     response.append("e");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse response with retry_in 'never'");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.retry_in_minutes == -1, "retry_in 'never' should be -1");
     assert(result.interval == 1800, "Interval should be 1800");
 
@@ -496,13 +496,13 @@ fn void test_parse_retry_in_missing() @test {
     response.append("5:peers0:");  // Empty peers
     response.append("e");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse response without retry_in");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.retry_in_minutes == 0, "retry_in should default to 0 when missing");
     assert(result.interval == 1800, "Interval should be 1800");
 
@@ -525,13 +525,13 @@ fn void test_parse_retry_in_zero() @test {
     response.append("5:peers0:");  // Empty peers
     response.append("e");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse response with retry_in 0");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.retry_in_minutes == 0, "retry_in should be 0");
     assert(result.interval == 1800, "Interval should be 1800");
 
@@ -553,13 +553,13 @@ fn void test_parse_retry_in_with_failure() @test {
     response.append("8:retry ini10e");  // retry in 10 minutes
     response.append("e");
 
-    tracker::TrackerResponse? result_opt = tracker::parse_tracker_response(response.str_view());
+    trackers::TrackerResponse? result_opt = trackers::parse_tracker_response(response.str_view());
     if (catch excuse = result_opt) {
         assert(false, "Should parse failure response with retry_in");
         return;
     }
 
-    tracker::TrackerResponse result = result_opt;
+    trackers::TrackerResponse result = result_opt;
     assert(result.failure_reason.len > 0, "Should have failure reason");
     assert(result.failure_reason == "Too many connections", "Failure reason should match");
     assert(result.retry_in_minutes == 10, "retry_in should be 10 minutes");
