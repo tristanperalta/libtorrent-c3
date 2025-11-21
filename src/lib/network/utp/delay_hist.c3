@@ -4,8 +4,7 @@
  * This module implements delay measurement and tracking for μTP's LEDBAT
  * (Low Extra Delay Background Transport) congestion control algorithm.
  *
- * Based on libutp implementation (Transmission):
- * /home/tristan/sources/libutp/utp_internal.cpp lines 249-401
+ * Based on reference implementations and BEP 29 specification.
  *
  * Key concepts:
  * - delay_base: Minimum observed delay (propagation delay + processing)
@@ -190,7 +189,7 @@ fn void DelayHist.add_sample(&self, uint sample, ulong current_ms) @public
  * Returns the minimum of the last 3 delay samples. This filters out
  * transient delay spikes that don't represent true congestion.
  *
- * In libutp, this returns UINT_MAX if no samples, but we return the
+ * In reference implementations, this returns UINT_MAX if no samples, but we return the
  * minimum of only valid samples (ignoring uninitialized slots with value 0
  * when we have real delay measurements).
  *

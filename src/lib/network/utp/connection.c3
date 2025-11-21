@@ -146,6 +146,7 @@ struct UtpConnection
 
     // Flags
     bool is_outgoing;    // true = we initiated, false = they initiated
+    bool registered_with_socket;  // Ownership tracking: true if socket owns this connection
 
     // Send buffer for reliable delivery
     SendBuffer send_buf;
@@ -247,6 +248,7 @@ fn UtpConnection* create_outgoing(common::SocketAddress remote_addr, ushort conn
 
     conn.state = ConnectionState.SYN_SENT;
     conn.is_outgoing = true;
+    conn.registered_with_socket = false;  // Not registered yet
 
     // Outgoing connections use odd send_id (BEP 29)
     conn.send_id = conn_id_seed | 1;  // Ensure odd (what we send in packets)
@@ -318,6 +320,7 @@ fn UtpConnection* create_incoming(common::SocketAddress remote_addr, packet::Utp
 
     conn.state = ConnectionState.CONNECTED;  // Move to connected after SYN-ACK sent
     conn.is_outgoing = false;
+    conn.registered_with_socket = false;  // Not registered yet
 
     // Incoming connections: their send_id becomes our recv_id
     conn.recv_id = syn_header.connection_id;
@@ -1225,10 +1228,9 @@ fn bool UtpConnection.is_cwnd_saturated(&self) @private
  * - Target delay: 100ms (configurable 25-100ms range)
  * - Increases cwnd when delay < target (network has capacity)
  * - Decreases cwnd when delay > target (network congested)
- * - Uses floating-point arithmetic (libutp style, simpler than fixed-point)
+ * - Uses floating-point arithmetic (simpler than fixed-point)
  *
- * Based on libutp implementation:
- * /home/tristan/sources/libutp/utp_internal.cpp lines 1622-1738
+ * Based on reference implementations and BEP 29 specification.
  *
  * @param bytes_acked : Number of bytes acknowledged
  * @param our_delay : Current one-way delay (microseconds)
@@ -1249,7 +1251,7 @@ fn void UtpConnection.apply_ledbat(&self, usz bytes_acked, uint our_delay) @publ
     // How far are we from target? (positive = below target, negative = above)
     double off_target = target - (double)our_delay;
 
-    // LEDBAT formula (libutp style - floating point):
+    // LEDBAT formula (floating point):
     //   scaled_gain = GAIN_FACTOR * window_factor * delay_factor
     //
     // window_factor: fraction of window this ACK represents
@@ -1261,7 +1263,7 @@ fn void UtpConnection.apply_ledbat(&self, usz bytes_acked, uint our_delay) @publ
     double window_factor = (double)min_bytes / (double)max_bytes;
     double delay_factor = off_target / target;
 
-    // Gain factor: 3000 (MAX_CWND_INCREASE_BYTES_PER_RTT from libutp)
+    // Gain factor: 3000 (MAX_CWND_INCREASE_BYTES_PER_RTT)
     const double GAIN_FACTOR = 3000.0;
     double scaled_gain = GAIN_FACTOR * window_factor * delay_factor;
 

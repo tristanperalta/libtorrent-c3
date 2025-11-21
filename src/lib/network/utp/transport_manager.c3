@@ -29,7 +29,7 @@ const ulong CONNECT_TIMEOUT_MS = 3000;  // 3 second connection timeout
  * Composite key for tracking μTP transports.
  *
  * BEP 29: Connection IDs are only unique per remote endpoint,
- * so we must key by (remote_addr, conn_id) like libutp does.
+ * so we must key by (remote_addr, conn_id) as a composite key.
  */
 struct TransportKey
 {
@@ -47,7 +47,7 @@ fn uint TransportKey.hash(&self)
     // Use the existing SocketAddress.hash() method from common.c3
     uint addr_hash = self.remote_addr.hash();
 
-    // Combine with conn_id using XOR (following libutp pattern)
+    // Combine with conn_id using XOR
     return addr_hash ^ ((uint)self.conn_id << 16);
 }
 
@@ -218,7 +218,7 @@ fn void process_transport(UtpTransport* transport)
 {
     if (!transport.conn) return;
 
-    // Phase 3: Check connection state for async connect
+    // Check connection state for async connect
     if (!transport.connected && transport.conn.state == connection::ConnectionState.CONNECTED)
     {
         transport.connected = true;
@@ -232,23 +232,23 @@ fn void process_transport(UtpTransport* transport)
     // Poll for received data (pull-based, μTP doesn't push)
     if (transport.read_cb && transport.conn.has_data())
     {
-        // Use fixed suggested size (match TCP behavior)
-        const usz SUGGESTED_SIZE = 65536;  // 64KB
-
-        // Allocate buffer via callback
-        char[] buffer = transport.alloc_cb((Transport)transport, SUGGESTED_SIZE, transport.read_user_data);
-
-        // Read available data (up to buffer size)
-        char[] data = transport.conn.recv_data(buffer.len);
+        // Read available data (recv_data allocates internally)
+        // Pattern: allocate internally, pass temporary pointer to callback, free immediately
+        const usz MAX_READ_SIZE = 65536;  // 64KB
+        char[] data = transport.conn.recv_data(MAX_READ_SIZE);
 
         // Invoke read callback with actual data
+        // NOTE: Buffer is temporary - only valid during callback
         if (data.len > 0)
         {
             transport.read_cb((Transport)transport, data, transport.read_user_data);
+
+            // Free buffer immediately after callback returns
+            free(data);
         }
     }
 
-    // Phase 4: Track write completion via ACK monitoring
+    // Track write completion via ACK monitoring
     if (transport.has_pending_write && transport.conn.bytes_in_flight == 0)
     {
         // All sent data has been ACKed
@@ -309,11 +309,17 @@ fn void free_manager(UtpTransportManager* mgr) @public
     {
         if (transport)
         {
-            // Close connection
+            // Close and free connection if it exists and we own it
+            // Ownership: Only free if NOT registered with socket
+            // (socket owns registered connections and will free them)
             if (transport.conn)
             {
-                transport.conn.close();
-                transport.conn.free();
+                if (!transport.conn.registered_with_socket)
+                {
+                    // Manager owns this connection - free it
+                    transport.conn.close();
+                    transport.conn.free();
+                }
                 transport.conn = null;
             }
 

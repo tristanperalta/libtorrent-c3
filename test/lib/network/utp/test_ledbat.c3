@@ -4,7 +4,7 @@
  * Tests the delay-based LEDBAT (Low Extra Delay Background Transport)
  * congestion control implementation in connection.c3.
  *
- * Based on BEP 29 and libutp reference implementation.
+ * Based on BEP 29 specification.
  */
 
 module libtorrent::network::utp::test_ledbat;

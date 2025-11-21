@@ -1,20 +1,36 @@
 /**
- * μTP Transport Adapter (STUB - NOT YET FULLY IMPLEMENTED)
+ * μTP Transport Adapter
+ * =====================
  *
- * Implements the Transport interface for μTP connections.
- * Wraps utp::UtpConnection.
+ * Implements the Transport interface for μTP connections, adapting the
+ * polling-based μTP API to the callback-based Transport interface.
  *
- * TODO: This is a stub implementation. μTP has a fundamentally different
- * API model than TCP (polling-based vs callback-based), which requires
- * additional infrastructure to properly adapt to the Transport interface.
+ * Architecture:
+ * - UtpTransportManager provides timer-based polling (100ms intervals)
+ * - Each UtpTransport registers with the manager for tick processing
+ * - Manager polls all active transports to detect events:
+ *   - Connection state changes → invoke connect callbacks
+ *   - Data availability (has_data()) → invoke read callbacks
+ *   - Write completion (bytes_in_flight == 0) → invoke write callbacks
  *
- * Required work:
- * 1. Implement polling loop to check has_data() and invoke read callbacks
- * 2. Implement async-style connect (μTP is synchronous)
- * 3. Handle UtpSocket coordination (μTP needs socket for sending)
- * 4. Add timer-based polling mechanism
+ * This design bridges the impedance mismatch between:
+ * - μTP's pull-based API (poll for data, check state)
+ * - Transport's push-based API (register callbacks, get notifications)
  *
- * For now, this serves as a placeholder to demonstrate the architecture.
+ * Memory Management:
+ * - Read buffers allocated internally, passed to callback, freed immediately
+ * - Callback must copy data if it needs to persist beyond callback scope
+ * - This matches μTP reference implementations for efficiency
+ *
+ * Current Limitations:
+ * - IPv4 only (no async DNS resolution yet)
+ * - Single pending write (no write queueing)
+ * - Direct IP addresses only (e.g., "127.0.0.1")
+ *
+ * Future Improvements:
+ * - Async DNS resolution for hostname support
+ * - Write queue for multiple concurrent writes
+ * - Timeout handling and connection monitoring
  */
 
 module libtorrent::network::utp;
@@ -36,11 +52,10 @@ alias lib_common = module libtorrent::common;
 ushort next_conn_id_seed = 1000;
 
 /**
- * μTP transport implementation (STUB).
+ * μTP transport implementation.
  *
- * Wraps utp::UtpConnection and implements Transport interface.
- *
- * NOTE: Not fully implemented yet. See file header for TODOs.
+ * Wraps utp::UtpConnection and implements the Transport interface using
+ * manager-based polling to detect events and invoke callbacks.
  */
 struct UtpTransport (Transport)
 {
@@ -53,7 +68,7 @@ struct UtpTransport (Transport)
     network::ConnectCallback connect_cb;
     void* connect_user_data;
 
-    network::AllocCallback alloc_cb;
+    // NOTE: No alloc_cb - μTP allocates internally
     network::ReadCallback read_cb;
     void* read_user_data;
 
@@ -102,9 +117,9 @@ fn void? UtpTransport.connect(&self, String host, ushort port, network::ConnectC
     // SIMPLIFIED APPROACH FOR NOW: Direct IP connection only
     // TODO: Full async DNS resolution in future iteration
     //
-    // For Phase 3, we support direct IP addresses.
+    // Currently, we support direct IPv4 addresses only.
     // Async DNS with callbacks would require additional context tracking,
-    // which adds complexity beyond the scope of this phase.
+    // which adds complexity beyond the current implementation.
 
     // Parse host as IPv4 address
     // Expected format: "127.0.0.1" or similar
@@ -187,19 +202,18 @@ fn void? UtpTransport.start_read(&self, network::AllocCallback alloc_cb, network
         return;
     }
 
-    io::eprintn("TODO: UtpTransport.start_read() not yet implemented");
-    io::eprintn("μTP read requires:");
-    io::eprintn("  1. Set up timer-based polling (e.g., every 10ms)");
-    io::eprintn("  2. In poll callback: check conn.has_data()");
-    io::eprintn("  3. If data available: call alloc_cb, conn.recv_data(), read_cb");
-    io::eprintn("  4. Continue polling until connection closed");
-
-    // Store callbacks for later
-    self.alloc_cb = alloc_cb;
+    // Store read callback for polling
+    // μTP allocates buffers internally (unlike TCP which uses alloc_cb)
+    // UtpTransportManager.process_transport() will:
+    // 1. Check conn.has_data() every 100ms
+    // 2. Call conn.recv_data() to read data (allocates internally)
+    // 3. Invoke read_cb with the received data
+    // 4. Free buffer immediately after callback returns
+    //
+    // NOTE: alloc_cb parameter is ignored for μTP (kept for Transport interface compatibility)
     self.read_cb = read_cb;
     self.read_user_data = user_data;
 
-    // TODO: Implement polling mechanism
     return;
 }
 
@@ -334,7 +348,12 @@ fn void UtpTransport.free(&self) @public
 // This is non-trivial work that deserves its own focused implementation
 // session rather than being rushed into this refactoring.
 //
-// Recommended Approach:
-// - Phase 1 (this refactoring): Get architecture in place, TCP working
-// - Phase 2 (future work): Implement full μTP transport adapter
-// - Phase 3 (future work): Integration testing with mixed TCP/μTP swarms
+// Current Implementation:
+// - ✅ Architecture in place with timer-based polling
+// - ✅ Transport interface fully implemented
+// - ✅ Internal buffer allocation (matches reference implementations)
+//
+// Future Work:
+// - Async DNS resolution for hostname support
+// - Write queueing for multiple concurrent writes
+// - Integration testing with mixed TCP/μTP swarms

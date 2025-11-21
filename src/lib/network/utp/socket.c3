@@ -157,6 +157,7 @@ fn void UtpSocket.bind(&self, String ip, ushort port) @public
 fn void UtpSocket.register_connection(&self, connection::UtpConnection* conn) @public
 {
     self.connections.set(conn.recv_id, conn);
+    conn.registered_with_socket = true;  // Mark socket as owner
 }
 
 /**
