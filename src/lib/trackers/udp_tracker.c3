@@ -1,11 +1,10 @@
-module libtorrent::udp_tracker;
+module libtorrent::trackers::udp;
 
 import libtorrent::common;
 import async::dns;
 import async::udp;
 import async::timer;
 import async::event_loop;
-import libtorrent::tracker;
 import libtorrent::metainfo;
 import uv;
 import std::io;
@@ -14,6 +13,100 @@ import std::time;
 import std::math::random;
 import std::os::linux; // For htonl, htons, ntohl, ntohs
 import std::core::log;
+import libtorrent::trackers;
+
+// ============================================================================
+// UdpTracker struct (implements Tracker interface)
+// ============================================================================
+
+<*
+ UDP tracker adapter implementing the Tracker interface.
+
+ Implements BEP 15 UDP tracker protocol with async DNS resolution,
+ UDP sockets, and timers for non-blocking operation.
+*>
+struct UdpTracker (trackers::Tracker)
+{
+    event_loop::EventLoop* loop;
+    String url;
+    bool closed;
+}
+
+// ============================================================================
+// Factory Function
+// ============================================================================
+
+<*
+ Create UDP tracker instance.
+
+ @param loop : "Event loop for async operations"
+ @param url : "UDP tracker URL"
+ @return "UdpTracker instance (caller must free)"
+*>
+fn UdpTracker* create(event_loop::EventLoop* loop, String url) @public
+{
+    UdpTracker* tracker = mem::new(UdpTracker);
+    tracker.loop = loop;
+    tracker.url = url.copy(mem);  // Own a copy
+    tracker.closed = false;
+    return tracker;
+}
+
+// ============================================================================
+// Tracker Interface Implementation (@dynamic methods)
+// ============================================================================
+
+fn void UdpTracker.announce(
+    &self,
+    metainfo::TorrentFile* torrent,
+    ushort port,
+    String event,
+    trackers::AnnounceCallback callback,
+    void* user_data,
+    int timeout_seconds
+) @dynamic
+{
+    if (self.closed)
+    {
+        if (callback) callback(null, -1, user_data);
+        return;
+    }
+
+    // Delegate to existing async_announce implementation
+    async_announce(self.loop, torrent, port, event, callback, user_data, timeout_seconds, self.url);
+}
+
+fn void UdpTracker.close(&self) @dynamic
+{
+    self.closed = true;
+}
+
+fn String UdpTracker.get_url(&self) @dynamic
+{
+    return self.url;
+}
+
+fn String UdpTracker.get_protocol(&self) @dynamic
+{
+    return "udp";
+}
+
+fn void UdpTracker.free(&self) @public
+{
+    if (!self.closed)
+    {
+        io::eprintn("WARNING: UdpTracker.free() called without close()");
+    }
+    if (self.url.len > 0) free(self.url);
+    free(self);
+}
+
+// ============================================================================
+// Internal Implementation
+// ============================================================================
+//
+// This async_announce function is used internally by:
+// - UdpTracker.announce() (Tracker interface implementation)
 
 <*
  Async UDP Tracker Implementation
@@ -42,10 +135,10 @@ faultdef UDP_TRACKER_PROTOCOL_ERROR;
 const long UDP_PROTOCOL_ID = 0x41727101980;  // Magic constant for connect
 
 // Action codes
-const int ACTION_CONNECT = 0;
-const int ACTION_ANNOUNCE = 1;
-const int ACTION_SCRAPE = 2;
-const int ACTION_ERROR = 3;
+const int ACTION_CONNECT @public = 0;
+const int ACTION_ANNOUNCE @public = 1;
+const int ACTION_SCRAPE @public = 2;
+const int ACTION_ERROR @public = 3;
 
 // Event codes (same as HTTP tracker)
 const int EVENT_NONE = 0;
@@ -370,17 +463,12 @@ fn int event_string_to_code(String event) @public
 // ============================================================================
 
 // Error codes for async announce
-const int ASYNC_ERROR_TIMEOUT = -1;
-const int ASYNC_ERROR_CONNECT_FAILED = -2;
-const int ASYNC_ERROR_ANNOUNCE_FAILED = -3;
-const int ASYNC_ERROR_INVALID_RESPONSE = -4;
-const int ASYNC_ERROR_DNS_FAILED = -5;
-const int ASYNC_ERROR_INVALID_URL = -6;
-
-// Callback type for async announce completion
-// If successful, response is non-null and status is 0
-// If failed, response is null and status contains negative error code
-alias AnnounceCallback = fn void(tracker::TrackerResponse* response, int status, void* user_data);
+const int ASYNC_ERROR_TIMEOUT @public = -1;
+const int ASYNC_ERROR_CONNECT_FAILED @public = -2;
+const int ASYNC_ERROR_ANNOUNCE_FAILED @public = -3;
+const int ASYNC_ERROR_INVALID_RESPONSE @public = -4;
+const int ASYNC_ERROR_DNS_FAILED @public = -5;
+const int ASYNC_ERROR_INVALID_URL @public = -6;
 
 // State machine states
 enum AnnounceState
@@ -399,7 +487,7 @@ struct AnnounceContext
     metainfo::TorrentFile* torrent;
     ushort port;
     String event;
-    AnnounceCallback callback;
+    trackers::AnnounceCallback callback;
     void* user_data;
 
     // State
@@ -427,7 +515,7 @@ struct AnnounceContext
     char[] announce_response;
 
     // Results
-    tracker::TrackerResponse result;
+    trackers::TrackerResponse result;
     int error;
 }
 
@@ -525,7 +613,7 @@ fn void on_timeout(async::timer::Timer* timer, void* user_data)
     timer.stop();
 
     // Check if we should retry
-    if (ctx.retry < udp_tracker::UDP_MAX_RETRIES)
+    if (ctx.retry < UDP_MAX_RETRIES)
     {
         ctx.retry++;
 
@@ -571,7 +659,7 @@ fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Soc
 
     // Parse announce response
     char[] raw_peers;
-    udp_tracker::AnnounceResponse? response = udp_tracker::unpack_announce_response(ctx.announce_response, &raw_peers);
+    AnnounceResponse? response = unpack_announce_response(ctx.announce_response, &raw_peers);
 
     if (catch err = response)
     {
@@ -591,7 +679,7 @@ fn void on_announce_response(async::udp::UdpSocket* socket, char[] data, uv::Soc
     }
 
     // Parse compact peer data into SocketAddress[]
-    common::SocketAddress[]? peers_opt = tracker::parse_compact_peers(raw_peers);
+    common::SocketAddress[]? peers_opt = trackers::parse_compact_peers(raw_peers);
     if (catch err = peers_opt)
     {
         ctx.result.peers = {};  // Empty array on parse error
@@ -625,7 +713,7 @@ fn void on_announce_sent(async::udp::UdpSocket* socket, int status, void* user_d
         log::error("Announce send failed: %s", (ZString)uv::strerror(status));
 
         // Retry
-        if (ctx.retry < udp_tracker::UDP_MAX_RETRIES)
+        if (ctx.retry < UDP_MAX_RETRIES)
         {
             ctx.retry++;
             start_announce_attempt(ctx);
@@ -647,26 +735,26 @@ fn void start_announce_attempt(AnnounceContext* ctx)
     ctx.state = AnnounceState.ANNOUNCING;
 
     // Generate new transaction ID for this attempt
-    ctx.transaction_id = udp_tracker::generate_transaction_id();
+    ctx.transaction_id = generate_transaction_id();
 
     // Build announce request
-    udp_tracker::AnnounceRequest request;
+    AnnounceRequest request;
     request.connection_id = ctx.connection_id;
-    request.action = udp_tracker::ACTION_ANNOUNCE;
+    request.action = ACTION_ANNOUNCE;
     request.transaction_id = ctx.transaction_id;
     request.info_hash = ctx.torrent.info_hash;
-    request.peer_id = tracker::generate_peer_id();
+    request.peer_id = trackers::generate_peer_id();
     request.downloaded = 0;
     request.left = ctx.torrent.info.length;
     request.uploaded = 0;
-    request.event = udp_tracker::event_string_to_code(ctx.event);
+    request.event = event_string_to_code(ctx.event);
     request.ip_address = 0;
-    request.key = udp_tracker::generate_transaction_id();
+    request.key = generate_transaction_id();
     request.num_want = -1;
     request.port = ctx.port;
 
     // Pack request
-    udp_tracker::pack_announce_request(&request, ctx.announce_request[..]);
+    pack_announce_request(&request, ctx.announce_request[..]);
 
     // Start receiving (only on first attempt - after connect phase recv was stopped)
     if (!ctx.receiving)
@@ -680,7 +768,7 @@ fn void start_announce_attempt(AnnounceContext* ctx)
                        &on_announce_sent, ctx);
 
     // Start timeout timer
-    int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : udp_tracker::UDP_INITIAL_TIMEOUT_SECONDS;
+    int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : UDP_INITIAL_TIMEOUT_SECONDS;
     int timeout_ms = (base_timeout * (1 << ctx.retry)) * 1000;
     ctx.timeout_timer.start((ulong)timeout_ms, 0, &on_timeout, ctx);
 }
@@ -706,7 +794,7 @@ fn void on_connect_response(async::udp::UdpSocket* socket, char[] data, uv::Sock
     ctx.connect_response[..] = data[0..CONNECT_RESPONSE_SIZE-1];
 
     // Parse connect response
-    udp_tracker::ConnectResponse? response = udp_tracker::unpack_connect_response(ctx.connect_response[..]);
+    ConnectResponse? response = unpack_connect_response(ctx.connect_response[..]);
 
     if (catch err = response)
     {
@@ -746,7 +834,7 @@ fn void on_connect_sent(async::udp::UdpSocket* socket, int status, void* user_da
         log::error("Connect send failed: %s", (ZString)uv::strerror(status));
 
         // Retry
-        if (ctx.retry < udp_tracker::UDP_MAX_RETRIES)
+        if (ctx.retry < UDP_MAX_RETRIES)
         {
             ctx.retry++;
             start_connect_attempt(ctx);
@@ -768,10 +856,10 @@ fn void start_connect_attempt(AnnounceContext* ctx)
     ctx.state = AnnounceState.CONNECTING;
 
     // Generate new transaction ID for this attempt
-    ctx.transaction_id = udp_tracker::generate_transaction_id();
+    ctx.transaction_id = generate_transaction_id();
 
     // Pack connect request
-    udp_tracker::pack_connect_request(ctx.transaction_id, ctx.connect_request[..]);
+    pack_connect_request(ctx.transaction_id, ctx.connect_request[..]);
 
     // Start receiving (only on first attempt)
     if (!ctx.receiving)
@@ -785,7 +873,7 @@ fn void start_connect_attempt(AnnounceContext* ctx)
                        &on_connect_sent, ctx);
 
     // Start timeout timer
-    int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : udp_tracker::UDP_INITIAL_TIMEOUT_SECONDS;
+    int base_timeout = ctx.initial_timeout_seconds > 0 ? ctx.initial_timeout_seconds : UDP_INITIAL_TIMEOUT_SECONDS;
     int timeout_ms = (base_timeout * (1 << ctx.retry)) * 1000;
     ctx.timeout_timer.start((ulong)timeout_ms, 0, &on_timeout, ctx);
 }
@@ -892,7 +980,7 @@ fn void on_dns_resolved(uv::AddrInfo* result, int status, void* user_data)
  @param tracker_url_override : "Optional tracker URL override (uses torrent.announce if empty)"
 *>
 fn void async_announce(event_loop::EventLoop* loop, metainfo::TorrentFile* torrent,
-                       ushort port, String event, AnnounceCallback callback,
+                       ushort port, String event, trackers::AnnounceCallback callback,
                        void* user_data, int initial_timeout_seconds = 0,
                        String tracker_url_override = "") @public
 {

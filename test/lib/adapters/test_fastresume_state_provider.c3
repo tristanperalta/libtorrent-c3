@@ -1,8 +1,8 @@
 module libtorrent::adapters::fastresume_test @test;
 
 import std::io;
-import libtorrent::adapters::fastresume_state_provider;
-import libtorrent::ports::state_provider;
+import libtorrent::storage::fastresume;
+import libtorrent::storage;
 import async::file;
 
 /**
@@ -13,7 +13,7 @@ import async::file;
  *
  * UPDATE: Now using wrapper functions instead of interface methods!
  * C3's interface system doesn't work with heap-allocated structs, so we use
- * public wrapper functions: fastresume_state_provider::load() and ::save()
+ * public wrapper functions: fastresume::load() and ::save()
  *
  * These tests verify:
  * - Save/load round-trip for download state
@@ -30,7 +30,7 @@ const String TEST_TORRENT_PATH = "/tmp/test_fastresume.torrent";
  */
 fn void test_create_provider() @test
 {
-    fastresume_state_provider::FastResumeStateProvider* provider = fastresume_state_provider::create();
+    fastresume::FastResumeStateProvider* provider = fastresume::create();
     assert(provider != null, "Provider should not be null");
     free(provider);
 }
@@ -41,8 +41,8 @@ fn void test_create_provider() @test
 fn void test_save_load_minimal_state() @test
 {
     // Create minimal download state
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
     state.file_selection = "0,1,2";  // Select first 3 files
     state.have_pieces = {};
     state.total_downloaded = 0;
@@ -72,21 +72,21 @@ fn void test_save_load_minimal_state() @test
     state.speed_limit_down_enabled = false;
 
     // Save using wrapper function
-    if (catch err = fastresume_state_provider::save(TEST_TORRENT_PATH, &state))
+    if (catch err = fastresume::save(TEST_TORRENT_PATH, &state))
     {
         assert(false, "Save should succeed");
         return;
     }
 
     // Load using wrapper function
-    state_provider::DownloadState? loaded_opt = fastresume_state_provider::load(TEST_TORRENT_PATH);
+    storage::DownloadState? loaded_opt = fastresume::load(TEST_TORRENT_PATH);
     if (catch err = loaded_opt)
     {
         assert(false, "Load should succeed");
         return;
     }
 
-    state_provider::DownloadState loaded = loaded_opt;
+    storage::DownloadState loaded = loaded_opt;
     defer loaded.free();
 
     // Verify round-trip
@@ -95,7 +95,7 @@ fn void test_save_load_minimal_state() @test
     assert(loaded.file_selection == "", "File selection should be empty (not stored in fastresume)");
 
     // Cleanup
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(TEST_TORRENT_PATH);
+    String fastresume_path = fastresume::get_fastresume_path(TEST_TORRENT_PATH);
     defer free(fastresume_path);
     (void)file::delete(fastresume_path);
 
@@ -108,8 +108,8 @@ fn void test_save_load_minimal_state() @test
 fn void test_save_load_with_pieces() @test
 {
     // Create state with some verified pieces
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
     state.file_selection = "0";
 
     // Create bitfield for 100 pieces (13 bytes = ceil(100/8))
@@ -150,21 +150,21 @@ fn void test_save_load_with_pieces() @test
     state.speed_limit_down_enabled = false;
 
     // Save
-    if (catch err = fastresume_state_provider::save(TEST_TORRENT_PATH, &state))
+    if (catch err = fastresume::save(TEST_TORRENT_PATH, &state))
     {
         assert(false, "Save with pieces should succeed");
         return;
     }
 
     // Load
-    state_provider::DownloadState? loaded_opt = fastresume_state_provider::load(TEST_TORRENT_PATH);
+    storage::DownloadState? loaded_opt = fastresume::load(TEST_TORRENT_PATH);
     if (catch err = loaded_opt)
     {
         assert(false, "Load with pieces should succeed");
         return;
     }
 
-    state_provider::DownloadState loaded = loaded_opt;
+    storage::DownloadState loaded = loaded_opt;
     defer loaded.free();
 
     // Verify statistics
@@ -184,7 +184,7 @@ fn void test_save_load_with_pieces() @test
     }
 
     // Cleanup
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(TEST_TORRENT_PATH);
+    String fastresume_path = fastresume::get_fastresume_path(TEST_TORRENT_PATH);
     defer free(fastresume_path);
     (void)file::delete(fastresume_path);
 
@@ -198,7 +198,7 @@ fn void test_load_nonexistent_file() @test
 {
     String nonexistent_path = "/tmp/nonexistent_torrent_12345.torrent";
 
-    state_provider::DownloadState? result = fastresume_state_provider::load(nonexistent_path);
+    storage::DownloadState? result = fastresume::load(nonexistent_path);
 
     // Should fail with fault
     if (catch err = result)
@@ -218,7 +218,7 @@ fn void test_load_nonexistent_file() @test
 fn void test_get_fastresume_path() @test
 {
     String torrent_path = "/home/user/downloads/ubuntu.torrent";
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(torrent_path);
+    String fastresume_path = fastresume::get_fastresume_path(torrent_path);
     defer free(fastresume_path);
 
     // Should append .fastresume
@@ -233,8 +233,8 @@ fn void test_get_fastresume_path() @test
  */
 fn void test_save_load_with_file_priority() @test
 {
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
     state.file_selection = "0,1,2,3";
     state.have_pieces = {};
 
@@ -273,21 +273,21 @@ fn void test_save_load_with_file_priority() @test
     state.speed_limit_down_enabled = false;
 
     // Save
-    if (catch err = fastresume_state_provider::save(TEST_TORRENT_PATH, &state))
+    if (catch err = fastresume::save(TEST_TORRENT_PATH, &state))
     {
         assert(false, "Save with file_priority should succeed");
         return;
     }
 
     // Load
-    state_provider::DownloadState? loaded_opt = fastresume_state_provider::load(TEST_TORRENT_PATH);
+    storage::DownloadState? loaded_opt = fastresume::load(TEST_TORRENT_PATH);
     if (catch err = loaded_opt)
     {
         assert(false, "Load with file_priority should succeed");
         return;
     }
 
-    state_provider::DownloadState loaded = loaded_opt;
+    storage::DownloadState loaded = loaded_opt;
     defer loaded.free();
 
     // Verify file_priority
@@ -298,7 +298,7 @@ fn void test_save_load_with_file_priority() @test
     }
 
     // Cleanup
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(TEST_TORRENT_PATH);
+    String fastresume_path = fastresume::get_fastresume_path(TEST_TORRENT_PATH);
     defer free(fastresume_path);
     (void)file::delete(fastresume_path);
 
@@ -310,8 +310,8 @@ fn void test_save_load_with_file_priority() @test
  */
 fn void test_save_load_boolean_flags() @test
 {
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
     state.file_selection = "0";
     state.have_pieces = {};
     state.total_downloaded = 0;
@@ -344,21 +344,21 @@ fn void test_save_load_boolean_flags() @test
     state.idle_limit = 0;
 
     // Save
-    if (catch err = fastresume_state_provider::save(TEST_TORRENT_PATH, &state))
+    if (catch err = fastresume::save(TEST_TORRENT_PATH, &state))
     {
         assert(false, "Save with boolean flags should succeed");
         return;
     }
 
     // Load
-    state_provider::DownloadState? loaded_opt = fastresume_state_provider::load(TEST_TORRENT_PATH);
+    storage::DownloadState? loaded_opt = fastresume::load(TEST_TORRENT_PATH);
     if (catch err = loaded_opt)
     {
         assert(false, "Load with boolean flags should succeed");
         return;
     }
 
-    state_provider::DownloadState loaded = loaded_opt;
+    storage::DownloadState loaded = loaded_opt;
     defer loaded.free();
 
     // Verify all boolean flags
@@ -370,7 +370,7 @@ fn void test_save_load_boolean_flags() @test
     assert(loaded.speed_limit_down_enabled == true, "Speed limit down enabled should be true");
 
     // Cleanup
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(TEST_TORRENT_PATH);
+    String fastresume_path = fastresume::get_fastresume_path(TEST_TORRENT_PATH);
     defer free(fastresume_path);
     (void)file::delete(fastresume_path);
 
@@ -383,8 +383,8 @@ fn void test_save_load_boolean_flags() @test
  */
 fn void test_save_load_with_file_priority_roundtrip() @test
 {
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
     state.file_selection = "";
     state.have_pieces = {};
 
@@ -425,21 +425,21 @@ fn void test_save_load_with_file_priority_roundtrip() @test
     state.speed_limit_down_enabled = false;
 
     // Save
-    if (catch err = fastresume_state_provider::save(TEST_TORRENT_PATH, &state))
+    if (catch err = fastresume::save(TEST_TORRENT_PATH, &state))
     {
         assert(false, "Save with file_priority should succeed");
         return;
     }
 
     // Load
-    state_provider::DownloadState? loaded_opt = fastresume_state_provider::load(TEST_TORRENT_PATH);
+    storage::DownloadState? loaded_opt = fastresume::load(TEST_TORRENT_PATH);
     if (catch err = loaded_opt)
     {
         assert(false, "Load with file_priority should succeed");
         return;
     }
 
-    state_provider::DownloadState loaded = loaded_opt;
+    storage::DownloadState loaded = loaded_opt;
     defer loaded.free();
 
     // Verify file_priority roundtrip
@@ -450,7 +450,7 @@ fn void test_save_load_with_file_priority_roundtrip() @test
     }
 
     // Cleanup
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(TEST_TORRENT_PATH);
+    String fastresume_path = fastresume::get_fastresume_path(TEST_TORRENT_PATH);
     defer free(fastresume_path);
     (void)file::delete(fastresume_path);
 
@@ -463,8 +463,8 @@ fn void test_save_load_with_file_priority_roundtrip() @test
  */
 fn void test_file_priority_zero_means_unselected() @test
 {
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
     state.file_selection = "";
     state.have_pieces = {};
 
@@ -503,21 +503,21 @@ fn void test_file_priority_zero_means_unselected() @test
     state.speed_limit_down_enabled = false;
 
     // Save
-    if (catch err = fastresume_state_provider::save(TEST_TORRENT_PATH, &state))
+    if (catch err = fastresume::save(TEST_TORRENT_PATH, &state))
     {
         assert(false, "Save with mixed priorities should succeed");
         return;
     }
 
     // Load
-    state_provider::DownloadState? loaded_opt = fastresume_state_provider::load(TEST_TORRENT_PATH);
+    storage::DownloadState? loaded_opt = fastresume::load(TEST_TORRENT_PATH);
     if (catch err = loaded_opt)
     {
         assert(false, "Load with mixed priorities should succeed");
         return;
     }
 
-    state_provider::DownloadState loaded = loaded_opt;
+    storage::DownloadState loaded = loaded_opt;
     defer loaded.free();
 
     // Verify priorities are preserved
@@ -528,7 +528,7 @@ fn void test_file_priority_zero_means_unselected() @test
     assert(loaded.file_priority[3] == 1, "File 3 should have priority 1");
 
     // Cleanup
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(TEST_TORRENT_PATH);
+    String fastresume_path = fastresume::get_fastresume_path(TEST_TORRENT_PATH);
     defer free(fastresume_path);
     (void)file::delete(fastresume_path);
 
@@ -541,8 +541,8 @@ fn void test_file_priority_zero_means_unselected() @test
  */
 fn void test_file_priority_backward_compatibility() @test
 {
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
     state.file_selection = "";
     state.have_pieces = {};
     state.file_priority = {};  // Empty - simulates old fastresume format
@@ -572,21 +572,21 @@ fn void test_file_priority_backward_compatibility() @test
     state.speed_limit_down_enabled = false;
 
     // Save (without file_priority)
-    if (catch err = fastresume_state_provider::save(TEST_TORRENT_PATH, &state))
+    if (catch err = fastresume::save(TEST_TORRENT_PATH, &state))
     {
         assert(false, "Save without file_priority should succeed");
         return;
     }
 
     // Load
-    state_provider::DownloadState? loaded_opt = fastresume_state_provider::load(TEST_TORRENT_PATH);
+    storage::DownloadState? loaded_opt = fastresume::load(TEST_TORRENT_PATH);
     if (catch err = loaded_opt)
     {
         assert(false, "Load without file_priority should succeed");
         return;
     }
 
-    state_provider::DownloadState loaded = loaded_opt;
+    storage::DownloadState loaded = loaded_opt;
     defer loaded.free();
 
     // Verify file_priority is empty (backward compatible)
@@ -597,7 +597,7 @@ fn void test_file_priority_backward_compatibility() @test
     assert(loaded.max_connections == state.max_connections, "Max connections should match");
 
     // Cleanup
-    String fastresume_path = fastresume_state_provider::get_fastresume_path(TEST_TORRENT_PATH);
+    String fastresume_path = fastresume::get_fastresume_path(TEST_TORRENT_PATH);
     defer free(fastresume_path);
     (void)file::delete(fastresume_path);
 

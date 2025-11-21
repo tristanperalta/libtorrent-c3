@@ -1,7 +1,7 @@
 module libtorrent_test::test_peer_discovery;
 
-import libtorrent::ports::peer_discovery;
-import libtorrent::adapters::composite_peer_discovery;
+import libtorrent::discovery;
+import libtorrent::discovery::composite;
 import libtorrent_test::mocks::mock_peer_discovery;
 import libtorrent::common;
 import std::io;
@@ -95,7 +95,7 @@ fn void test_mock_peer_discovery_start_success() @test
     common::InfoHash info_hash;
     for (int i = 0; i < 20; i++) info_hash[i] = (char)i;
 
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     mock.start_discovery(
         &info_hash,
@@ -117,7 +117,7 @@ fn void test_mock_peer_discovery_start_success() @test
     assert(ctx.last_success, "Discovery should succeed");
 
     // Verify stats
-    peer_discovery::DiscoveryStats stats = mock.get_stats();
+    discovery::DiscoveryStats stats = mock.get_stats();
     assert(stats.total_discovery_attempts == 1);
     assert(stats.successful_attempts == 1);
     assert(stats.total_peers_discovered == 2);
@@ -138,7 +138,7 @@ fn void test_mock_peer_discovery_start_failure() @test
 
     // Start discovery
     common::InfoHash info_hash;
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     mock.start_discovery(
         &info_hash,
@@ -157,7 +157,7 @@ fn void test_mock_peer_discovery_start_failure() @test
     assert(!ctx.peer_callback_called, "Peer callback should not be called on failure");
 
     // Verify stats
-    peer_discovery::DiscoveryStats stats = mock.get_stats();
+    discovery::DiscoveryStats stats = mock.get_stats();
     assert(stats.failed_attempts == 1);
     assert(stats.total_peers_discovered == 0);
 }
@@ -169,7 +169,7 @@ fn void test_mock_peer_discovery_stop() @test
 
     // Start then stop
     common::InfoHash info_hash;
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     mock.start_discovery(&info_hash, &options, null, null, null);
 
@@ -192,7 +192,7 @@ fn void test_mock_peer_discovery_manual_callbacks() @test
 
     // Start discovery (with empty peers)
     common::InfoHash info_hash;
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     mock.start_discovery(
         &info_hash,
@@ -241,7 +241,7 @@ fn void test_mock_get_name() @test
 
 fn void test_default_discovery_options() @test
 {
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     assert(options.discovery_interval_ms > 0, "Interval should be positive");
     assert(options.min_discovery_interval_ms > 0, "Min interval should be positive");
@@ -260,7 +260,7 @@ fn void test_default_discovery_options() @test
 
 fn void test_discovery_options_fields() @test
 {
-    peer_discovery::DiscoveryOptions options = peer_discovery::default_options();
+    discovery::DiscoveryOptions options = discovery::default_options();
 
     // Test that all expected fields exist and have reasonable defaults
     assert(options.local_port == 6881, "Default port should be 6881");

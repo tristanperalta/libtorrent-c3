@@ -25,12 +25,13 @@ import libtorrent::dht_get_peers;
 import libtorrent::event_bus;
 import libtorrent::event_types;
 import libtorrent::file_selection;
-import libtorrent::ports::peer_discovery;
-import libtorrent::adapters::composite_peer_discovery;
+import libtorrent::discovery;
+import libtorrent::discovery::composite;
+import libtorrent::discovery::tracker;
 import torrent_client::log_outputs;
 import libtorrent::session;
 import libtorrent::magnet_download_session;
-import libtorrent::adapters::fastresume_state_provider;
+import libtorrent::storage::fastresume;
 import raylib_gui;
 
 // ============================================================================
@@ -529,7 +530,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     raylib_gui::set_file_selection_callback(ui, &on_file_selection_toggled, ctx);
 
     // Initialize tracker configuration (parallel announce settings)
-    ctx.tracker_config = tracker_peer_discovery::default_tracker_config();
+    ctx.tracker_config = tracker::default_tracker_config();
 
     // Initialize multi-tracker manager (BEP 12)
     if (torrent.announce_list.len > 0)
@@ -622,7 +623,13 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
 
     // Create peer pool
     common::PeerId our_peer_id = tracker::generate_peer_id();
-    peer_pool::PeerPoolConfig pool_config = peer_pool::get_default_config();
+    peer_pool::PeerPoolConfig pool_config = {
+        .max_peerlist_size = 1000,
+        .max_active_connections = (usz)ctx.connections_limit,  // From SessionOptions
+        .max_failcount = 3,
+        .min_reconnect_time = 60,
+        .transport = ctx.transport  // Use transport from SessionOptions (BEP 29)
+    };
     ctx.peer_pool = peer_pool::create(loop, pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
 
     // Set peer pool callbacks
@@ -634,7 +641,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     );
 
     // Create upload manager
-    ctx.upload_mgr = upload_manager::create();
+    ctx.upload_mgr = upload_manager::create(8);  // 8 unchoke slots
     raylib_gui::add_log(ui, "Created upload manager");
 
     // Create upload timer (process upload requests every 1 second)
@@ -674,7 +681,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     ctx.peer_discovery_composite = session::build_peer_discovery_composite(ctx);
 
     // Start unified discovery through composite
-    peer_discovery::DiscoveryOptions discovery_options = peer_discovery::default_options();
+    discovery::DiscoveryOptions discovery_options = discovery::default_options();
     ctx.peer_discovery_composite.start_discovery(
         &ctx.torrent.info_hash,
         &discovery_options,

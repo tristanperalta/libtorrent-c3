@@ -1,6 +1,6 @@
-module libtorrent::adapters::noop_state_provider;
+module libtorrent::storage::noop;
 
-import libtorrent::ports::state_provider;
+import libtorrent::storage;
 
 /**
  * NoOpStateProvider - No-op implementation of StateProvider interface.
@@ -18,7 +18,7 @@ import libtorrent::ports::state_provider;
  * - Stateless/ephemeral deployments
  *
  * Example:
- *   state_provider::StateProvider* provider = noop_state_provider::create();
+ *   storage::StateProvider* provider = noop_storage::create();
  *   // All operations will no-op or return "not found"
  */
 
@@ -26,7 +26,7 @@ import libtorrent::ports::state_provider;
  * NoOpStateProvider struct.
  * No internal state needed - all operations are stateless.
  */
-struct NoOpStateProvider (state_provider::StateProvider)
+struct NoOpStateProvider (storage::StateProvider)
 {
     void*[2] _dummy;  // C3 interfaces may need extra space for vtable metadata
 }
@@ -39,17 +39,17 @@ struct NoOpStateProvider (state_provider::StateProvider)
  * Load state implementation (always fails).
  * Returns error to indicate no state is available.
  */
-fn state_provider::DownloadState? NoOpStateProvider.load_state(&self, String torrent_path) @dynamic
+fn storage::DownloadState? NoOpStateProvider.load_state(&self, String torrent_path) @dynamic
 {
     // Always fail - no state is persisted
-    return state_provider::STATE_LOAD_ERROR?;
+    return storage::STATE_LOAD_ERROR?;
 }
 
 /**
  * Save state implementation (no-op).
  * Succeeds silently without persisting anything.
  */
-fn void? NoOpStateProvider.save_state(&self, String torrent_path, state_provider::DownloadState* state) @dynamic
+fn void? NoOpStateProvider.save_state(&self, String torrent_path, storage::DownloadState* state) @dynamic
 {
     // Do nothing, succeed silently
     // No disk I/O performed
@@ -89,8 +89,8 @@ fn void NoOpStateProvider.free(&self) @dynamic
  *
  * @return "Provider instance (no persistence)"
  */
-fn state_provider::StateProvider* create() @public
+fn storage::StateProvider* create() @public
 {
     NoOpStateProvider* provider = mem::new(NoOpStateProvider);
-    return (state_provider::StateProvider*)provider;
+    return (storage::StateProvider*)provider;
 }

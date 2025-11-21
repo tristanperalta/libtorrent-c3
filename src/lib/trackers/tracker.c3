@@ -1,70 +1,169 @@
-module libtorrent::tracker;
+module libtorrent::trackers;
 
-import libtorrent::common;
-import libtorrent::http;
-import libtorrent::bencode;
 import libtorrent::metainfo;
-import libtorrent::udp_tracker;
-import libtorrent::http_tracker;
+import libtorrent::common;
 import async::event_loop;
+import libtorrent::trackers::http;
+import libtorrent::trackers::udp;
+import libtorrent::bencode;
 import std::net::url;
 import std::time;
 import std::math::random;
 
+/*
+ BitTorrent Tracker Interface (Hexagonal Architecture Port)
+ ===========================================================
+
+ Defines the abstract interface for tracker protocol implementations.
+
+ Implementations:
+ - HttpTracker (trackers/http_tracker.c3) - BEP 3 HTTP/HTTPS tracker
+ - UdpTracker (trackers/udp_tracker.c3) - BEP 15 UDP tracker
+
+ This interface follows hexagonal architecture principles, matching the
+ patterns used by Transport (network/transport.c3) and PeerDiscovery
+ (discovery/peer_discovery.c3).
+*/
+
+// ============================================================================
+// Callback Type Definitions
+// ============================================================================
+
 <*
- BitTorrent Tracker Communication Module
- ========================================
- Implements the BitTorrent tracker protocol (BEP 3 and BEP 15).
-
- Provides a unified interface for HTTP/HTTPS and UDP trackers.
+ Tracker response structure.
+ Contains information received from the tracker.
 *>
+struct TrackerResponse
+{
+    long interval;                   // Re-announce interval in seconds
+    long min_interval;               // Minimum announce interval (optional)
+    long complete;                   // Number of seeders
+    long incomplete;                 // Number of leechers
+    long downloaders;                // BEP 21: Active downloaders (0 if not provided)
+    common::SocketAddress[] peers;   // List of peers
+    String failure_reason;           // Error message if request failed (empty if none)
+    String warning_message;          // Optional warning from tracker (empty if none)
+    int retry_in_minutes;            // BEP 31: Minutes until retry (-1 = "never", 0 = not set, >0 = minutes)
+}
 
-// Faults
+<*
+ Callback invoked when announce completes (success or failure).
+
+ @param response : "Tracker response (null on error)"
+ @param status : "0 on success, negative error code on failure"
+ @param user_data : "User-provided context pointer"
+*>
+alias AnnounceCallback = fn void(TrackerResponse* response, int status, void* user_data);
+
+// ============================================================================
+// Tracker Interface
+// ============================================================================
+
+<*
+ Tracker interface - abstraction for HTTP/UDP tracker protocols.
+
+ This interface provides a unified API for communicating with BitTorrent
+ trackers regardless of the underlying protocol (HTTP, UDP, etc.).
+
+ Lifecycle:
+ 1. Create: Use factory function (create_from_url)
+ 2. Announce: Call announce() with callback
+ 3. Close: Call close() when done
+ 4. Free: Caller must free after close()
+*>
+interface Tracker
+{
+    // Announce to tracker (async operation).
+    // Initiates an asynchronous announce request. The callback will be
+    // invoked when the operation completes (either success or failure).
+    fn void announce(
+        metainfo::TorrentFile* torrent,
+        ushort port,
+        String event,
+        AnnounceCallback callback,
+        void* user_data,
+        int timeout_seconds
+    );
+
+    // Close tracker connection and clean up resources.
+    // After calling close(), no further operations should be performed.
+    fn void close();
+
+    // Get tracker URL (e.g., "http://tracker.example.com/announce")
+    fn String get_url();
+
+    // Get tracker protocol type ("http", "udp", etc.)
+    fn String get_protocol();
+}
+
+// ============================================================================
+// Factory Function
+// ============================================================================
+
+// Fault for invalid tracker protocol
+faultdef TRACKER_INVALID_PROTOCOL;
+
+<*
+ Create tracker from URL (factory function).
+
+ This is the primary entry point for creating tracker instances.
+ The protocol is automatically determined from the URL scheme.
+
+ Supported protocols:
+ - http:// and https:// - HTTP tracker (BEP 3)
+ - udp:// - UDP tracker (BEP 15)
+
+ Example usage:
+   Tracker* tracker = create_from_url(loop, "http://tracker.example.com/announce")!!;
+   tracker.announce(torrent, port, "started", &callback, user_data, 60);
+   tracker.close();
+   tracker.free();
+
+ @param loop : "Event loop for async operations"
+ @param url : "Tracker URL (determines protocol)"
+ @return "Tracker instance (caller must free) or fault on error"
+*>
+fn Tracker*? create_from_url(event_loop::EventLoop* loop, String url) @public
+{
+    if (url.starts_with("http://") || url.starts_with("https://"))
+    {
+        return (Tracker*)http::create(loop, url);
+    }
+    else if (url.starts_with("udp://"))
+    {
+        return (Tracker*)udp::create(loop, url);
+    }
+    else
+    {
+        // Unknown protocol
+        return TRACKER_INVALID_PROTOCOL?;
+    }
+}
+
+// ============================================================================
+// Additional Faults
+// ============================================================================
+
 faultdef TRACKER_CONNECT_FAILED;
 faultdef TRACKER_REQUEST_FAILED;
 faultdef TRACKER_INVALID_RESPONSE;
 faultdef TRACKER_URL_INVALID;
 faultdef TRACKER_UNSUPPORTED_PROTOCOL;
 
+// ============================================================================
+// Constants
+// ============================================================================
+
 // Default number of peers to request from tracker (BEP 3 standard)
-const int DEFAULT_NUMWANT = 50;
+const int DEFAULT_NUMWANT @public = 50;
 
 // Peer ID prefix constants
 const usz PEER_ID_PREFIX_LENGTH = 8;
 const String PEER_ID_PREFIX = "-C30001-";
 
-<*
- Tracker interface - all tracker implementations must implement this.
- Provides a unified way to announce to different tracker types (HTTP/UDP).
-*>
-interface Tracker
-{
-    fn TrackerResponse? announce(metainfo::TorrentFile* torrent, ushort port, String event);
-    fn void free();
-}
-
-<*
- Tracker response structure.
- Contains information received from the tracker.
-*>
-struct TrackerResponse {
-    long interval;          // Re-announce interval in seconds
-    long min_interval;      // Minimum announce interval (optional)
-    long complete;          // Number of seeders
-    long incomplete;        // Number of leechers
-    long downloaders;       // BEP 21: Active downloaders (incomplete - partial seeds, 0 if not provided)
-    common::SocketAddress[] peers;   // List of peers
-    String failure_reason;  // Error message if request failed (empty if none)
-    String warning_message; // Optional warning from tracker (empty if none)
-    int retry_in_minutes;   // BEP 31: Minutes until retry (-1 = "never", 0 = not set, >0 = minutes)
-}
-
-<*
- HTTP/HTTPS tracker implementation.
-*>
-struct HttpTracker (Tracker) {
-    char _dummy;  // C3 doesn't allow zero-sized structs
-}
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
 <*
  Generate a random 20-byte peer ID.
@@ -73,7 +172,7 @@ struct HttpTracker (Tracker) {
 
  @return "A 20-byte peer ID"
 *>
-fn common::PeerId generate_peer_id()
+fn common::PeerId generate_peer_id() @public
 {
     common::PeerId peer_id;
 
@@ -112,7 +211,7 @@ fn common::PeerId generate_peer_id()
 fn String build_announce_url(String tracker_url, common::InfoHash* info_hash,
                               common::PeerId* peer_id, ushort port,
                               long uploaded, long downloaded, long left,
-                              String event, int numwant)
+                              String event, int numwant) @public
 {
     DString url;
     url.append(tracker_url);
@@ -160,7 +259,7 @@ fn String build_announce_url(String tracker_url, common::InfoHash* info_hash,
  @param peer_data : "Raw peer data from tracker"
  @return "Array of parsed peers or fault"
 *>
-fn common::SocketAddress[]? parse_compact_peers(char[] peer_data, Allocator allocator = mem)
+fn common::SocketAddress[]? parse_compact_peers(char[] peer_data, Allocator allocator = mem) @public
 {
     // Validate length is multiple of 6
     const usz IPV4_COMPACT_SIZE = 6;  // 4 bytes IP + 2 bytes port
@@ -198,9 +297,9 @@ fn common::SocketAddress[]? parse_compact_peers(char[] peer_data, Allocator allo
  @param response_data : "Bencode response from tracker"
  @return "Parsed TrackerResponse or fault"
 *>
-fn TrackerResponse? parse_tracker_response(String response_data)
+fn TrackerResponse? parse_tracker_response(String response_data) @public
 {
-    BencodeValue* root = bencode::decode(response_data)!;
+    bencode::BencodeValue* root = bencode::decode(response_data)!;
     defer root.free();
 
     if (root.type != bencode::BencodeType.DICT) {
@@ -210,14 +309,14 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     TrackerResponse response = {};
 
     // Check for failure first (but still parse retry_in before returning)
-    if (BencodeValue* failure = root.dict_get("failure reason"))
+    if (bencode::BencodeValue* failure = root.dict_get("failure reason"))
     {
         if (failure.type == bencode::BencodeType.STRING)
         {
             response.failure_reason = ((String)failure.string).copy(mem);
 
             // BEP 31: Parse retry_in even with failure_reason
-            if (BencodeValue* retry_in = root.dict_get("retry in"))
+            if (bencode::BencodeValue* retry_in = root.dict_get("retry in"))
             {
                 if (retry_in.type == bencode::BencodeType.INTEGER)
                 {
@@ -238,7 +337,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     }
 
     // Extract tracker response fields
-    if (BencodeValue* interval = root.dict_get("interval"))
+    if (bencode::BencodeValue* interval = root.dict_get("interval"))
     {
         if (interval.type == bencode::BencodeType.INTEGER)
         {
@@ -246,7 +345,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* min_interval = root.dict_get("min interval"))
+    if (bencode::BencodeValue* min_interval = root.dict_get("min interval"))
     {
         if (min_interval.type == bencode::BencodeType.INTEGER)
         {
@@ -254,7 +353,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* complete = root.dict_get("complete"))
+    if (bencode::BencodeValue* complete = root.dict_get("complete"))
     {
         if (complete.type == bencode::BencodeType.INTEGER)
         {
@@ -262,7 +361,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* incomplete = root.dict_get("incomplete"))
+    if (bencode::BencodeValue* incomplete = root.dict_get("incomplete"))
     {
         if (incomplete.type == bencode::BencodeType.INTEGER)
         {
@@ -271,7 +370,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     }
 
     // BEP 21: Parse downloaders field (active downloaders, excluding partial seeds)
-    if (BencodeValue* downloaders = root.dict_get("downloaders"))
+    if (bencode::BencodeValue* downloaders = root.dict_get("downloaders"))
     {
         if (downloaders.type == bencode::BencodeType.INTEGER)
         {
@@ -279,7 +378,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
         }
     }
 
-    if (BencodeValue* warning = root.dict_get("warning message"))
+    if (bencode::BencodeValue* warning = root.dict_get("warning message"))
     {
         if (warning.type == bencode::BencodeType.STRING)
         {
@@ -288,7 +387,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     }
 
     // BEP 31: Parse retry_in field (can be integer minutes or string "never")
-    if (BencodeValue* retry_in = root.dict_get("retry in"))
+    if (bencode::BencodeValue* retry_in = root.dict_get("retry in"))
     {
         if (retry_in.type == bencode::BencodeType.INTEGER)
         {
@@ -309,7 +408,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     common::SocketAddress[] ipv6_peers = {};
 
     // Parse IPv4 peers from "peers" key
-    if (BencodeValue* peers = root.dict_get("peers"))
+    if (bencode::BencodeValue* peers = root.dict_get("peers"))
     {
         if (peers.type == bencode::BencodeType.STRING)
         {
@@ -328,7 +427,7 @@ fn TrackerResponse? parse_tracker_response(String response_data)
     }
 
     // Parse IPv6 peers from "peers6" key (BEP 7)
-    if (BencodeValue* peers6 = root.dict_get("peers6"))
+    if (bencode::BencodeValue* peers6 = root.dict_get("peers6"))
     {
         if (peers6.type == bencode::BencodeType.STRING)
         {
@@ -382,173 +481,3 @@ fn TrackerResponse? parse_tracker_response(String response_data)
 
     return response;
 }
-
-<*
- HTTP tracker announce implementation.
-
- @param torrent : "The torrent file"
- @param our_port : "Our listening port"
- @param event : "Event type (started/stopped/completed or empty string)"
- @return "Tracker response with peer list or fault"
-*>
-fn TrackerResponse? HttpTracker.announce(HttpTracker* self, metainfo::TorrentFile* torrent, ushort our_port,
-                                          String event) @dynamic
-{
-    // Generate peer ID
-    common::PeerId peer_id = generate_peer_id();
-
-    // Parse tracker URL
-    Url? tracker_url_parsed = url::parse(mem, torrent.announce);
-    if (catch err = tracker_url_parsed) {
-        return TRACKER_URL_INVALID?;
-    }
-    defer tracker_url_parsed.free();
-
-    // Determine protocol and port
-    bool use_tls = tracker_url_parsed.scheme == "https";
-    ushort tracker_port = (ushort)tracker_url_parsed.port;
-    if (tracker_port == 0) {
-        tracker_port = use_tls ? 443 : 80;
-    }
-
-    // Build announce URL with query parameters
-    String announce_url = build_announce_url(
-        torrent.announce,
-        &torrent.info_hash,
-        &peer_id,
-        our_port,
-        0,  // uploaded
-        0,  // downloaded
-        torrent.info.length,  // left
-        event,
-        DEFAULT_NUMWANT  // Request 50 peers
-    );
-    defer free(announce_url);
-
-    // Parse the full announce URL to extract path + query
-    Url? full_url = url::parse(mem, announce_url);
-    if (catch err = full_url) {
-        return TRACKER_URL_INVALID?;
-    }
-    defer full_url.free();
-
-    // Build path + query string for HTTP request
-    DString path_and_query;
-    path_and_query.append(full_url.path);
-    if (full_url.query.len > 0) {
-        path_and_query.append_char('?');
-        path_and_query.append(full_url.query);
-    }
-
-    // Create HTTP client
-    any client = http::http_client(tracker_url_parsed.host, tracker_port, use_tls);
-    if (!client.ptr) {
-        return TRACKER_CONNECT_FAILED?;
-    }
-    defer ((http::HttpClient)client).close();
-
-    // Make HTTP GET request
-    String[] empty_headers;
-    http::HttpResponse? http_response = ((http::HttpClient)client).request(
-        "GET",
-        path_and_query.str_view(),  // Path + query
-        empty_headers,               // No custom headers
-        ""                           // No body
-    );
-
-    if (catch err = http_response) {
-        return TRACKER_REQUEST_FAILED?;
-    }
-    defer free(http_response.body);
-
-    // Check HTTP status
-    if (http_response.status != 200) {
-        return TRACKER_REQUEST_FAILED?;
-    }
-
-    // Parse bencode response
-    return parse_tracker_response(http_response.body);
-}
-
-<*
- Free HTTP tracker instance.
-*>
-fn void HttpTracker.free(HttpTracker* self) @dynamic
-{
-    // HttpTracker has no dynamic allocations
-    free(self);
-}
-
-// Announce callback type
-alias AnnounceCallback = fn void(TrackerResponse* response, int status, void* user_data);
-
-<*
- Announce to specific tracker URL (non-blocking).
- Routes to HTTP or UDP tracker implementation based on URL scheme.
- This is the BEP 12 multi-tracker version that allows specifying a tracker URL.
-
- @param loop : "Event loop"
- @param torrent : "The torrent file"
- @param tracker_url : "The tracker URL to announce to (overrides torrent.announce)"
- @param our_port : "Our listening port"
- @param event : "Event type (started/stopped/completed or empty string)"
- @param callback : "Completion callback"
- @param user_data : "User data passed to callback"
- @param timeout_seconds : "Tracker announce timeout in seconds (0 = use tracker default)"
-*>
-fn void announce_to_url(event_loop::EventLoop* loop,
-                        metainfo::TorrentFile* torrent,
-                        String tracker_url,
-                        ushort our_port,
-                        String event,
-                        AnnounceCallback callback,
-                        void* user_data,
-                        int timeout_seconds) @public
-{
-    if (tracker_url.starts_with("udp://"))
-    {
-        // Use UDP tracker async with URL override
-        udp_tracker::async_announce(loop, torrent, our_port, event,
-                                     callback, user_data, timeout_seconds, tracker_url);
-    }
-    else if (tracker_url.starts_with("http://") || tracker_url.starts_with("https://"))
-    {
-        // Use HTTP tracker async with URL override
-        http_tracker::async_announce(loop, torrent, our_port, event,
-                                      callback, user_data, tracker_url);
-    }
-    else
-    {
-        // Invalid URL
-        if (callback)
-        {
-            callback(null, -1, user_data);
-        }
-    }
-}
-
-<*
- Announce to tracker (non-blocking).
- Routes to HTTP or UDP tracker implementation based on URL.
- Uses torrent.announce as the tracker URL.
-
- @param loop : "Event loop"
- @param torrent : "The torrent file"
- @param our_port : "Our listening port"
- @param event : "Event type (started/stopped/completed or empty string)"
- @param callback : "Completion callback"
- @param user_data : "User data passed to callback"
- @param timeout_seconds : "Tracker announce timeout in seconds (0 = use tracker default)"
-*>
-fn void announce(event_loop::EventLoop* loop,
-                 metainfo::TorrentFile* torrent,
-                 ushort our_port,
-                 String event,
-                 AnnounceCallback callback,
-                 void* user_data,
-                 int timeout_seconds) @public
-{
-    // Use torrent.announce as the tracker URL
-    announce_to_url(loop, torrent, torrent.announce, our_port, event, callback, user_data, timeout_seconds);
-}
-

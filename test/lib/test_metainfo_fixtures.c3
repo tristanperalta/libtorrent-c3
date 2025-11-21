@@ -2312,3 +2312,91 @@ fn void test_parse_empty_httpseed() @test
     assert(torrent.info.name.len > 0, "Should have torrent name");
     io::printn("✓ Parsed empty_httpseed.torrent successfully");
 }
+
+// ============================================================================
+// BEP 38: Collections and Similar Torrents (Merge Testing)
+// ============================================================================
+
+// File: test/fixtures/bep38_collections_inside.torrent
+fn void test_parse_bep38_collections_inside() @test
+{
+    String data = load_torrent_file("test/fixtures/bep38_collections_inside.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer torrent.free();
+
+    // Should parse collections from INSIDE info dict
+    assert(torrent.collections.len == 2, "Expected 2 collections from inside info dict");
+    assert(torrent.collections[0] == "collection.inside.1", "Expected first collection");
+    assert(torrent.collections[1] == "collection.inside.2", "Expected second collection");
+
+    io::printn("✓ BEP 38: Parsed collections from inside info dict");
+}
+
+// File: test/fixtures/bep38_collections_merged.torrent
+fn void test_parse_bep38_collections_merged() @test
+{
+    String data = load_torrent_file("test/fixtures/bep38_collections_merged.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer torrent.free();
+
+    // Should merge collections from BOTH inside and outside info dict
+    assert(torrent.collections.len == 4, "Expected 4 collections (2 outside + 2 inside merged)");
+    assert(torrent.collections[0] == "collection.outside.1", "Expected first outside collection");
+    assert(torrent.collections[1] == "collection.outside.2", "Expected second outside collection");
+    assert(torrent.collections[2] == "collection.inside.1", "Expected first inside collection");
+    assert(torrent.collections[3] == "collection.inside.2", "Expected second inside collection");
+
+    io::printn("✓ BEP 38: Merged collections from both locations (spec-compliant)");
+}
+
+// File: test/fixtures/bep38_similar_inside.torrent
+fn void test_parse_bep38_similar_inside() @test
+{
+    String data = load_torrent_file("test/fixtures/bep38_similar_inside.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer torrent.free();
+
+    // Should parse similar from INSIDE info dict
+    assert(torrent.similar_count == 1, "Expected 1 similar torrent from inside info dict");
+
+    // Verify the hash is correct (should be 'b' * 20)
+    for (usz i = 0; i < 20; i++)
+    {
+        assert(torrent.similar[i] == 'b', "Expected correct similar info hash");
+    }
+
+    io::printn("✓ BEP 38: Parsed similar torrents from inside info dict");
+}
+
+// File: test/fixtures/bep38_similar_merged.torrent
+fn void test_parse_bep38_similar_merged() @test
+{
+    String data = load_torrent_file("test/fixtures/bep38_similar_merged.torrent");
+    defer free(data);
+
+    TorrentFile* torrent = metainfo::parse(data)!!;
+    defer torrent.free();
+
+    // Should merge similar from BOTH inside and outside info dict
+    assert(torrent.similar_count == 2, "Expected 2 similar torrents (1 outside + 1 inside merged)");
+
+    // First hash should be 'b' * 20 (outside)
+    for (usz i = 0; i < 20; i++)
+    {
+        assert(torrent.similar[i] == 'b', "Expected first similar info hash (outside)");
+    }
+
+    // Second hash should be 'c' * 20 (inside)
+    for (usz i = 0; i < 20; i++)
+    {
+        assert(torrent.similar[20 + i] == 'c', "Expected second similar info hash (inside)");
+    }
+
+    io::printn("✓ BEP 38: Merged similar torrents from both locations (spec-compliant)");
+}

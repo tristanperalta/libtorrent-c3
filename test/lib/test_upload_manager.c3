@@ -12,14 +12,14 @@ fn common::SocketAddress make_addr(char a, char b, char c, char d, ushort port)
 
 fn void test_upload_manager_create() @test
 {
-    upload_manager::UploadManager* mgr = upload_manager::create();
+    upload_manager::UploadManager* mgr = upload_manager::create(8);
     assert(mgr != null);
     mgr.free();
 }
 
 fn void test_upload_manager_add_and_process() @test
 {
-    upload_manager::UploadManager* mgr = upload_manager::create();
+    upload_manager::UploadManager* mgr = upload_manager::create(8);
     defer mgr.free();
 
     common::SocketAddress addr = make_addr(127, 0, 0, 1, 6881);
@@ -43,7 +43,7 @@ fn void test_upload_manager_add_and_process() @test
 
 fn void test_upload_manager_queue_limit() @test
 {
-    upload_manager::UploadManager* mgr = upload_manager::create();
+    upload_manager::UploadManager* mgr = upload_manager::create(8);
     defer mgr.free();
 
     common::SocketAddress addr = make_addr(127, 0, 0, 1, 6881);
@@ -60,7 +60,7 @@ fn void test_upload_manager_queue_limit() @test
 
 fn void test_upload_manager_fifo_order() @test
 {
-    upload_manager::UploadManager* mgr = upload_manager::create();
+    upload_manager::UploadManager* mgr = upload_manager::create(8);
     defer mgr.free();
 
     common::SocketAddress addr = make_addr(127, 0, 0, 1, 6881);
@@ -76,7 +76,7 @@ fn void test_upload_manager_fifo_order() @test
 
 fn void test_upload_manager_multiple_peers() @test
 {
-    upload_manager::UploadManager* mgr = upload_manager::create();
+    upload_manager::UploadManager* mgr = upload_manager::create(8);
     defer mgr.free();
 
     common::SocketAddress peer1 = make_addr(127, 0, 0, 1, 6881);
@@ -93,7 +93,7 @@ fn void test_upload_manager_multiple_peers() @test
 
 fn void test_upload_manager_clear_queue() @test
 {
-    upload_manager::UploadManager* mgr = upload_manager::create();
+    upload_manager::UploadManager* mgr = upload_manager::create(8);
     defer mgr.free();
 
     common::SocketAddress addr = make_addr(127, 0, 0, 1, 6881);

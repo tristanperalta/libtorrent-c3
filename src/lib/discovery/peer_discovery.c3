@@ -1,4 +1,4 @@
-module libtorrent::ports::peer_discovery;
+module libtorrent::discovery;
 
 import std::time;
 import libtorrent::common;

@@ -1,9 +1,9 @@
-module libtorrent::adapters::fastresume_state_provider;
+module libtorrent::storage::fastresume;
 
 import std::io;
 import std::core::mem;
 import libtorrent::bencode;
-import libtorrent::ports::state_provider;
+import libtorrent::storage;
 import async::file;
 
 /**
@@ -82,7 +82,7 @@ faultdef FASTRESUME_INVALID_VERSION;
 /**
  * FastResumeStateProvider struct.
  */
-struct FastResumeStateProvider (state_provider::StateProvider)
+struct FastResumeStateProvider (storage::StateProvider)
 {
     // Dummy fields - C3 interfaces may need extra space for vtable metadata
     // This provider is stateless, so the fields are unused
@@ -129,7 +129,7 @@ fn char[] copy_char_array(char[] src)
  * @param state: "State to encode"
  * @return "Bencode dictionary representing fastresume data"
  */
-fn BencodeValue* encode_fastresume(state_provider::DownloadState* state)
+fn BencodeValue* encode_fastresume(storage::DownloadState* state)
 {
     BencodeValue* dict = bencode::make_dict();
 
@@ -322,7 +322,7 @@ fn BencodeValue* encode_fastresume(state_provider::DownloadState* state)
  * @param root: "Bencode dictionary to decode"
  * @return "Download state or fault on error"
  */
-fn state_provider::DownloadState? decode_fastresume(BencodeValue* root)
+fn storage::DownloadState? decode_fastresume(BencodeValue* root)
 {
     if (root.type != bencode::BencodeType.DICT)
     {
@@ -352,8 +352,8 @@ fn state_provider::DownloadState? decode_fastresume(BencodeValue* root)
     }
 
     // Initialize state
-    state_provider::DownloadState state;
-    state.version = state_provider::STATE_VERSION;
+    storage::DownloadState state;
+    state.version = storage::STATE_VERSION;
 
     // Extract all fields (with defaults for missing fields)
 
@@ -406,7 +406,7 @@ fn state_provider::DownloadState? decode_fastresume(BencodeValue* root)
         usz count = unfinished.list.size;
         if (count > 0)
         {
-            state.unfinished = mem::new_array(state_provider::UnfinishedPiece, count);
+            state.unfinished = mem::new_array(storage::UnfinishedPiece, count);
             foreach (i, piece_val : unfinished.list.array_view())
             {
                 if (piece_val.type == bencode::BencodeType.DICT)
@@ -465,7 +465,7 @@ fn state_provider::DownloadState? decode_fastresume(BencodeValue* root)
         usz count = file_resume.list.size;
         if (count > 0)
         {
-            state.file_resume = mem::new_array(state_provider::FileResumeData, count);
+            state.file_resume = mem::new_array(storage::FileResumeData, count);
             foreach (i, file_dict : file_resume.list.array_view())
             {
                 if (file_dict.type == bencode::BencodeType.DICT)
@@ -579,7 +579,7 @@ fn state_provider::DownloadState? decode_fastresume(BencodeValue* root)
 /**
  * Load state implementation.
  */
-fn state_provider::DownloadState? FastResumeStateProvider.load_state(&self, String torrent_path) @dynamic
+fn storage::DownloadState? FastResumeStateProvider.load_state(&self, String torrent_path) @dynamic
 {
     String fastresume_path = get_fastresume_path(torrent_path);
     defer free(fastresume_path);
@@ -609,7 +609,7 @@ fn state_provider::DownloadState? FastResumeStateProvider.load_state(&self, Stri
 /**
  * Save state implementation.
  */
-fn void? FastResumeStateProvider.save_state(&self, String torrent_path, state_provider::DownloadState* state) @dynamic
+fn void? FastResumeStateProvider.save_state(&self, String torrent_path, storage::DownloadState* state) @dynamic
 {
     String fastresume_path = get_fastresume_path(torrent_path);
     defer free(fastresume_path);
@@ -692,7 +692,7 @@ fn FastResumeStateProvider* create() @public
  * @param torrent_path: "Path to .torrent file"
  * @return "Download state or fault if not found/invalid"
  */
-fn state_provider::DownloadState? load(String torrent_path) @public
+fn storage::DownloadState? load(String torrent_path) @public
 {
     FastResumeStateProvider provider;
     return provider.load_state(torrent_path);
@@ -705,7 +705,7 @@ fn state_provider::DownloadState? load(String torrent_path) @public
  * @param state: "Download state to save"
  * @return "Fault if save fails"
  */
-fn void? save(String torrent_path, state_provider::DownloadState* state) @public
+fn void? save(String torrent_path, storage::DownloadState* state) @public
 {
     FastResumeStateProvider provider;
     return provider.save_state(torrent_path, state);

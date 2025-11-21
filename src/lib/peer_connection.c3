@@ -1,7 +1,6 @@
 module libtorrent::peer_connection;
 
-import async::tcp;
-import async::event_loop;
+import libtorrent::network;
 import libtorrent::peer_wire;
 import libtorrent::bitfield;
 import libtorrent::pex;
@@ -33,33 +32,20 @@ import std::core::log;
 // These macros wrap async operations to automatically increment refcount on success,
 // preventing use-after-free bugs from pending callbacks.
 
-// Macro for TCP connect with automatic refcount increment.
-// Prevents forgetting to increment refcount after successful async operation.
-macro async_tcp_connect(loop, host, port, callback, peer)
-{
-    async::tcp::TcpConnection*? tcp_opt = async::tcp::connect(loop, host, port, callback, peer);
-    if (catch excuse = tcp_opt)
-    {
-        return excuse?;
-    }
-    peer.refcount++;  // Increment for pending connect callback
-    return tcp_opt;
-}
-
 // Macro for start_read with automatic refcount increment.
-macro @async_tcp_start_read(#conn_expr, alloc_fn, callback, peer)
+macro @async_transport_start_read(#transport_expr, alloc_fn, callback, peer)
 {
-    if (catch excuse = #conn_expr.start_read(alloc_fn, callback, peer))
+    if (catch excuse = #transport_expr.start_read(alloc_fn, callback, peer))
     {
         return excuse?;
     }
     peer.refcount++;  // Increment for read operation (decremented on EOF)
 }
 
-// Macro for TCP write with automatic refcount increment.
-macro @async_tcp_write(#conn_expr, data, callback, peer)
+// Macro for transport write with automatic refcount increment.
+macro @async_transport_write(#transport_expr, data, callback, peer)
 {
-    if (catch excuse = #conn_expr.write(data, callback, peer))
+    if (catch excuse = #transport_expr.write(data, callback, peer))
     {
         return excuse?;
     }
@@ -149,8 +135,7 @@ alias HashRejectCallback = fn void(PeerConnection* peer, peer_wire::HashRejectMs
 // Manages the connection to a single peer.
 struct PeerConnection
 {
-    async::tcp::TcpConnection* tcp;
-    event_loop::EventLoop* loop;
+    network::Transport transport;  // Interface fat pointer (not Transport*!)
     PeerState state;
     DisconnectReason last_disconnect_reason;  // Reason for disconnect (valid when state==CLOSED)
     bool is_closed;  // Safety flag: true when connection is being closed/freed (prevents use-after-free in callbacks)
@@ -224,7 +209,7 @@ struct PeerConnection
 <*
  Connect to a peer and initiate handshake.
 
- @param loop : "Event loop"
+ @param transport : "Transport layer (TCP or μTP)"
  @param host : "Peer IP address"
  @param port : "Peer port"
  @param info_hash : "Torrent info hash"
@@ -240,7 +225,7 @@ struct PeerConnection
  @param is_private : "BEP 27: Private torrent flag (disables PEX)"
  @return "Peer connection or fault"
 *>
-fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort port,
+fn PeerConnection*? connect(network::Transport transport, String host, ushort port,
                               common::InfoHash info_hash, common::PeerId our_peer_id,
                               MessageCallback msg_cb, StateCallback state_cb,
                               PexCallback pex_cb, MetadataCallback metadata_cb,
@@ -249,7 +234,7 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
                               void* user_data, bool is_private, bool upload_only = false) @public
 {
     PeerConnection* peer = mem::new(PeerConnection);
-    peer.loop = loop;
+    peer.transport = transport;
     peer.state = PeerState.CONNECTING;
     peer.is_closed = false;
     peer.refcount = 1;  // Start with owner reference
@@ -314,15 +299,15 @@ fn PeerConnection*? connect(event_loop::EventLoop* loop, String host, ushort por
     peer.hash_reject_cb = hash_reject_cb;
     peer.user_data = user_data;
 
-    // Connect to peer (macro auto-increments refcount on success)
-    async::tcp::TcpConnection*? tcp_opt = async_tcp_connect(loop, host, port, &on_tcp_connect, peer);
-    if (catch excuse = tcp_opt)
+    // Connect to peer using transport abstraction
+    if (catch excuse = transport.connect(host, port, &on_transport_connect, peer))
     {
         free(peer);
         return excuse?;
     }
 
-    peer.tcp = tcp_opt;
+    peer.refcount++;  // Increment for pending connect callback
+
     return peer;
 }
 
@@ -373,10 +358,10 @@ fn void PeerConnection.close(&self) @public
         if (self.state_cb) self.state_cb(self, PeerState.CLOSED, self.last_disconnect_reason, self.user_data);
     }
 
-    if (self.tcp)
+    if (self.transport)
     {
-        self.tcp.close();
-        self.tcp = null;
+        self.transport.close();
+        self.transport = null;
     }
 
     if (self.recv_buffer.len() > 0)
@@ -436,9 +421,9 @@ fn void PeerConnection.graceful_close(&self) @public
 // ============================================================================
 
 <*
- Called when TCP connection completes.
+ Called when transport connection completes.
 *>
-fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_transport_connect(network::Transport transport, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
     defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path
@@ -459,7 +444,7 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     {
         // Connection failed - libuv already cleaned up the handle
         // Don't call close() as the connection never succeeded
-        peer.tcp = null;
+        peer.transport = null;
         peer.state = PeerState.CLOSED;
         peer.last_disconnect_reason = DisconnectReason.TCP_CONNECT_FAILED;
         if (peer.state_cb) peer.state_cb(peer, PeerState.CLOSED, peer.last_disconnect_reason, peer.user_data);
@@ -475,13 +460,13 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     defer peer.msg_arena.reset(mark);
 
     // Start reading to receive handshake response (macro auto-increments refcount)
-    if (catch excuse = @async_tcp_start_read(conn, &alloc_buffer, &on_tcp_read, peer))
+    if (catch excuse = @async_transport_start_read(transport, &alloc_buffer, &on_transport_read, peer))
     {
         log::error("Failed to start reading from peer");
-        if (peer.tcp)
+        if (peer.transport)
         {
-            peer.tcp.close();
-            peer.tcp = null;
+            peer.transport.close();
+            peer.transport = null;
         }
         peer.state = PeerState.CLOSED;
         peer.last_disconnect_reason = DisconnectReason.READ_START_FAILED;
@@ -490,13 +475,13 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
     }
 
     // Send handshake (macro auto-increments refcount)
-    if (catch excuse = @async_tcp_write(conn, handshake, &on_handshake_sent, peer))
+    if (catch excuse = @async_transport_write(transport, handshake, &on_handshake_sent, peer))
     {
         log::error("Failed to send handshake to peer");
-        if (peer.tcp)
+        if (peer.transport)
         {
-            peer.tcp.close();
-            peer.tcp = null;
+            peer.transport.close();
+            peer.transport = null;
         }
         peer.state = PeerState.CLOSED;
         peer.last_disconnect_reason = DisconnectReason.HANDSHAKE_SEND_FAILED;
@@ -508,7 +493,7 @@ fn void on_tcp_connect(async::tcp::TcpConnection* conn, int status, void* user_d
 <*
  Called when handshake has been sent.
 *>
-fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_handshake_sent(network::Transport transport, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
     defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path
@@ -522,10 +507,10 @@ fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* use
     if (status != 0)
     {
         log::error("Failed to send handshake: status=%d", status);
-        if (peer.tcp)
+        if (peer.transport)
         {
-            peer.tcp.close();
-            peer.tcp = null;
+            peer.transport.close();
+            peer.transport = null;
         }
         peer.state = PeerState.CLOSED;
         peer.last_disconnect_reason = DisconnectReason.HANDSHAKE_WRITE_FAILED;
@@ -535,17 +520,17 @@ fn void on_handshake_sent(async::tcp::TcpConnection* conn, int status, void* use
 }
 
 <*
- Allocate buffer for incoming TCP data.
+ Allocate buffer for incoming transport data.
 *>
-fn char[] alloc_buffer(async::tcp::TcpConnection* conn, usz suggested_size, void* user_data)
+fn char[] alloc_buffer(network::Transport transport, usz suggested_size, void* user_data)
 {
     return mem::new_array(char, suggested_size);
 }
 
 <*
- Called when TCP data is received.
+ Called when transport data is received.
 *>
-fn void on_tcp_read(async::tcp::TcpConnection* conn, char[] data, void* user_data)
+fn void on_transport_read(network::Transport transport, char[] data, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
 
@@ -560,10 +545,10 @@ fn void on_tcp_read(async::tcp::TcpConnection* conn, char[] data, void* user_dat
         // EOF - connection closed (decrement refcount for read operation)
         decrement_and_free_if_zero(peer);
 
-        if (peer.tcp)
+        if (peer.transport)
         {
-            peer.tcp.close();
-            peer.tcp = null;
+            peer.transport.close();
+            peer.transport = null;
         }
         peer.state = PeerState.CLOSED;
         peer.last_disconnect_reason = DisconnectReason.REMOTE_CLOSED;
@@ -875,7 +860,7 @@ fn fault? send_message(PeerConnection* peer, char[] data) @inline
     }
 
     // Use macro for automatic refcount increment
-    if (catch excuse = @async_tcp_write(peer.tcp, data, &on_message_sent, peer))
+    if (catch excuse = @async_transport_write(peer.transport, data, &on_message_sent, peer))
     {
         return PEER_MESSAGE_SEND_FAILED?;
     }
@@ -886,7 +871,7 @@ fn fault? send_message(PeerConnection* peer, char[] data) @inline
 <*
  Called when a message has been sent.
 *>
-fn void on_message_sent(async::tcp::TcpConnection* conn, int status, void* user_data)
+fn void on_message_sent(network::Transport transport, int status, void* user_data)
 {
     PeerConnection* peer = (PeerConnection*)user_data;
     defer decrement_and_free_if_zero(peer);  // Decrement refcount on any exit path

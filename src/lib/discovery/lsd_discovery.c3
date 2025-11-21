@@ -1,6 +1,6 @@
-module libtorrent::adapters::lsd_peer_discovery;
+module libtorrent::discovery::lsd;
 
-import libtorrent::ports::peer_discovery;
+import libtorrent::discovery;
 import libtorrent::lsd;
 import libtorrent::common;
 import std::core::log;
@@ -30,14 +30,14 @@ import std::time;
  *>
 
 // LsdPeerDiscovery adapter struct
-struct LsdPeerDiscovery (peer_discovery::PeerDiscovery)
+struct LsdPeerDiscovery (discovery::PeerDiscovery)
 {
     // Dependencies
     lsd::LsdManager* lsd_manager;
     event_loop::EventLoop* loop;
 
     // Configuration
-    peer_discovery::DiscoveryOptions options;
+    discovery::DiscoveryOptions options;
     ushort local_port;
 
     // State
@@ -45,12 +45,12 @@ struct LsdPeerDiscovery (peer_discovery::PeerDiscovery)
     common::InfoHash current_info_hash;
 
     // Callbacks
-    peer_discovery::PeerDiscoveredCallback peer_callback;
-    peer_discovery::DiscoveryCompleteCallback complete_callback;
+    discovery::PeerDiscoveredCallback peer_callback;
+    discovery::DiscoveryCompleteCallback complete_callback;
     void* user_data;
 
     // Statistics
-    peer_discovery::DiscoveryStats stats;
+    discovery::DiscoveryStats stats;
 }
 
 // ============================================================================
@@ -74,7 +74,7 @@ fn LsdPeerDiscovery* create(
     adapter.lsd_manager = lsd_manager;
     adapter.loop = loop;
 
-    adapter.options = peer_discovery::default_options();
+    adapter.options = discovery::default_options();
     adapter.local_port = 6881;
 
     adapter.active = false;
@@ -144,9 +144,9 @@ fn void on_lsd_peers_discovered(common::InfoHash* infohash,
 fn void LsdPeerDiscovery.start_discovery(
     &self,
     common::InfoHash* info_hash,
-    peer_discovery::DiscoveryOptions* options,
-    peer_discovery::PeerDiscoveredCallback peer_callback,
-    peer_discovery::DiscoveryCompleteCallback complete_callback,
+    discovery::DiscoveryOptions* options,
+    discovery::PeerDiscoveredCallback peer_callback,
+    discovery::DiscoveryCompleteCallback complete_callback,
     void* user_data
 ) @dynamic
 {
@@ -211,7 +211,7 @@ fn void LsdPeerDiscovery.stop_discovery(&self) @dynamic
     // (LSD manager handles announce lifecycle internally)
 }
 
-fn peer_discovery::DiscoveryStats LsdPeerDiscovery.get_stats(&self) @dynamic
+fn discovery::DiscoveryStats LsdPeerDiscovery.get_stats(&self) @dynamic
 {
     return self.stats;
 }

@@ -5,7 +5,7 @@ import async::work;
 import async::event_loop;
 import libtorrent::metainfo;
 import libtorrent::merkle_tree;
-import libtorrent::ports::state_provider;
+import libtorrent::storage;
 import std::io;
 import std::hash::sha1;
 import std::hash::sha256;
@@ -1380,9 +1380,9 @@ fn bool StorageManager.is_piece_wanted(&self, uint piece_index) @public
  *
  * @return "Array of FileResumeData (mtime + size per file)"
  */
-fn state_provider::FileResumeData[] StorageManager.get_file_validation_data(&self) @public
+fn storage::FileResumeData[] StorageManager.get_file_validation_data(&self) @public
 {
-    state_provider::FileResumeData[] data = mem::new_array(state_provider::FileResumeData, self.files.len);
+    storage::FileResumeData[] data = mem::new_array(storage::FileResumeData, self.files.len);
 
     foreach (i, file_info : self.files)
     {
@@ -1414,7 +1414,7 @@ fn state_provider::FileResumeData[] StorageManager.get_file_validation_data(&sel
  * @param saved_data : "FileResumeData from previous session"
  * @return "Bool array: true if file unchanged, false if modified/missing"
  */
-fn bool[] StorageManager.validate_files(&self, state_provider::FileResumeData[] saved_data) @public
+fn bool[] StorageManager.validate_files(&self, storage::FileResumeData[] saved_data) @public
 {
     bool[] valid = mem::new_array(bool, self.files.len);
 
@@ -1429,7 +1429,7 @@ fn bool[] StorageManager.validate_files(&self, state_provider::FileResumeData[] 
     }
 
     // Get current file stats
-    state_provider::FileResumeData[] current = self.get_file_validation_data();
+    storage::FileResumeData[] current = self.get_file_validation_data();
     defer free(current);
 
     // Compare each file
