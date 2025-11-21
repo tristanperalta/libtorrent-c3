@@ -181,6 +181,7 @@ fn void start_tracker_announce(session::Session* ctx) @private
 
     // Announce with "started" event using new tracker interface
     ctx.current_tracker = trackers::create_from_url(ctx.get_loop(), tracker_url)!!;
+    ctx.has_current_tracker = true;
     ctx.current_tracker.announce(ctx.torrent, 6881, "started",
                                  &on_announce_complete, ctx, ctx.tracker_timeout);
 }
@@ -193,11 +194,11 @@ fn void on_announce_complete(trackers::TrackerResponse* response, int status, vo
     session::Session* ctx = (session::Session*)user_data;
 
     // Clean up previous tracker
-    if (ctx.current_tracker)
+    if (ctx.has_current_tracker)
     {
         ctx.current_tracker.close();
-        free(ctx.current_tracker);
-        ctx.current_tracker = null;
+        ctx.current_tracker.free();
+        ctx.has_current_tracker = false;
     }
 
     if (status != 0)
@@ -211,6 +212,7 @@ fn void on_announce_complete(trackers::TrackerResponse* response, int status, vo
             ctx.current_tracker_url = next_tracker;
             io::printfn("Trying next tracker: %s", next_tracker);
             ctx.current_tracker = trackers::create_from_url(ctx.get_loop(), next_tracker)!!;
+            ctx.has_current_tracker = true;
             ctx.current_tracker.announce(ctx.torrent, 6881, "started",
                                          &on_announce_complete, ctx, ctx.tracker_timeout);
         }

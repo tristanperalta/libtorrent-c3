@@ -325,7 +325,8 @@ struct Session
     // Multi-tracker support (BEP 12)
     tracker_manager::TrackerManager* tracker_mgr;  // Manages tier-based tracker selection
     String current_tracker_url;                    // Currently active tracker URL (for logging)
-    trackers::Tracker* current_tracker;            // Currently active tracker instance (for magnet links)
+    trackers::Tracker current_tracker;             // Currently active tracker instance (for magnet links)
+    bool has_current_tracker;                      // Track if current_tracker is valid
     tracker::TrackerConfig tracker_config;  // Parallel announce configuration
 
     // Peer discovery composite (hexagonal architecture)
@@ -624,7 +625,7 @@ fn Session* create_session(torrent_manager::TorrentManager* manager, SessionOpti
     // Initialize multi-tracker support
     ctx.tracker_mgr = null;
     ctx.current_tracker_url = "";
-    ctx.current_tracker = null;
+    ctx.has_current_tracker = false;
     ctx.tracker_config = options.tracker_config;
 
     // Initialize peer discovery

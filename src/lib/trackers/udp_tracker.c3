@@ -91,7 +91,7 @@ fn String UdpTracker.get_protocol(&self) @dynamic
     return "udp";
 }
 
-fn void UdpTracker.free(&self) @public
+fn void UdpTracker.free(&self) @dynamic
 {
     if (!self.closed)
     {

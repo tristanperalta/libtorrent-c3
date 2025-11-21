@@ -84,7 +84,7 @@ fn String HttpTracker.get_protocol(&self) @dynamic
     return "http";
 }
 
-fn void HttpTracker.free(&self) @public
+fn void HttpTracker.free(&self) @dynamic
 {
     if (!self.closed)
     {

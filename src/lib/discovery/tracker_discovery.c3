@@ -86,7 +86,7 @@ struct AnnounceContext
     TrackerPeerDiscovery* discovery;
     String event;  // "started", "stopped", "completed", ""
     String tracker_url;  // Which tracker this announce is for
-    trackers::Tracker* tracker;  // Tracker instance (needs cleanup)
+    trackers::Tracker tracker;  // Tracker interface instance
 }
 
 // TrackerPeerDiscovery adapter struct
@@ -303,10 +303,8 @@ fn void on_announce_complete_internal(trackers::TrackerResponse* response,
     // Note: We defer freeing ctx.event and ctx, but NOT ctx.tracker_url yet
     // because we need tracker_url to persist until after event is published
     defer {
-        if (ctx.tracker) {
-            ctx.tracker.close();
-            free(ctx.tracker);
-        }
+        ctx.tracker.close();
+        ctx.tracker.free();
         if (ctx.event.len > 0) free(ctx.event);
         free(ctx);
     }

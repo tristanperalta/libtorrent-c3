@@ -89,6 +89,10 @@ interface Tracker
     // After calling close(), no further operations should be performed.
     fn void close();
 
+    // Free tracker resources.
+    // Must be called after close() to free memory.
+    fn void free();
+
     // Get tracker URL (e.g., "http://tracker.example.com/announce")
     fn String get_url();
 
@@ -123,15 +127,19 @@ faultdef TRACKER_INVALID_PROTOCOL;
  @param url : "Tracker URL (determines protocol)"
  @return "Tracker instance (caller must free) or fault on error"
 *>
-fn Tracker*? create_from_url(event_loop::EventLoop* loop, String url) @public
+fn Tracker? create_from_url(event_loop::EventLoop* loop, String url) @public
 {
     if (url.starts_with("http://") || url.starts_with("https://"))
     {
-        return (Tracker*)http::create(loop, url);
+        // Implicit conversion to interface (creates fat pointer with vtable)
+        Tracker tracker = (Tracker)http::create(loop, url);
+        return tracker;
     }
     else if (url.starts_with("udp://"))
     {
-        return (Tracker*)udp::create(loop, url);
+        // Implicit conversion to interface (creates fat pointer with vtable)
+        Tracker tracker = (Tracker)udp::create(loop, url);
+        return tracker;
     }
     else
     {
