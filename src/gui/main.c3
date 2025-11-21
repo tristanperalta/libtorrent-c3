@@ -6,7 +6,7 @@ import std::collections::list;
 import uv;
 import libtorrent;
 import libtorrent::common;
-import libtorrent::tracker;
+import libtorrent::trackers;
 import libtorrent::tracker_manager;
 import async::event_loop;
 import libtorrent::torrent_loader;
@@ -88,7 +88,7 @@ fn int main(int argc, ZString* argv)
     defer loop.free();
 
     // Launch GUI mode
-    return cmd_download_gui(&loop, torrent_path, save_path, tracker::DEFAULT_NUMWANT);
+    return cmd_download_gui(&loop, torrent_path, save_path, trackers::DEFAULT_NUMWANT);
 }
 
 // ============================================================================
@@ -622,7 +622,7 @@ fn int cmd_download_gui(event_loop::EventLoop* loop, String torrent_path,
     update_gui_file_list(ctx);
 
     // Create peer pool
-    common::PeerId our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = trackers::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = {
         .max_peerlist_size = 1000,
         .max_active_connections = (usz)ctx.connections_limit,  // From SessionOptions

@@ -6,7 +6,7 @@ import std::collections::list;
 import uv;
 import libtorrent;
 import libtorrent::common;
-import libtorrent::tracker;
+import libtorrent::trackers;
 import libtorrent::tracker_manager;
 import async::event_loop;
 import libtorrent::torrent_loader;
@@ -25,12 +25,12 @@ import libtorrent::dht_get_peers;
 import libtorrent::event_bus;
 import libtorrent::event_types;
 import libtorrent::file_selection;
-import libtorrent::ports::peer_discovery;
-import libtorrent::adapters::composite_peer_discovery;
+import libtorrent::discovery;
+import libtorrent::discovery::composite;
 import torrent_client::log_outputs;
 import libtorrent::session;
 import libtorrent::magnet_download_session;
-import libtorrent::adapters::fastresume_state_provider;
+import libtorrent::storage::fastresume;
 
 // ============================================================================
 // Configuration Constants
@@ -125,7 +125,7 @@ fn int main(int argc, ZString* argv)
         String torrent_path = (String)argv[2].str_view();
 
         // Parse optional arguments
-        int numwant = tracker::DEFAULT_NUMWANT;
+        int numwant = trackers::DEFAULT_NUMWANT;
         String save_path = ".";  // Default to current directory
         String log_file_path = "";  // No file logging by default
         bool debug_mode = false;
@@ -138,7 +138,7 @@ fn int main(int argc, ZString* argv)
             {
                 // Parse numwant value
                 String val = (String)argv[i + 1].str_view();
-                numwant = (int)val.to_long() ?? tracker::DEFAULT_NUMWANT;
+                numwant = (int)val.to_long() ?? trackers::DEFAULT_NUMWANT;
                 i++; // Skip next arg
             }
             else if (arg == "--save-path" && i + 1 < (usz)argc)
@@ -618,10 +618,12 @@ fn void on_announce_load_complete(String data, int status, void* user_data)
     // Reset completion flag for announce phase
     ctx.completed = false;
 
-    // Announce to tracker (non-blocking)
-    ushort our_port = 6881;
-    tracker::announce(ctx.loop, torrent, our_port, "started",
-                      &on_tracker_announce_complete, ctx);
+    // TODO: Port to new discovery architecture
+    // Old tracker::announce() API is deprecated
+    // Use session-based tracker discovery instead
+    io::eprintfn("ERROR: 'announce' command needs to be ported to new discovery architecture");
+    ctx.exit_code = 1;
+    ctx.completed = true;
 }
 
 <*
@@ -864,72 +866,14 @@ fn void on_connect_tracker_complete(trackers::TrackerResponse* response, int sta
     ctx.peer_pool.get_stats(&total_peers, &candidates, &connecting, &connected);
     io::printfn("  Peer pool now has %d total peers", total_peers);
 
-    io::printfn("Attempting to connect to first %d peers...", ctx.total_peers < 5 ? ctx.total_peers : 5);
+    // TODO: Port to new Transport architecture
+    // Old peer_connection::connect() API signature changed to use Transport abstraction
+    // This command needs to be rewritten to use TCP transport wrapper
     io::printfn("");
-
-    // Connect to first N peers (max 5)
-    int max_connections = ctx.total_peers < 5 ? ctx.total_peers : 5;
-    ctx.connections_attempted = max_connections;
-    ctx.peer_infos.init(mem);
-
-    // Generate our peer ID
-    common::PeerId our_peer_id = tracker::generate_peer_id();
-
-    for (int i = 0; i < max_connections; i++)
-    {
-        common::SocketAddress peer = response.peers[i];
-
-        // Create PeerConnectionInfo
-        PeerConnectionInfo info;
-
-        // Format IP address (just the IP part, not including port)
-        DString ip_buf;
-        ip_buf.appendf("%s", peer.addr);  // InetAddress has built-in formatting
-        info.ip_str = ip_buf.copy_str(mem);
-        info.port = peer.port;
-        info.state = peer_connection::PeerState.CONNECTING;
-        info.handshake_ok = false;
-
-        // Initiate connection
-        peer_connection::PeerConnection*? conn = peer_connection::connect(
-            ctx.loop,
-            info.ip_str,
-            peer.port,
-            ctx.torrent.info_hash,
-            our_peer_id,
-            &on_connect_peer_message,
-            &on_connect_peer_state,
-            null,  // No PEX callback for simple client
-            null,  // No metadata callback for simple client
-            null,  // BEP 52: No hash request callback for simple client
-            null,  // BEP 52: No hashes callback for simple client
-            null,  // BEP 52: No hash reject callback for simple client
-            ctx,
-            ctx.torrent.info.private  // BEP 27: Pass private flag
-        );
-
-        if (catch err = conn)
-        {
-            io::printfn("[%d] %s:%d - Connection failed immediately",
-                        i + 1, info.ip_str, peer.port);
-            ctx.connections_failed++;
-            info.conn = null;
-            info.state = peer_connection::PeerState.CLOSED;
-        }
-        else
-        {
-            info.conn = conn;
-        }
-
-        // Add to list
-        ctx.peer_infos.push(info);
-    }
-
-    // Check if all failed immediately
-    if (ctx.connections_failed >= ctx.connections_attempted)
-    {
-        ctx.all_completed = true;
-    }
+    io::eprintfn("ERROR: 'connect' command needs to be ported to Transport architecture");
+    ctx.exit_code = 1;
+    ctx.all_completed = true;
+    return;
 }
 
 fn void on_connect_load_complete(String data, int status, void* user_data)
@@ -959,7 +903,7 @@ fn void on_connect_load_complete(String data, int status, void* user_data)
     ctx.torrent = torrent;
 
     // Create peer pool (Phase 1 - storage only)
-    common::PeerId our_peer_id = tracker::generate_peer_id();
+    common::PeerId our_peer_id = trackers::generate_peer_id();
     peer_pool::PeerPoolConfig pool_config = peer_pool::get_default_config();
     ctx.peer_pool = peer_pool::create(ctx.loop, pool_config, &torrent.info_hash, &our_peer_id, torrent.info.private);
 
@@ -982,11 +926,12 @@ fn void on_connect_load_complete(String data, int status, void* user_data)
 
     io::printfn("Announcing to tracker: %s", tracker_url);
 
-    // Announce to tracker
-    ushort our_port = 6881;
-    ctx.tracker_completed = false;
-    tracker::announce(ctx.loop, torrent, our_port, "started",
-                      &on_connect_tracker_complete, ctx);
+    // TODO: Port to new discovery architecture
+    // Old tracker::announce() API is deprecated
+    // Use session-based tracker discovery instead
+    io::eprintfn("ERROR: 'connect' command needs to be ported to new discovery architecture");
+    ctx.exit_code = 1;
+    ctx.all_completed = true;
 }
 
 fn void display_connection_results(ConnectContext* ctx)
